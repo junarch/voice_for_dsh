@@ -1,0 +1,11 @@
+# dsh-plugin-voice bundle patch: inserts the voice-readout plugin row
+# into the web profile composition. Applied after dsh-base and dsh-web-app,
+# before the user's own cordis.patch.yml.
+- insert:
+    - id: voice
+      name: 'dsh-plugin-voice'
+      # config may be overridden by the user's profile cordis.patch.yml:
+      #   - id: voice
+      #     config:
+      #       autoSpeak: true
+      #       ...
