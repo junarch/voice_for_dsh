@@ -4,3 +4,5 @@ dist/
 *.tsbuildinfo
 .DS_Store
 *.log
+# 探针实验的音频产物（scripts/tts-probe.mjs 输出），不入库
+tmp/

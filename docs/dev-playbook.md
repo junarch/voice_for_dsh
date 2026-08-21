@@ -2,8 +2,12 @@
 
 ## 1. 开发循环
 
-> **v1 无构建步骤**：`packages/dsh-plugin-voice/lib/index.js`（Host）与 `lib/client.js`（Client）
-> 是**手工编写的纯 JS 源码**（已经创造模式 spike 验证），直接提交进 git（`.gitignore` 不忽略该 lib）。
+> **v1 无构建步骤**：`packages/dsh-plugin-voice/lib/index.js`（Host）、`lib/client.js`（Client）、
+> `lib/volcengine-ws.js`（双向流 WS 客户端）、`lib/speech-clean.js`（口播净化 `sanitizeForSpeech`
+> + TTS 引擎归一 `ttsProviderOf`；**MP3 帧对齐 `alignToFrameBoundary` 已随 pcm 切段移除**，
+> 见 docs/voice-pipeline.md §2.3.1）、`lib/voice-compat.js`（音色↔语种归一 `normalizeVoiceConfig`）是
+> **手工编写的纯 JS 源码**（已经创造模式 spike 验证），
+> 直接提交进 git（`.gitignore` 不忽略该 lib）。
 > `src/` 目录仅为后续 TS/tsdown 化预留的占位。改代码 = 直接改 `lib/`。
 
 ### 改 Host 半（lib/index.js）
@@ -14,6 +18,22 @@
 1. 改 `packages/dsh-plugin-voice/lib/client.js`。
 2. 重启 dsh（client-modules 重新扫描、rev 变化），浏览器**手动刷新** `http://127.0.0.1:3080`。
    - v1 没有 dev watcher / HMR；后续接入 tsdown 后才有 `pnpm run dev:web` 无刷新更新。
+
+### 改任意一半之后：跑零成本集成测试
+```powershell
+node scripts/test-host.mjs   # mock 依赖驱动 Host 全链路，145 条断言（含重复朗读不加 LLM、双向流帧编解码/流式管线、口播净化/引擎归一、pcm 段格式、context_texts 情感对所有 2.0 音色生效、8 方言 explicit_dialect 统一 vv、English 自动切英文音色、无 cache_config、配置 speaker 归一化、T16 音色↔语种归一 / T17 regen 重新生成 / T18 流式读缓存）
+node scripts/tts-probe.mjs   # 真实外呼探针（花几分钱）：验证 HTTP 单向 TTS 接口行为是否变化
+node scripts/tts-ws-probe.mjs --case basic   # 真实外呼探针（花几分钱）：验证双向流 WS 端点/帧协议/首包延迟
+node scripts/tts-ws-probe.mjs --all          # 双向流全部参数用例（emotion/dialect/instruct/cache/section/expressive/多 session）
+node scripts/tts-dialect-probe.mjs           # 方言专项 1：8 方言 explicit_dialect vs context_texts 对照（HTTP 单向）
+node scripts/tts-dialect-probe2.mjs          # 方言专项 2：新文本排除缓存 + 补测 shanghai/henan/beijing
+node scripts/tts-ws-dialect-probe.mjs        # 方言专项 3：双向流 8 方言 explicit_dialect（默认主路径）
+node scripts/tts-voice-avail-probe.mjs       # 音色可用性：精选 中文4男4女 + 英文3 音色在 plan 网关双向流实测
+node scripts/tts-pcm-probe.mjs               # 一次性诊断：plan 网关 pcm/wav/mp3 格式支持（双向流已改 pcm）
+node scripts/tts-emotion-probe.mjs           # 情绪指令实测：3 段强烈情绪文本 × 6 种指令对照（试听表 docs/tts-emotion-test-form.md）
+node scripts/tts-stream-live.mjs             # 真实 E2E：双向流 pcm 全链路 + 裸采样校验（首段延迟/段数/无 error）
+```
+方法论见 `docs/testing-guide.md`。
 
 ## 2. 安装 / 卸载插件（web profile）
 

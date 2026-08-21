@@ -58,9 +58,10 @@
 1. **不要修改 DSH 安装/缓存/ shipped preset**（`agent-presets` 目录、npx 检出、`$DSH_HOME` 下 shipped 文件）。
    用户可写的只有：本仓库、`C:\Users\junar\.dsh\profiles\web\cordis.patch.yml`（用户的 patch 层）、
    `C:\Users\junar\.dsh\settings.yaml`（设置）。
-2. **改 Host 半** → 需要重启 dsh（`dsh --profile web`）才能生效。
-   **改 Client 半** → 需要重建 client bundle（`pnpm run dev:web` watcher 或 `pnpm run build`）；
-   无刷新 HMR 仅在 dev watcher 运行时可用。
+2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 需要重启 dsh（`dsh --profile web`）才能生效。
+   **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
+   后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 是空操作），dev:web watcher / HMR 仅后续
+   tsdown 化后才可用（详见 `docs/dev-playbook.md` §1）。
 3. **验证循环**：装包 → 重启 dsh → 浏览器操作 → 看 console/日志；动态原型可用"创造模式"preset 会话。
 4. **命名空间/服务名统一用 `voice`**，避免与既有插件冲突。
 5. 转写与 TTS 的 prompt/配置细节统一维护在 `docs/voice-pipeline.md`，改动先更新文档再改代码。
@@ -75,9 +76,12 @@ voice_for_dsh/
 ├── docs/                    # 架构/转写设计/开发手册
 └── packages/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
-        ├── src/host/        # Host 半源码
-        ├── src/client/      # Client 半源码
-        └── lib/             # 构建产物（不提交）
+        ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
+        │                    #   index.js=Host 半 / client.js=Client 半 /
+        │                    #   speech-clean.js(净化/引擎归一) / voice-compat.js(音色↔语种) /
+        │                    #   volcengine-ws.js(豆包双向流)
+        └── src/             # 仅结构占位（host/index.ts、client/index.ts 桩，无实际逻辑；
+                             #   后续 TS/tsdown 化时的家）
 ```
 
 ## 相关模式（dsh 内置 preset，选择会话时可见）
