@@ -43,4 +43,5 @@ jobs:
 
       # 静态安全守护：Client 半禁止危险 HTML 注入 API（防 XSS 回归）
       - name: Forbid unsafe HTML APIs in client half
-        run: node -e "const fs=require('fs');const s=fs.readFileSync('packages/dsh-plugin-voice/lib/client.js','utf8');for(const p of ['innerHTML','dangerouslySetInnerHTML','document.write','insertAdjacentHTML']){if(s.includes(p)){console.error('forbidden unsafe API: '+p);process.exit(1)}}console.log('client.js: no unsafe HTML APIs')"
+        run: |
+          node -e "const fs=require('fs');const s=fs.readFileSync('packages/dsh-plugin-voice/lib/client.js','utf8');for(const p of ['innerHTML','dangerouslySetInnerHTML','document.write','insertAdjacentHTML']){if(s.includes(p)){console.error('forbidden unsafe API: '+p);process.exit(1)}}console.log('client.js has no unsafe HTML APIs')"
