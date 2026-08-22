@@ -54,7 +54,8 @@
 
 - Node.js 22+（双向流播报依赖 Node 22 的全局 `WebSocket`；仅用浏览器 TTS 时可低至 18+）
 - dsh（`@deepseek-ai/dsh@0.1.0-rc.6` 或兼容版本）
-- （可选）火山方舟 API Key，用于豆包 TTS；不配则用浏览器语音兜底
+- （可选）火山引擎语音合成 API Key（新版控制台「API 管理」页获取，见
+  [快速入门](https://www.volcengine.com/docs/6561/2119699?lang=zh)），用于豆包 TTS；不配则用浏览器语音兜底
 
 ### 从 clone 安装
 

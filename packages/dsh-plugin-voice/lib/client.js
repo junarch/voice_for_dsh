@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
 
     // ---------- i18n ----------
     var NS = "voice";
+    var VOLC_APIKEY_DOC = "https://www.volcengine.com/docs/6561/2119699?lang=zh"; // 新版控制台快速入门（API Key 获取）
     var zh = {
       "read.title": "转写并朗读此条消息", "read.busyTitle": "正在转写，请稍候", "read.stopTitle": "停止播报",
       "read.regenerate": "重新生成",
@@ -46,6 +47,7 @@ window.__ModuleLoader__.load({
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
+      "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准付费 Key：", "apiKey.hintLink": "新版控制台快速入门",
       "row.gateway": "网关", "row.httpUrl": "HTTP 端点（自定义）",
       "gateway.hint": " plan=智能体套餐（默认）；standard=标准付费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
@@ -82,6 +84,7 @@ window.__ModuleLoader__.load({
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
+      "apiKey.hint": "Doubao TTS: enable the speech service in the Volcengine console, then get an API Key (X-Api-Key) in \"API management\"; plan = agent-plan key, standard = pay-as-you-go key: ", "apiKey.hintLink": "Quick start (new console)",
       "row.gateway": "Gateway", "row.httpUrl": "HTTP endpoint (custom)",
       "gateway.hint": " plan=agent-plan (default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "Speech rate", "row.pitchSemitone": "Pitch (semitones)",
@@ -882,12 +885,14 @@ window.__ModuleLoader__.load({
             React.createElement(SelectInput, { value: cfg.tts.volcengine.gateway || "plan", onChange: (v) => setField("tts.volcengine.gateway", v) },
               React.createElement("option", { value: "plan" }, "plan · 智能体套餐"),
               React.createElement("option", { value: "standard" }, "standard · 标准付费"),
-              React.createElement("option", { value: "custom" }, "custom · 自定义/转接")),
+              React.createElement("option", { value: "custom" }, "custom · 自定义端点")),
             React.createElement("span", { className: "dsh-voice-dim" }, t("gateway.hint"))),
           (cfg.tts.volcengine.gateway === "custom" ? React.createElement(Row, { label: t("row.httpUrl") },
             React.createElement(TextInput, { value: cfg.tts.volcengine.httpUrl || "", onChange: (v) => setField("tts.volcengine.httpUrl", v), placeholder: "https://…/api/v3/tts/unidirectional" })) : null),
           React.createElement(Row, { label: t("row.apiKey") },
-            React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "方舟专属 API Key" })),
+            React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
+          React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
+            React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
           React.createElement(Row, { label: t("row.resourceId") },
             React.createElement(TextInput, { value: cfg.tts.volcengine.resourceId, onChange: (v) => setField("tts.volcengine.resourceId", v), placeholder: "seed-tts-2.0" })),
           React.createElement("h4", null, t("group.pronounce")),

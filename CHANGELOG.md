@@ -25,6 +25,8 @@
   修复 `docs/tts-emotion-test-form.md` 断链引用与插件包 README 相对路径；修正 `lib/index.js` 三处文档章节号引用；
   清理注释里的轮次/旧项目/对个人说话等内部表述；`src/*.ts` 桩文件对齐真实实现；
   README/设置页文案去掉"Windows"限定（改"系统 TTS"）；`package.json` 版本号对齐 v0.2.0。
+- 设置页 apiKey 增加官方获取指引行内链接（新版控制台快速入门）并注明 plan/standard 的 Key 入口不同；
+  placeholder 与 README 由"火山方舟"更正为"火山引擎语音合成"（前者为模型平台，表述不准确）。
 
 ## [0.2.0] - 2026-08-22
 
