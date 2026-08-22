@@ -495,8 +495,8 @@ check('启动了 ≥2 个 session（段落粒度动态情感）', wsState.sessio
 const fs = wsState.sessions[0] || {}
 check('首段 req_params 用 pcm（双向流；bit_rate 仅 mp3/HTTP，pcm 不下发）', fs.speaker === 'zh_female_vv_uranus_bigtts' && fs.audio_params && fs.audio_params.format === 'pcm' && fs.audio_params.bit_rate === undefined, fs)
 const fsAdd = fs.additions ? JSON.parse(fs.additions) : {}
-check('首段 additions 含 context_texts + explicit_dialect=dongbei + section_id（不再发 cache_config：服务端缓存不认方言/音色，有害）',
-  Array.isArray(fsAdd.context_texts) && fsAdd.explicit_dialect === 'dongbei' && fsAdd.cache_config === undefined && typeof fsAdd.section_id === 'string', fsAdd)
+check('首段 additions 含 context_texts + explicit_dialect=dongbei + cache_config(初次写入) + section_id',
+  Array.isArray(fsAdd.context_texts) && fsAdd.explicit_dialect === 'dongbei' && fsAdd.cache_config && fsAdd.cache_config.use_cache === true && fsAdd.cache_config.text_type === 1 && typeof fsAdd.section_id === 'string', fsAdd)
 check('TaskRequest 逐句发送（≥2 次）', wsState.taskRequests.length >= 2, wsState.taskRequests.length)
 check('emotion 未发送（vv 非多情感音色，参数被跳过）', !(fs.audio_params || {}).emotion, fs.audio_params)
 // 流式转写稿已写缓存：切回 HTTP 重播应 cached=true 且不再调 LLM
@@ -791,23 +791,45 @@ section('T18 双向流：重播零 LLM（转写与情感指令都用缓存）；
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream' } }, language: 'auto', transcribe: { stylePreset: 'standard', enabled: true } } })
 const callsBefore18 = llmState.calls.length
 llmState.responses = [{ text: '流式首次。有第二句。', finish: 'stop' }, { text: '语气平稳\n中性\n2', finish: 'stop' }]
+wsState.sessions = []
+wsState.taskRequests = []
 const s18a = await rpc('speak', { sessionId: 's1', messageId: 'm15' })
 const sd18a = await awaitStreamDone(s18a.runId)
 check('流式首次生成 ≥1 段', sd18a.res && sd18a.urls.length >= 1, sd18a.urls.length)
 const callsMid18 = llmState.calls.length
 check('流式首次产生 LLM 调用（转写+段落指令）', callsMid18 > callsBefore18, { callsBefore18, callsMid18 })
+// 初次合成：带 cache_config 写服务端缓存（供 1h 内重播命中免费）
+const s18aReqs = wsState.sessions.map((s) => (s.additions ? JSON.parse(s.additions) : {}))
+check('流式初次合成会话带 cache_config（写入服务端缓存）', s18aReqs.length >= 1 && s18aReqs.every((a) => a.cache_config && a.cache_config.use_cache === true), s18aReqs)
 // 重播：缓存命中 → 转写与情感指令都用缓存，绝对零 LLM（不重新生成任何东西）
+wsState.sessions = []
+wsState.taskRequests = []
 const s18b = await rpc('speak', { sessionId: 's1', messageId: 'm15' })
 const sd18b = await awaitStreamDone(s18b.runId)
 check('流式重播也产出音频（缓存稿单段直喂）', sd18b.res && sd18b.urls.length >= 1, sd18b.urls.length)
 check('流式重播零 LLM（转写+情感指令都用缓存，LLM 调用数不变）', llmState.calls.length === callsMid18, llmState.calls.length - callsMid18)
+// 重播（指纹一致）：也带 cache_config 命中服务端缓存（免费）；且逐段复现初次会话切分
+const s18bReqs = wsState.sessions.map((s) => (s.additions ? JSON.parse(s.additions) : {}))
+check('流式重播带 cache_config（命中服务端缓存，1h 内免重合成）', s18bReqs.length >= 1 && s18bReqs.every((a) => a.cache_config && a.cache_config.use_cache === true), s18bReqs)
 // 反向：regen（重新生成）必须重新转写 + 重新生成情感指令（LLM 增加）
 llmState.responses = [{ text: 'regen 全新转写。又有两句。', finish: 'stop' }, { text: '语气激动\n开心\n5', finish: 'stop' }]
 const calls18c = llmState.calls.length
+wsState.sessions = []
 const s18c = await rpc('speak', { sessionId: 's1', messageId: 'm15', regen: true })
 const sd18c = await awaitStreamDone(s18c.runId)
 check('regen 重新生成：LLM 调用增加（转写+情感指令都重写）', llmState.calls.length > calls18c, llmState.calls.length - calls18c)
 check('regen 流式也产出音频', sd18c.res && sd18c.urls.length >= 1, sd18c.urls.length)
+// regen：绝不下发 cache_config（用户要全新合成，不能命中旧缓存）
+const s18cReqs = wsState.sessions.map((s) => (s.additions ? JSON.parse(s.additions) : {}))
+check('regen 会话不带 cache_config（全新合成，绝不命中旧缓存）', s18cReqs.every((a) => a.cache_config === undefined), s18cReqs)
+// 防串音：换音色后重播（指纹变了）→ 不再命中服务端缓存（否则会返回旧音色音频）
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_xiaohe_uranus_bigtts', apiKey: 'k-stream' } } } })
+wsState.sessions = []
+const s18d = await rpc('speak', { sessionId: 's1', messageId: 'm15' })
+const sd18d = await awaitStreamDone(s18d.runId)
+const s18dReqs = wsState.sessions.map((s) => (s.additions ? JSON.parse(s.additions) : {}))
+check('换音色后重播（指纹变）不带 cache_config（防命中旧音色，串音）', sd18d.res && s18dReqs.every((a) => a.cache_config === undefined), s18dReqs)
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } } })
 
 section('T19 双向流兜底：WS 中途失败不写半截缓存，降级走 HTTP 整段且缓存完整')
 // 模拟"转写已完成但 WS 在收尾时挂掉"：FinishSession 时不回 SessionFinished、而是触发 onerror → 中止。

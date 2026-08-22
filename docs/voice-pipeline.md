@@ -43,6 +43,8 @@
   仅当 provider/model/prompt/reasoningEffort 四者与当前配置完全一致才命中——同一消息重复点"朗读"、dsh 重启后再点，都直接复用不再调 LLM。
   2026-08-21 起缓存条目额外带 `instruction` 字段（内容驱动语音指令，见 §1.5）：转写稿与指令一起复用，
   同一消息第二次播报**零新增 LLM 调用**。旧缓存条目没有该字段 → 命中时只补生成指令、不重转写。
+  2026-08-22 起另带 `ttsFp`（音频参数指纹）与 `segments`（各段完整文本），供**服务端缓存**（§2.3.5）
+  重播命中判断与逐段复现——重播 1h 内走豆包服务端缓存，免重合成、不重复计费。
 
 ### 1.5 内容驱动的语音演绎指令（2026-08-21 新增，第二段 LLM 输出）
 
@@ -154,9 +156,9 @@ interface TtsProvider {
   - `additions`：`context_texts`（**语音指令/情感通道**，所有 2.0 音色生效、仅首个值有效、不计费）、
     `explicit_dialect`（方言，8 种方言统一 vv，§2.3.2）、
     `explicit_language`（仅固定英文）、
-    `section_id`（跨次合成语气连续）、`post_process.pitch`（五档半音）。
-    **不再下发 `cache_config`**：服务端缓存只按文本、不认方言/音色/情感参数，试听文本固定会命中
-    缓存返回旧音频（2026-08-23 实测：同文本 + 三方言 → 音频完全一致）；本地转写缓存已足够。
+    `section_id`（跨次合成语气连续）、`post_process.pitch`（五档半音）、
+    `cache_config`（**服务端缓存，见 §2.3.5**——只按文本、不认方言/音色/情感，故**仅初次合成与
+    "参数指纹未变"的重播下发**；试听与重新生成绝不下发）。
   - `req_params.model='seed-tts-2.0-expressive'`（表现力增强，`tts.volcengine.expressive`，效果抽卡，默认关）。
 - **探针验证**（`scripts/tts-ws-probe.mjs`，plan 网关实呼）：流式喂文本 / 多 session 复用 /
   context_texts / explicit_dialect / section_id / model=expressive 全部通过；
@@ -204,7 +206,7 @@ interface TtsProvider {
 - 保留原实现：`POST https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional`，chunked JSON 行，
   `{code:0,data:base64}` 累加 + `{code:20000000}` 结束；语速/音调走数值参数。同参数字段
   （bit_rate / loudness / explicit_dialect / section_id / `X-Api-Request-Id` / usage 头）。
-  不再下发 cache_config（见 §2.3.1 说明）。
+  支持 cache_config（探针实测命中，见 §2.3.5）。
 - 双向流不可用（网络/Key 问题）时自动降级到本路径（整段合成，run.warn 提示）。
 - **语音指令能力实测（2026-08-19/20 三轮探针 `scripts/tts-probe.mjs` + 用户旧项目
   secretary-agent 独立实测；音频存档在 tmp 下 probe 目录，可亲耳复听）**：
@@ -229,6 +231,30 @@ interface TtsProvider {
     失败回退预设 instruct；方言走 explicit_dialect（不再拼进 context_texts，见 §2.3.2）；
     转写文稿的语气措辞（风格预设 prompt）仍是"人设"
     的主通道；LLM 自行插入的 `[#...]` 标签提取后优先于一切（明确意图）。
+
+#### 2.3.5 服务端缓存 `cache_config`（2026-08-22 恢复：重播 1h 内免重合成）
+
+- **背景**：第 8 轮"永远四川口音"事故实锤服务端缓存**只按文本、不认方言/音色/情感**，曾彻底移除。
+  用户指出豆包 TTS 本就带 1h 服务端缓存，重播（同文本 + 同参数）应当**不重复计费**。
+  重新用真实探针（`scripts/tts-cache-probe.mjs`，MD5 判定）验证后**恢复，但只在安全场景下发**。
+- **探针实测结论**（plan 网关双向流 + HTTP 单向，`use_cache:true, text_type:1`）：
+  1. **写缓存的那次请求必须带 cache_config**（A 不带 vs B 带 → 音频不同，未命中）；
+  2. **二次同文本带 cache_config → 命中，音频 MD5 一致、秒回**（F1/F2，双向流；H1/H2，HTTP 兜底）；
+  3. **缓存键 = 会话整段文本，与分片方式无关**（G 整段单次命中 F1 分片写入的缓存）；
+  4. **只认文本**：换方言仍返回相同音频（B/C MD5 一致）——即防串音的唯一办法是**参数指纹未变才用**。
+- **下发规则**（`buildVolcReqParams` `opts.useServerCache` → `additions.cache_config`）：
+  - **初次合成**（无本地转写缓存命中）→ 下发（写入服务端缓存，供重播命中）；
+  - **重播**（本地缓存命中）→ 下发（命中服务端缓存，**1h 内免重合成、不重复计费**）；
+  - **防串音**：只有 `ttsFp`（音色/方言/语种/语速/音调/音量/表现力/采样率/比特率 指纹）未变才下发；
+    用户换了音色/方言 → 指纹变 → 不命中缓存、正常合成新参数（T18 断言）；
+  - **重新生成（regen）** → 绝不下发（用户要全新合成）；
+  - **试听（preview）** → 绝不下发（固定试听文本 + 切方言 = 第 8 轮事故源）。
+- **重播要命中须逐段复现**：服务端缓存键=会话整段文本 → 初次合成把各段完整文本记入本地缓存
+  `segments`，重播逐段开 session 喂**与初次一致的整段文本** → 键一致 → 命中。
+- **同文本防串音记账**（`serverCacheLedger`）：本地记 文本→上次写入指纹+时间，1h 内同文本换参数
+  → 不再命中（否则返回旧参数音频）；服务端缓存过期（>1h）后自动放行重新写。
+- 实现：`ttsFpOf` / `serverCacheAllowed` / `serverCacheMark`（lib/index.js）；流式 `streamSpeak`
+  与 HTTP `transcribe`/`synthToRoute`/`synthesizeVolcengine` 同规则。
 
 ### 2.4 音频回传与播放（云 provider 通用）
 
@@ -393,10 +419,13 @@ voice:
 - **重播零 LLM（第 11 轮）**：重播 = 把刚生成的东西重新播一遍，**不重新生成任何东西**——转写文字与
   情感指令**都用缓存**（HTTP 与双向流一致）。双向流重播时段落照常切分（音频分段）但复用缓存指令、
   不再按段调 LLM。缓存缺指令（极短文稿/旧条目）= 初次本就没生成，重播同样不补。
+- **重播零重合成（第 12 轮，服务端缓存）**：重播除零 LLM 外，音频合成也走豆包**服务端缓存**（§2.3.5）
+  ——初次合成带 `cache_config` 写入，重播带 `cache_config` 命中，**1h 内免重合成、不重复计费**。
+  仅 `ttsFp` 指纹未变才命中（防串音）；regen 与试听绝不下发。
 - **重新生成（↻）** = 转写 + 情感指令**全部重新生成**（force 跳过缓存），结果覆盖该 messageId 条目
   （单键覆盖 + `CACHE_LIMIT=200` 截断 + audioStore 一次性即删 + `disposeRun` 8s 兜底 → 不膨胀）。
 - **流式/HTTP 缓存统一**（审计 A7 修复）：同一 messageId 两种路径共用同一形状
-  `{ transcript(净化稿), provider, model, prompt, effort, sourceChars, at, instruction, emotion, intensity }`；
+  `{ transcript(净化稿), provider, model, prompt, effort, sourceChars, at, instruction, emotion, intensity, ttsFp, segments }`；
   **流式也读缓存**（regen 除外）；仅**转写完整**时写缓存（WS 中途失败不污染，降级走 HTTP 时命中完整稿）。
 
 ### 5.6 健壮性与可视化（2026-08-18 收尾）

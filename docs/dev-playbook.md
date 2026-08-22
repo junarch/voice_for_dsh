@@ -21,7 +21,8 @@
 
 ### 改任意一半之后：跑零成本集成测试
 ```powershell
-node scripts/test-host.mjs   # mock 依赖驱动 Host 全链路，149 条断言（含重复朗读不加 LLM、双向流帧编解码/流式管线、口播净化/引擎归一、pcm 段格式、context_texts 情感对所有 2.0 音色生效、8 方言 explicit_dialect 统一 vv、English 自动切英文音色、无 cache_config、配置 speaker 归一化、T16 音色↔语种归一 / T17 regen / T18 重播零 LLM / T19 WS 兜底缓存完整）
+node scripts/test-host.mjs   # mock 依赖驱动 Host 全链路，153 条断言（含重复朗读不加 LLM、双向流帧编解码/流式管线、口播净化/引擎归一、pcm 段格式、context_texts 情感对所有 2.0 音色生效、8 方言 explicit_dialect 统一 vv、English 自动切英文音色、cache_config 初次/重播下发而 regen/换音色重播不下发、配置 speaker 归一化、T16 音色↔语种归一 / T17 regen / T18 重播零 LLM / T19 WS 兜底缓存完整）
+node scripts/tts-cache-probe.mjs  # 真实外呼探针（花几分钱）：验证服务端缓存 cache_config（初次写/重播命中/只认文本/HTTP 兜底）
 node scripts/tts-probe.mjs   # 真实外呼探针（花几分钱）：验证 HTTP 单向 TTS 接口行为是否变化
 node scripts/tts-ws-probe.mjs --case basic   # 真实外呼探针（花几分钱）：验证双向流 WS 端点/帧协议/首包延迟
 node scripts/tts-ws-probe.mjs --all          # 双向流全部参数用例（emotion/dialect/instruct/cache/section/expressive/多 session）

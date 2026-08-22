@@ -536,6 +536,7 @@ function apply(ctx) {
     const instruction = cmd || buildVoiceInstruction(cfg, '', '')
     const reqParams = buildVolcReqParams(cfg, v, {
       instruction, emotionZh: opts.emotionZh || '', intensity: opts.intensity, dialect: dialectFor(cfg), sectionId: opts.sectionId || '',
+      useServerCache: !!opts.useServerCache,
     })
     reqParams.text = text
     const res = await fetch('https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional', {
@@ -613,6 +614,37 @@ function apply(ctx) {
     }
     return parts.join('，')
   }
+  /** TTS 音频参数指纹（服务端缓存只按文本、不认方言/音色/情感；指纹一致才可命中，防串音）。
+   * 指纹 = 影响听感的静态参数：音色/方言/语种/语速/音调/音量/表现力/采样率/比特率。
+   * 不含情感指令：初次每段动态写情感、重播复用缓存代表指令，两者本就不同；且缓存键=文本，指令不影响命中。 */
+  function ttsFpOf(cfg, v) {
+    const speaker = correctSpeakerForLanguage(cfg, v.speaker)
+    const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
+    const explicitLang = lang && !lang.dialect && lang.id === 'en' ? 'en' : ''
+    const rate = Number.isInteger(v.rateLevel) ? RATE_VALUES[v.rateLevel] : undefined
+    const pitch = Number.isInteger(v.pitchLevel) ? PITCH_VALUES[v.pitchLevel] : undefined
+    return JSON.stringify([speaker, dialectFor(cfg), explicitLang, rate ?? '', pitch ?? '',
+      v.loudness ?? '', v.expressive ? 'ex' : '', v.sampleRate ?? '', v.bitRate ?? ''])
+  }
+  /** 服务端缓存记账（文本 → 上次写入的指纹 + 时间）：防止同文本换参数后 1h 内命中旧音频（串音，
+   * 即第 8 轮"永远四川口音"事故同类）。仅当指纹一致或已超 1h（服务端缓存过期）才允许命中。 */
+  const serverCacheLedger = new Map() // text → { fp, at }
+  function serverCacheAllowed(text, fp) {
+    if (!text) return false
+    const rec = serverCacheLedger.get(text)
+    const now = Date.now()
+    if (!rec) return true // 未写过：可写入（首次）
+    if (now - rec.at > 3600_000) { serverCacheLedger.delete(text); return true } // 服务端缓存已过期，可重新写
+    return rec.fp === fp // 1h 内同文本：仅指纹一致才允许命中（否则跳过缓存，走正常合成防串音）
+  }
+  function serverCacheMark(text, fp) {
+    if (!text) return
+    serverCacheLedger.set(text, { fp, at: Date.now() })
+    if (serverCacheLedger.size > 500) { // 防膨胀：保留最近的 400 条
+      const sorted = [...serverCacheLedger.entries()].sort((a, b) => a[1].at - b[1].at)
+      for (const [k] of sorted.slice(0, serverCacheLedger.size - 400)) serverCacheLedger.delete(k)
+    }
+  }
   /** 组装 StartSession/TaskRequest 的 req_params（不含 text）。
    * 双向流（isStream）用 pcm（官方推荐：裸采样无帧/延迟，切段无缝）；HTTP 单向仍 mp3。 */
   function buildVolcReqParams(cfg, v, opts = {}) {
@@ -637,9 +669,10 @@ function apply(ctx) {
     // explicit_language：仅固定英文下发（中文/方言不下发，避免与 explicit_dialect 冲突）
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
     if (lang && !lang.dialect && lang.id === 'en') additions.explicit_language = 'en'
-    // 注意：不再下发 cache_config——服务端缓存只按文本、不认方言/音色/情感参数，
-    // 试听文本固定会命中缓存返回旧音频（实测：同文本 + 三方言 → 音频完全一致）。
-    // 本地转写缓存（按 messageId）已足够，服务端缓存对本插件有害，移除。
+    // 服务端缓存（cache_config）：只按文本、不认方言/音色/情感（探针实测 MD5 一致），
+    // 故仅在"初次合成写入 + 参数指纹未变的重播命中"时下发；试听/重新生成绝不下发（防串音）。
+    // 写缓存须带 cache_config；缓存键 = 会话整段文本（分片无关）；命中=免服务端重合成。
+    if (opts.useServerCache) additions.cache_config = { use_cache: true, text_type: 1 }
     if (v.useSectionId && opts.sectionId) additions.section_id = opts.sectionId
     const pitch = Number.isInteger(v.pitchLevel) ? PITCH_VALUES[v.pitchLevel] : undefined
     if (pitch) additions.post_process = { pitch }
@@ -814,6 +847,8 @@ function apply(ctx) {
     let firstDynamicIntensity = 4
     let transcriptionDone = false     // 转写完整跑完才写缓存（WS 中途失败不污染缓存）
     let cachedHit = null              // 缓存命中（重播）标记：供 try 外缓存写入判断
+    let useServerCache = false        // 服务端缓存（cache_config）：初次写/重播命中才下发；regen 与试听绝不
+    const paraTexts = []              // 初次合成的各段文本（记录到缓存，重播逐段复现 → 服务端缓存键一致 → 命中免费）
     let lastParagraphText = '' // 最近一段完整文本（生成下一段指令用）
     let pending = ''           // 未成句的文本（段 N 起用）
     let session = null
@@ -838,7 +873,7 @@ function apply(ctx) {
     }
 
     async function startParaSession() {
-      sessionReqParams = buildVolcReqParams(cfg, v, { instruction: currentInstruction, emotionZh: currentEmotion, intensity: currentIntensity, dialect, sectionId, isStream: true })
+      sessionReqParams = buildVolcReqParams(cfg, v, { instruction: currentInstruction, emotionZh: currentEmotion, intensity: currentIntensity, dialect, sectionId, isStream: true, useServerCache })
       session = await conn.startSession(sessionReqParams)
       paragraphs++
     }
@@ -853,6 +888,11 @@ function apply(ctx) {
         if (!firstDynamicInstruction) { firstDynamicInstruction = gi.instruction; firstDynamicEmotion = gi.emotion || ''; firstDynamicIntensity = gi.intensity || 4 }
         currentInstruction = gi.instruction; currentEmotion = gi.emotion; currentIntensity = gi.intensity || 4
       }
+      if (!useCachedInstr && lastParagraphText) {
+        // 初次合成：记录本段完整文本（写缓存供重播逐段复现 → 服务端缓存键=会话整段文本一致 → 命中免费）
+        paraTexts.push(lastParagraphText)
+        if (useServerCache) serverCacheMark(lastParagraphText, ttsFpOf(cfg, v))
+      }
       lastParagraphText = ''
       session = null
       sessionReqParams = null
@@ -860,55 +900,83 @@ function apply(ctx) {
     }
 
     try {
-      let tstream
+      let tstream = null
       cachedHit = !run.force && cfg.transcribe.enabled !== false
         ? cachedTranscriptFor(run.messageId, route, promptUsed, effortUsed)
         : null
+      const curFp = ttsFpOf(cfg, v)
       if (cachedHit && cachedHit.transcript) {
-        // 缓存命中（与 HTTP 一致，regen 除外）：整段喂缓存稿；转写与情感指令都用缓存，零 LLM。
+        // 缓存命中（与 HTTP 一致，regen 除外）：转写与情感指令都用缓存，零 LLM。
         // 段落照常切分（音频分段），但不再按段调 LLM——重播=把刚生成的东西重新播一遍，不重新生成任何东西。
         currentInstruction = cachedHit.instruction || currentInstruction
         currentEmotion = cachedHit.emotion || ''
         currentIntensity = cachedHit.intensity || 4
         useCachedInstr = true
-        const cachedText = cachedHit.transcript
-        tstream = (async function* () { yield cachedText })()
+        const segs = Array.isArray(cachedHit.segments) && cachedHit.segments.length ? cachedHit.segments : null
+        if (segs) {
+          // 逐段复现初次会话切分：服务端缓存键=会话整段文本，逐段文本一致 → 命中免费（1h 内不重复计费）。
+          // 仅当参数指纹未变才启用缓存（防"换方言/音色后命中旧音频"串音）；regen 绝不。
+          for (const seg of segs) {
+            if (run.stopped) break
+            useServerCache = !run.force && cachedHit.ttsFp === curFp && serverCacheAllowed(seg, curFp)
+            if (!session) await startParaSession()
+            await conn.sendText(session, sessionReqParams, seg)
+            lastParagraphText = seg
+            await cutParagraph()
+            if (useServerCache) serverCacheMark(seg, curFp)
+          }
+          // 重播逐段不走通用循环：转写稿仍要回填（客户端展示/状态）
+          transcriptParts.push(cachedHit.transcript)
+        } else {
+          // 旧缓存无 segments：整段单会话直喂（服务端缓存键=整段文本，初次若是整段则仍可命中）
+          useServerCache = !run.force && cachedHit.ttsFp === curFp && serverCacheAllowed(cachedHit.transcript, curFp)
+          const cachedText = cachedHit.transcript
+          tstream = (async function* () { yield cachedText })()
+        }
       } else if (cfg.transcribe.enabled === false) {
         // 关转写：不调模型，直接流式合成原文（去 Markdown）
         const plain = toPlainSpoken(found.text)
+        // 初次写入缓存：同文本 1h 内已以不同参数缓存 → 跳过（防串音）
+        useServerCache = !run.force && serverCacheAllowed(plain, curFp)
         tstream = (async function* () { if (plain) yield plain })()
       } else {
+        // 初次合成：带 cache_config 写服务端缓存（供 1h 内重播命中免费）。
+        // 以原文近似判据：同文本 1h 内已以不同参数缓存 → 跳过（防串音，同第 8 轮事故）
+        useServerCache = !run.force && serverCacheAllowed(found.text, curFp)
         tstream = streamTranscription(route, cfg, found, promptUsed, ctxRef, run)
       }
-      for await (const delta of tstream) {
-        if (run.stopped) break
-        if (!delta) continue
-        transcriptParts.push(delta)
-        if (dynamic && !firstPara) {
-          // 段 N（N≥1）：成句缓冲 + 精确切段
-          pending += delta
-          let cut
-          while (!run.stopped && (cut = findSentenceEnd(pending)) >= 0) {
-            const sentence = pending.slice(0, cut + 1)
-            pending = pending.slice(cut + 1)
-            const clean = cleanForTts(sentence)
+      // 重播按 segments 逐段复现（已在上面循环完会话）→ 不再走通用 for-await；其余路径走 tstream
+      if (tstream) {
+        for await (const delta of tstream) {
+          if (run.stopped) break
+          if (!delta) continue
+          transcriptParts.push(delta)
+          if (dynamic && !firstPara) {
+            // 段 N（N≥1）：成句缓冲 + 精确切段
+            pending += delta
+            let cut
+            while (!run.stopped && (cut = findSentenceEnd(pending)) >= 0) {
+              const sentence = pending.slice(0, cut + 1)
+              pending = pending.slice(cut + 1)
+              const clean = cleanForTts(sentence)
+              if (clean) {
+                if (!session) await startParaSession()
+                await conn.sendText(session, sessionReqParams, clean)
+                lastParagraphText += clean
+                paraSentences++
+                if (paraSentences >= 2) await cutParagraph()
+              }
+            }
+          } else {
+            // 段 0 / 非动态整条：增量直喂，尽早出声
+            const clean = cleanForTts(delta)
             if (clean) {
               if (!session) await startParaSession()
               await conn.sendText(session, sessionReqParams, clean)
               lastParagraphText += clean
-              paraSentences++
-              if (paraSentences >= 2) await cutParagraph()
+              paraSentences += countEnders(delta)
+              if (dynamic && paraSentences >= 2) { await cutParagraph(); firstPara = false }
             }
-          }
-        } else {
-          // 段 0 / 非动态整条：增量直喂，尽早出声
-          const clean = cleanForTts(delta)
-          if (clean) {
-            if (!session) await startParaSession()
-            await conn.sendText(session, sessionReqParams, clean)
-            lastParagraphText += clean
-            paraSentences += countEnders(delta)
-            if (dynamic && paraSentences >= 2) { await cutParagraph(); firstPara = false }
           }
         }
       }
@@ -925,6 +993,11 @@ function apply(ctx) {
       }
       transcriptionDone = !run.stopped // 转写完整跑完（未中途抛错）；WS 音频阶段失败不影响缓存完整性
       if (session) {
+        if (!useCachedInstr && lastParagraphText) {
+          // 末段文本同样记录（初次合成；供重播逐段复现 → 服务端缓存命中）
+          paraTexts.push(lastParagraphText)
+          if (useServerCache) serverCacheMark(lastParagraphText, ttsFpOf(cfg, v))
+        }
         await conn.finishSession(session)
         await conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
         flushSegment(run)
@@ -951,6 +1024,8 @@ function apply(ctx) {
         instruction: firstDynamicInstruction || currentInstruction || undefined,
         emotion: firstDynamicEmotion || currentEmotion || undefined,
         intensity: firstDynamicIntensity || currentIntensity || 4,
+        ttsFp: ttsFpOf(cfg, v), // 服务端缓存命中判据：重播时参数指纹未变才可命中（防串音）
+        segments: paraTexts.length ? paraTexts.slice() : undefined, // 各段完整文本：重播逐段复现 → 服务端缓存键一致
       })
       saveTranscriptCache(transcriptCache)
       const hist = transcriptsBySession.get(run.sessionId) || []
@@ -1166,6 +1241,7 @@ function apply(ctx) {
             effort: effortUsed,
             sourceChars: found.text.length,
             at: Date.now(),
+            ttsFp: ttsFpOf(cfg, cfg.tts.volcengine), // 服务端缓存命中判据（重播时参数指纹未变才命中，防串音）
           })
           saveTranscriptCache(transcriptCache)
           // 引用上文：记录本轮播报文稿（供后续轮次的转写语境）
@@ -1215,6 +1291,7 @@ function apply(ctx) {
               prompt: promptUsed, effort: effortUsed,
               sourceChars: found.text.length, at: Date.now(),
               instruction: generated.instruction, emotion: generated.emotion || '', intensity: generated.intensity || 4,
+              ttsFp: ttsFpOf(cfg, cfg.tts.volcengine),
             })
             saveTranscriptCache(transcriptCache)
           }
@@ -1222,6 +1299,13 @@ function apply(ctx) {
       }
     }
     const voiceInstruction = buildVoiceInstruction(cfg, extractedCmd, generated)
+
+    // 服务端缓存（cache_config）：初次合成写入（供 1h 内重播命中免费）；重播仅参数指纹未变才命中（防串音）；
+    // regen 绝不。旧缓存无 ttsFp → 不命中（无法确认参数未变，宁可不省这钱也不串音）。
+    const curFp = ttsFpOf(cfg, cfg.tts.volcengine)
+    const useServerCache = ttsProviderOf(cfg) !== 'browser' && !opts.force && transcript
+      && ((fromCache && cached) ? cached.ttsFp === curFp && serverCacheAllowed(transcript, curFp)
+        : serverCacheAllowed(transcript, curFp))
 
     // TTS：browser 透传 Client speechSynthesis；云 provider 在 Host 合成后挂一次性音频路由
     let audioUrl
@@ -1232,7 +1316,9 @@ function apply(ctx) {
           sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? stableHashId(sessionId) : '',
           emotionZh: generated ? generated.emotion : '',
           intensity: generated ? generated.intensity : undefined,
+          useServerCache,
         })
+        if (useServerCache) serverCacheMark(transcript, curFp)
       } catch (error) {
         console.error('[voice] cloud tts failed:', error)
         ttsError = String(error && error.message || error) // Client 端降级 speechSynthesis
