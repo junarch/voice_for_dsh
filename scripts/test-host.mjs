@@ -15,7 +15,7 @@
  * 【2. 为什么需要它？】
  *   手动测试（打开网页、点按钮、用耳朵听）很贵，而且测不到内部：
  *   "听起来正常"不等于"没重复调 4 次 LLM"。这个脚本不用打开 dsh、
- *   不用浏览器、不花一分钱 API 费，1 秒左右跑完 160 条检查。
+ *   不用浏览器、不花一分钱 API 费，1 秒左右跑完全部检查（总数见最后一行）。
  *
  * 【3. 怎么跑？（VS Code 完整步骤）】
  *   ① 用 VS Code 打开仓库文件夹（本仓库根目录）
@@ -32,7 +32,7 @@
  *   千万不要看到 FAIL 就自己改断言让它变绿（那等于把体温计掰弯）。
  *   先搞清楚：是代码坏了（改代码），还是"事实快照"过期了（见第 5 条）。
  *
- * 【5. 最重要的一段：本测试集里的断言分两类（这是你提出的洞见，已固化成本设计）
+ * 【5. 最重要的一段：本测试集里的断言分两类（这是此前确认的洞见，已固化成本设计）
  *
  *   【A 类·不变量】我们自己的代码必须永远满足的要求，断言它永远合理：
  *      例：同一条消息读第二遍，不允许再调一次 LLM（防"转写 4 次烧 token"）。
@@ -41,8 +41,8 @@
  *   【B 类·外部事实快照】对"火山 TTS 接口怎么表现"的记录，依据是某天的
  *      探针实测（scripts/tts-probe.mjs），它可能过时、甚至可能本来就是错的：
  *      例："请求 text 里不得出现 [#...] 标签"--依据是三轮
- *      探针 + 旧项目独立实测（两边结论一致，可信度高）；
- *      例："context_texts 传指令"--依据是旧项目经验 + 探针显示偶发时长变化，
+ *      探针 + 此前独立实测（两边结论一致，可信度高）；
+ *      例："context_texts 传指令"--依据是此前项目经验 + 探针显示偶发时长变化，
  *      但效果不稳定（vv 音色上几乎无效果，xiaohe 上有）。
  *   推翻 B 类断言的正确姿势：
  *      ① 先跑 node scripts/tts-probe.mjs 拿新的实测证据（音频会存到 tmp\ 下，亲耳听）
@@ -616,7 +616,7 @@ section('T4 getConfig')
 check('getConfig 返回配置', (await rpc('getConfig')).ok === true)
 
 section('T6 火山 TTS 请求组装【快照：text 无标签 + 指令走 context_texts + 数值参数】')
-// 依据：tmp 下三轮探针音频 + 旧项目独立实测。
+// 依据：tmp 下三轮探针音频 + 此前独立实测。
 // - 内嵌 [#...] 会被逐字照读（D 实验：时长 2.37 倍）=> text 必须干净
 // - 数值 speech_rate 可靠生效（-50 -> 时长 2.2 倍）=> 语速/音调走数值参数
 // - context_texts 是官方指令通道（不计费、仅第一个值有效），效果依赖音色/措辞
@@ -677,7 +677,7 @@ check('回退到预设机械指令 温柔地回应', additions6d.context_texts &
 
 section('T6b LLM 插入的标签 -> 提取进 context_texts（自定义 prompt 场景）')
 // 剧本：预设切回 standard（无预设指令），假 LLM 却输出了 [#...] 标签--
-// 期望：标签从 text 里消失，内容出现在 context_texts 里（你旧项目的成熟设计）。
+// 期望：标签从 text 里消失，内容出现在 context_texts 里（此前项目的成熟设计）。
 await rpc('setConfig', { patch: { transcribe: { stylePreset: 'standard' } } })
 llmState.responses = [{ text: '[#用俏皮可爱的语气说] 自定义指令转写结果', finish: 'stop' }]
 const r6 = await rpc('speak', { sessionId: 's1', messageId: 'm4' })
@@ -721,7 +721,19 @@ const fcGw2 = fetchState.calls.length
 const rGw2 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
 check('custom：ok', rGw2.ok === true, rGw2)
 check('custom：HTTP 走 httpUrl（转接端点）', fetchState.calls[fetchState.calls.length - 1].url === 'https://relay.example.com/v3/tts/unidirectional', fetchState.calls[fetchState.calls.length - 1].url)
-await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { gateway: 'plan', httpUrl: '', interface: 'http', apiKey: 'k-test' } } } })
+// —— 安全：custom 端点协议校验（防 apiKey 明文传输）+ 缺 URL 报错 + 无 wsUrl 不流式 ——
+await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'custom', httpUrl: 'http://relay.example.com/v3/tts/unidirectional' } } } })
+llmState.responses = [{ text: '明文端点', finish: 'stop' }]
+const rBad1 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
+check('custom：http:// 端点被拒绝（必须 https，防明文凭据）', rBad1.ok === true && /https/.test(String(rBad1.ttsError)), rBad1)
+await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'custom', httpUrl: '', wsUrl: '' } } } })
+const rBad2 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
+check('custom：httpUrl/wsUrl 都缺时报错', rBad2.ok === true && /需要配置/.test(String(rBad2.ttsError)), rBad2)
+await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'custom', interface: 'bidirection', httpUrl: 'https://relay.example.com/v3/tts/unidirectional', wsUrl: '' } } } })
+llmState.responses = [{ text: 'custom 无 wsUrl', finish: 'stop' }]
+const rGw4 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
+check('custom：仅有 httpUrl（无 wsUrl）→ 不流式，走自定义 HTTP 端点', rGw4.ok === true && rGw4.mode !== 'stream' && fetchState.calls[fetchState.calls.length - 1].url === 'https://relay.example.com/v3/tts/unidirectional', rGw4)
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { gateway: 'plan', httpUrl: '', wsUrl: '', interface: 'http', apiKey: 'k-test' } } } })
 
 section('T8 云 TTS 失败 -> ttsError 降级标记（浏览器语音兜底）')
 fetchState.nextOk = false
