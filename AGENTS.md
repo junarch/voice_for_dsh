@@ -40,8 +40,9 @@
 
 ### 权威文档/代码位置（实现前必查，勿臆造 API）
 
-- 计划与设计：`PLAN.md`（本仓库根；含调研结论、架构、步骤、验收标准）。
-- `docs/dsh-plugin-architecture.md`、`docs/voice-pipeline.md`、`docs/dev-playbook.md`。
+- 本仓库文档：`docs/architecture.md`（DSH 插件机制与关键决策）、`docs/pipeline.md`
+  （转写/TTS 管线行为 + `voice:` schema + 必须守住的不变式）、`docs/development.md`（开发循环）、
+  `docs/testing.md`（测试方法）、`docs/release.md`（发布清单）。改动前必读 `docs/pipeline.md` §7"不变式"。
 - DSH 源码参考（只读）：npx 检出的 `node_modules/@deepseek-ai/*`：
   - bundle 补丁：`dsh-base/cordis.patch.yml`、`dsh-web-app/cordis.patch.yml`
   - 双半插件范例：`dsh-client-ui-deliverables`、`dsh-client-ui-message-feedback`
@@ -61,19 +62,20 @@
 2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 需要重启 dsh（`dsh --profile web`）才能生效。
    **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
    后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 是空操作），dev:web watcher / HMR 仅后续
-   tsdown 化后才可用（详见 `docs/dev-playbook.md` §1）。
+   tsdown 化后才可用（详见 `docs/development.md` §1）。
 3. **验证循环**：装包 → 重启 dsh → 浏览器操作 → 看 console/日志；动态原型可用"创造模式"preset 会话。
 4. **命名空间/服务名统一用 `voice`**，避免与既有插件冲突。
-5. 转写与 TTS 的 prompt/配置细节统一维护在 `docs/voice-pipeline.md`，改动先更新文档再改代码。
+5. 转写与 TTS 的 prompt/配置细节统一维护在 `docs/pipeline.md`，改动先更新文档再改代码。
 6. 新增 API 调用前，先在 npx 检出的 `.d.ts` 里确认签名（本项目遵循"inspect first"原则）。
 
 ## 目录结构
 
 ```
 voice_for_dsh/
-├── PLAN.md                  # 开发计划（总纲）
-├── AGENTS.md                # 本文件
-├── docs/                    # 架构/转写设计/开发手册
+├── README.md                  # 项目总说明（安装/成本/隐私/协议）
+├── AGENTS.md                  # 本文件
+├── docs/                      # architecture / pipeline / development / testing / release
+├── scripts/                   # 测试与真实外呼探针（test-host.mjs 零成本；tts-*.mjs 花几分钱）
 └── packages/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：

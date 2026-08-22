@@ -23,7 +23,7 @@ npx @deepseek-ai/dsh web
 ```
 
 ## 配置
-见 `docs/voice-pipeline.md` §4（`voice:` 命名空间字段说明）。
+见 `docs/pipeline.md` §6（`voice:` 命名空间字段说明）。
 
 ## 开发
-见 `../docs/dev-playbook.md`（开发循环、创造模式试验、常见坑）。
+见 `../docs/development.md`（开发循环、创造模式试验、常见坑）。

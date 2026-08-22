@@ -1,0 +1,38 @@
+name: test
+
+# 什么时候触发：
+#  - push 到 main（包括你自己提交、打 tag）
+#  - 任何人提 PR（pull_request）——PR 会先自动跑这个测试，绿了才好合并
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # volcengine-ws.js 用 Node 22 全局 WebSocket（new WebSocket(...)），
+        # 所以最低 Node 22；顺带在 22.x 最新版上也跑一遍。
+        node-version: [22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: packages/dsh-plugin-voice/package-lock.json
+
+      # lib/index.js import 了 @deepseek-ai/schemastery，测试前先装插件自身依赖。
+      # --legacy-peer-deps：测试只加载 Host 半（lib/index.js 只 import schemastery + node 内置），
+      # 不需要 @deepseek-ai/dsh-client-* 这些 peer 依赖，跳过校验避免 ERESOLVE。
+      - name: Install plugin deps
+        working-directory: packages/dsh-plugin-voice
+        run: npm ci --legacy-peer-deps
+
+      # 零成本 mock 集成测试：不启动 dsh、不开浏览器、不花一分钱 API 费
+      # （test-host.mjs 用 DSH_HOME 指向临时目录 + mock 的 llm/sessions/settings/fetch）
+      - name: Run host test suite
+        run: node scripts/test-host.mjs

@@ -6,3 +6,14 @@ dist/
 *.log
 # 探针实验的音频产物（scripts/tts-probe.mjs 输出），不入库
 tmp/
+# 本地配置与密钥——绝不上传
+settings.yaml
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+.dsh/
+# 编辑器
+.vscode/
+.idea/
