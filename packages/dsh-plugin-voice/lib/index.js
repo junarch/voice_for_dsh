@@ -262,17 +262,19 @@ const VoiceSettingsSchema = z.object({
       // —— 双向流（新增，全部带默认值，向后兼容）——
       interface: z.union([z.const('bidirection'), z.const('http')]).default('bidirection'), // bidirection=WS 双向流（默认；设置页不再暴露手动切换）；http=仅内部降级兜底
       streaming: z.boolean().default(true),   // 双向流下启用"边转写边合成边播"（无 UI，默认开）
-      wsUrl: z.string().default(''),          // 空 = 默认 plan 网关（无 UI，高级）
+      wsUrl: z.string().default(''),          // 空 = 按 gateway 默认端点（无 UI，高级）
+      gateway: z.string().default('plan'),    // plan=智能体套餐（默认）| standard=标准付费（新版控制台 API Key，格式同 plan）| custom=自定义/转接端点
+      httpUrl: z.string().default(''),        // 空 = 按 gateway 默认；gateway=custom 时必填（原样转发火山协议的转接服务端点）
       emotionGranularity: z.union([z.const('paragraph'), z.const('message'), z.const('off')]).default('paragraph'), // context_texts 情感指令的动态粒度（无 UI，默认 paragraph）
       bitRate: z.number().default(64000),     // MP3 比特率（0=不设置；默认 64k 防音质损耗；无 UI）
       loudness: z.number().default(0),        // 音量 [-50,100]（0=不变）
       useSectionId: z.boolean().default(true),   // additions.section_id（跨次合成语气连续；无 UI，默认开）
       expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强；无 UI，默认关）
-    }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
+    }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
-    volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
+    volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
   }),
   stopOnNewTurn: z.boolean().default(true),
 })
@@ -520,6 +522,18 @@ function apply(ctx) {
     return parts.join('，')
   }
 
+  /** 火山网关端点：plan(智能体套餐默认) / standard(标准付费) / custom(自定义/转接)。
+   * 三者的协议与鉴权头一致（新版控制台 X-Api-Key + X-Api-Resource-Id），仅 URL 路径不同；
+   * custom 用 httpUrl/wsUrl 覆盖（供原样转发火山协议的转接服务）。 */
+  const VOLC_ENDPOINTS = {
+    plan: { http: 'https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional', ws: 'wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection' },
+    standard: { http: 'https://openspeech.bytedance.com/api/v3/tts/unidirectional', ws: 'wss://openspeech.bytedance.com/api/v3/tts/bidirection' },
+  }
+  function volcEndpoints(v) {
+    const g = VOLC_ENDPOINTS[v.gateway] || VOLC_ENDPOINTS.plan
+    return { http: v.httpUrl || g.http, ws: v.wsUrl || g.ws }
+  }
+
   /**
    * 火山豆包单向 TTS。text 必须已剥离 [#...] 指令标签（该接口不解析会照读）；
    * 语速/音调经数值参数（speech_rate 实测生效；pitch 经 additions.post_process.pitch）；
@@ -536,7 +550,7 @@ function apply(ctx) {
       useServerCache: !!opts.useServerCache,
     })
     reqParams.text = text
-    const res = await fetch('https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional', {
+    const res = await fetch(volcEndpoints(v).http, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -819,7 +833,7 @@ function apply(ctx) {
     const conn = createBidirectionClient({
       apiKey: v.apiKey,
       resourceId: v.resourceId || 'seed-tts-2.0',
-      url: v.wsUrl || WS_DEFAULTS.url,
+      url: volcEndpoints(v).ws,
       onAudio: (frame) => pushAudioFrame(run, frame),
       onFatal: (err) => { run.error = String(err && err.message || err); try { ac.abort() } catch {} },
       signal: ac.signal,

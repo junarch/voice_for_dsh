@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * 火山豆包 seed-tts-2.0（Agent Plan 单向接口）行为探针 -- 验证 context_texts 指令通道。
+ * 火山豆包 seed-tts-2.0 单向接口行为探针 -- 验证 context_texts 指令通道。
+ * 端点默认 plan 网关（智能体套餐）；`--gateway standard` 走标准付费端点（新版控制台 Key，同 X-Api-Key 格式），
+ * `--url <endpoint>` 走自定义/转接端点。
  *
  * 背景（两轮调研的完整结论）：
  *   1. 内嵌 [#...] 标签：plan 端点不解析，会当正文逐字照读（本项目探针 + 旧项目
@@ -17,7 +19,7 @@
  *   E   + context_texts 东北话   -- 方言指令是否生效（请试听）
  *   F   + context_texts 组合指令 -- 方言+语气合并成一条（插件将要采用的形态，请试听）
  *
- * 用法：node scripts/tts-probe.mjs [--key <api-key>]
+ * 用法：node scripts/tts-probe.mjs [--key <api-key>] [--gateway plan|standard] [--url <endpoint>]
  *   不给 --key 时从 %USERPROFILE%\.dsh\settings.yaml 的 voice.tts.volcengine.apiKey 读取。
  * 花费：7 次真实外呼，总字符 <120 ≈ 1~2 个计费块（分币级）。
  */
@@ -27,6 +29,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const argKey = process.argv.includes('--key') ? process.argv[process.argv.indexOf('--key') + 1] : null
+const argGateway = process.argv.includes('--gateway') ? process.argv[process.argv.indexOf('--gateway') + 1] : 'plan'
+const argUrl = process.argv.includes('--url') ? process.argv[process.argv.indexOf('--url') + 1] : ''
+const GATEWAY_ENDPOINTS = {
+  plan: 'https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional',
+  standard: 'https://openspeech.bytedance.com/api/v3/tts/unidirectional',
+}
+const ENDPOINT = argUrl || GATEWAY_ENDPOINTS[argGateway] || GATEWAY_ENDPOINTS.plan
 const key = argKey || (() => {
   try {
     const s = readFileSync(path.join(homedir(), '.dsh', 'settings.yaml'), 'utf8')
@@ -50,7 +59,7 @@ async function synth(name, text, additionsObj = {}) {
       ...(Object.keys(additionsObj).length ? { additions: JSON.stringify(additionsObj) } : {}),
     },
   }
-  const res = await fetch('https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional', {
+  const res = await fetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': key, 'X-Api-Resource-Id': 'seed-tts-2.0' },
     body: JSON.stringify(reqBody),

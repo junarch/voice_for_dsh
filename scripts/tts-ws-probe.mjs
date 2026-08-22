@@ -12,7 +12,7 @@
  *      section_id、req_params.model=seed-tts-2.0-expressive
  *   6. 首包延迟（StartSession→首批音频字节的耗时）
  *
- * 用法：node scripts/tts-ws-probe.mjs [--key <api-key>] [--case <name>] [--all]
+ * 用法：node scripts/tts-ws-probe.mjs [--key <api-key>] [--gateway plan|standard] [--case <name>] [--all]
  *   不给 --key 时从 %USERPROFILE%\.dsh\settings.yaml 的 voice.tts.volcengine.apiKey 读取。
  *   每个 case 的音频存 tmp/ws-probe-<时间戳>/<case>.mp3 供人工试听。
  * 花费：每 case 一次真实外呼，文本都很短（分币级）。
@@ -36,9 +36,12 @@ if (!key) { console.error('未找到 apiKey：用 --key <api-key> 或在 setting
 const outDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tmp', 'ws-probe-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19))
 mkdirSync(outDir, { recursive: true })
 
-const URL = process.env.VOLC_WS_URL || 'wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection'
-// 注：默认走 plan 网关（现有 ark- Key 兼容）。新 V3 网关 wss://openspeech.bytedance.com/api/v3/tts/bidirection
-// 需要新版控制台签发/开通的 Key（实测当前 Key 在 v3 网关返回 401 Invalid X-Api-Key）。
+const argGateway = process.argv.includes('--gateway') ? process.argv[process.argv.indexOf('--gateway') + 1] : null
+// 默认走 plan 网关（现有 Key 兼容）；`--gateway standard` 走标准付费 V3 端点（需新版控制台 Key，同 X-Api-Key 格式）。
+// 也可用 VOLC_WS_URL 环境变量覆盖到自定义/转接端点。
+const URL = argGateway === 'standard'
+  ? 'wss://openspeech.bytedance.com/api/v3/tts/bidirection'
+  : (process.env.VOLC_WS_URL || 'wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection')
 const RESOURCE = 'seed-tts-2.0'
 
 // ---------------------------------------------------------------------------

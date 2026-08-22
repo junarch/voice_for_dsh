@@ -14,6 +14,22 @@
 其余任何值（含旧值 `openai-compatible`）一律归 `browser`——新供应商**必须**先在 `ttsProviderOf` 登记，
 否则永远不会被当云 TTS 调用（这是防"未知 provider 悄悄烧钱"的设计）。
 
+### 1.1 网关（volcengine 内部，`voice.tts.volcengine.gateway`）
+
+协议与鉴权头（新版控制台 `X-Api-Key` + `X-Api-Resource-Id`）在三种网关间**完全一致，仅 URL 路径不同**
+（端点解析统一在 `lib/index.js` 的 `volcEndpoints(v)`）：
+
+| gateway | 含义 | HTTP 端点 | WS 端点 |
+|---|---|---|---|
+| `plan`（默认） | 智能体套餐（当前 key） | `/api/v3/plan/tts/unidirectional` | `/api/v3/plan/tts/bidirection` |
+| `standard` | 标准付费（新版控制台 key，格式同 plan） | `/api/v3/tts/unidirectional` | `/api/v3/tts/bidirection` |
+| `custom` | 自定义/转接（填 `httpUrl`/`wsUrl`） | 用户填 | 用户填 |
+
+- **旧版控制台**（`X-Api-App-Id` + `X-Api-Access-Key`）鉴权：**未实现**（官方推荐新版控制台，见 `docs/pipeline.md` §4.2）。
+- **第三方转接服务**分两种：
+  - **原样转发火山协议**（NDJSON / WS 二进制帧 + `X-Api-Key`）→ 选 `custom`、把端点填进 `httpUrl`/`wsUrl` 即可；
+  - **OpenAI 兼容**（`/v1/audio/speech` + `Authorization: Bearer`，多数 LLM/TTS 中转平台）→ 当前**不支持**，需按 §3 新增一个 provider。
+
 ## 2. 转写 LLM 供应商
 
 转写走 `ctx.llm`（用户已配置的 provider，`voice.provider`/`voice.model`，空=自动发现），

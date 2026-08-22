@@ -439,6 +439,7 @@ class MockVolcWS {
   constructor(url, opts) {
     this.binaryType = 'blob'
     this.url = url
+    wsState.lastUrl = url
     this.closed = false
     wsState.connections++
     setTimeout(() => this.onopen && this.onopen(), 0)
@@ -540,6 +541,16 @@ check('连接失败自动回退 HTTP 整段（1 段 url + warn 含回退）', sd
 check('兜底段 format=mp3（客户端走 decodeAudioData）', sd3.formats.length === 1 && sd3.formats[0] === 'mp3', sd3.formats)
 globalThis.WebSocket = MockVolcWS
 await rpc('setConfig', { patch: { language: 'auto' } })
+
+section('T11d 网关变体（WS 端点）：standard 走 V3 网关（鉴权同为 X-Api-Key，仅 URL 不同）')
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { apiKey: 'k-gw', interface: 'bidirection', gateway: 'standard' } } } })
+llmState.responses = [{ text: '标准网关 WS', finish: 'stop' }]
+const rgw = await rpc('speak', { sessionId: 's1', messageId: 'm11' })
+check('standard：speak 正常启动', rgw.ok === true, rgw)
+check('standard：WS 端点 = /api/v3/tts/bidirection（无 /plan/）', wsState.lastUrl.includes('/api/v3/tts/bidirection') && !wsState.lastUrl.includes('/plan/'), wsState.lastUrl)
+const sgw = await rpc('stop')
+check('standard：stop ok', sgw.ok === true)
+await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'plan', httpUrl: '', wsUrl: '' } } } })
 
 section('T12a 转写关闭（transcribe.enabled=false）-> 直接读原文、不调模型')
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'http' } }, transcribe: { enabled: false } } })
@@ -694,6 +705,23 @@ const addT = bodyT.req_params.additions ? JSON.parse(bodyT.req_params.additions)
 check('天津话：speaker 自动纠错为 vv', bodyT.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyT.req_params.speaker)
 check('天津话：explicit_dialect=tianjin 下发（不再按普通话）', addT.explicit_dialect === 'tianjin', addT)
 await rpc('setConfig', { patch: { language: 'auto', tts: { volcengine: { speaker: 'spk-1' } } } })
+
+section('T6f 网关变体（HTTP 端点）：standard / custom（鉴权同为 X-Api-Key，仅 URL 不同）')
+// standard：HTTP 端点走 /api/v3/tts/unidirectional（无 /plan/ 前缀，新版控制台 Key）
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { apiKey: 'k-gw', interface: 'http', gateway: 'standard' } } } })
+llmState.responses = [{ text: '标准付费网关 HTTP', finish: 'stop' }]
+const fcGw = fetchState.calls.length
+const rGw = await rpc('speak', { sessionId: 's1', messageId: 'm6e' })
+check('standard：ok', rGw.ok === true, rGw)
+check('standard：HTTP 端点含 /api/v3/tts/unidirectional 且无 /plan/', fetchState.calls[fetchState.calls.length - 1].url.includes('/api/v3/tts/unidirectional') && !fetchState.calls[fetchState.calls.length - 1].url.includes('/plan/'), fetchState.calls[fetchState.calls.length - 1].url)
+// custom：httpUrl 优先于默认端点（原样转发火山协议的转接服务）
+await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'custom', httpUrl: 'https://relay.example.com/v3/tts/unidirectional' } } } })
+llmState.responses = [{ text: '自定义转接 HTTP', finish: 'stop' }]
+const fcGw2 = fetchState.calls.length
+const rGw2 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
+check('custom：ok', rGw2.ok === true, rGw2)
+check('custom：HTTP 走 httpUrl（转接端点）', fetchState.calls[fetchState.calls.length - 1].url === 'https://relay.example.com/v3/tts/unidirectional', fetchState.calls[fetchState.calls.length - 1].url)
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { gateway: 'plan', httpUrl: '', interface: 'http', apiKey: 'k-test' } } } })
 
 section('T8 云 TTS 失败 -> ttsError 降级标记（浏览器语音兜底）')
 fetchState.nextOk = false

@@ -28,6 +28,9 @@
 - **`transcribe.contextTurns` 固定为 2（引用上文最多往前两轮）**，设置页不再显示输入框。
 - **`transcribe.maxTokens` 设置页不再显示**（schema 保留，默认 8192，无需用户调节）：撞顶空稿时
   自动按 4 倍额度重试一次；老用户在 settings.yaml 里手动配置的值仍生效。
+- **`voice.tts.volcengine.gateway`（新增，默认 `plan`，向后兼容）**：`plan`=智能体套餐（默认）｜
+  `standard`=标准付费（新版控制台 API Key，格式同 plan，仅端点路径不同）｜`custom`=自定义/转接（配
+  `httpUrl`/`wsUrl` 指向原样转发火山协议的转接服务）。设置页新增"网关"下拉；旧配置不填则按 plan，零迁移。
 - **兼容层集中**：`ttsProviderOf`（引擎归一）、`pitchOf`（音调归一）并入 `lib/voice-compat.js`
   成为配置兼容/归一单一事实源；`speech-clean.js` 只保留文本净化。
 

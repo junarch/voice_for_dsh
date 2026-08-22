@@ -118,9 +118,15 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
 主接口：**双向流 WebSocket**（默认）；HTTP 单向为内部兜底。
 
 - 模型：`doubao-seed-tts-2.0`（`voice.tts.volcengine.resourceId`），头 `X-Api-Resource-Id: seed-tts-2.0`、`X-Api-Key`。
-- **端点**：双向流 `wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection`（plan 网关，当前 Key 可用）；
-  新 V3 网关 `/api/v3/tts/bidirection` 需新版控制台 Key（实测当前 ark- Key 返回 401）；`voice.tts.volcengine.wsUrl` 可切。
-  HTTP 兜底 `POST /api/v3/plan/tts/unidirectional`（chunked JSON 行，`{code:0,data:base64}` 累加 + `code 20000000` 结束）。
+- **网关**（`voice.tts.volcengine.gateway`，默认 `plan`；协议与鉴权头一致，仅 URL 路径不同）：
+  - `plan`（智能体套餐，默认）：双向流 `wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection`，
+    HTTP 兜底 `POST https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional`（当前 Key 可用）。
+  - `standard`（标准付费）：`wss://openspeech.bytedance.com/api/v3/tts/bidirection` +
+    `POST https://openspeech.bytedance.com/api/v3/tts/unidirectional`——**需新版控制台 API Key**
+    （[官方 V3 双向流文档](https://www.volcengine.com/docs/6561/1329505) 新版控制台鉴权同为 `X-Api-Key`；
+    旧版控制台 `X-Api-App-Id`/`X-Api-Access-Key` 鉴权当前未实现）。
+  - `custom`（自定义/转接）：走 `voice.tts.volcengine.httpUrl`/`wsUrl` 指定端点（原样转发火山协议的转接服务，鉴权仍 `X-Api-Key`）。
+- 端点解析统一在 `volcEndpoints(v)`（`lib/index.js`）；HTTP 兜底为 chunked JSON 行（`{code:0,data:base64}` 累加 + `code 20000000` 结束）。
 - **协议（双向流）**：二进制帧——4 字节头 + event(int32 BE) + session_id + payload
   （事件 1 StartConnection / 100 StartSession / 200 TaskRequest / 102 FinishSession / 352 TTSResponse…）。
   一条连接多个**串行** session（不支持并行）；音频经 AudioOnlyServer 帧返回。实现 `lib/volcengine-ws.js`。
@@ -221,7 +227,9 @@ voice:
       pitchLevel: 2           # 音调五档（旧字段，仅供兼容；经 pitchOf 映射为 pitch；无 UI）
       interface: bidirection  # bidirection=WS 双向流（默认）| http=仅内部降级兜底（无 UI）
       streaming: true         # 双向流下启用"边转写边合成边播"（无 UI）
-      wsUrl: ""               # 空=plan 网关；可指 V3 网关（需对应 Key）（无 UI）
+      gateway: plan           # plan=智能体套餐(默认) | standard=标准付费(新版控制台 Key, 同 X-Api-Key 格式) | custom=自定义/转接
+      httpUrl: ""             # 空=按 gateway 默认；gateway=custom 必填（原样转发火山协议的转接端点）
+      wsUrl: ""               # 空=按 gateway 默认端点（无 UI，高级）
       emotionGranularity: paragraph  # paragraph(每段动态) | message(整条) | off(仅预设指令)（无 UI）
       bitRate: 64000          # MP3 比特率（仅 HTTP 单向生效；双向流 pcm 无此参数）（无 UI）
       loudness: 0             # 音量 [-50,100]
