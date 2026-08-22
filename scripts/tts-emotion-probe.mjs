@@ -2,9 +2,9 @@
 /* =====================================================================
  * 🎭 情绪化 TTS 指令效果测试探针
  *
- * 为什么做这一轮（来自第一轮试听的教训，docs/tts-emotion-test-form.md）：
+ * 为什么做这一轮（来自第一轮试听的教训）：
  *   - 第一轮的测试文本太平淡（"你好，这是测试。"），情绪指令的效果听不出来，
- *     连你自己都说"文本本身太平淡了，听不太出来区别"。
+ *     当时实测反馈"文本本身太平淡了，听不太出来区别"。
  *   - 所以这一轮准备了 3 段【情绪强烈】的文本（狂喜 / 悲伤安慰 / 愤怒质问），
  *     每段单独一个目录，每段都先播一遍【无指令基线】，再做对照。
  *
@@ -13,7 +13,7 @@
  *   02-温柔语气-vv.mp3           context_texts: 轻声温柔地说
  *   03-俏皮语气-vv.mp3           context_texts: 用俏皮可爱的语气说
  *   04-慢速语速-vv.mp3           context_texts: 用非常慢的语速说话
- *   05-基线-无指令-xiaohe.mp3    换音色（小何，你喜欢的台湾腔）再看基线
+ *   05-基线-无指令-xiaohe.mp3    换音色（小何，台湾腔）再看基线
  *   06-温柔语气-xiaohe.mp3       小何 + 温柔指令
  *
  * 判读要点（听的时候对照着看）：
@@ -26,7 +26,7 @@
  *   node scripts/tts-emotion-probe.mjs --key xxx  # 不用 settings.yaml 里的 key
  *
  * 音频输出到：tmp/probe-emotion/<文本序号>-<情绪名>/ 下
- * 试听结果填到：docs/tts-emotion-test-form.md（每段文本一节，直接往里写）
+ * 试听结果在本目录 _note.txt 里记录；如需留档请并入 docs/testing.md（每段文本一节，直接往里写）
  * ===================================================================== */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
@@ -55,7 +55,7 @@ const TEXTS = [
 
 // 音色常量（火山文档里的 id）
 const VV = 'zh_female_vv_uranus_bigtts'          // Vivi（第一轮主力测试音色）
-const XIAOHE = 'zh_female_xiaohe_uranus_bigtts'  // 小何（你反馈有台湾腔、比较喜欢）
+const XIAOHE = 'zh_female_xiaohe_uranus_bigtts'  // 小何（试听反馈：有台湾腔、听感自然）
 
 // 对照矩阵：每段文本都按这个清单合成（文件名 = 编号-标签）
 // { file, speaker, additions }  —— additions 为空 = 无指令基线
@@ -139,5 +139,5 @@ if (DRY) {
   console.log('计划共 ' + planCount + ' 个文件，确认无误后去掉 --dry-run 再跑。')
 } else {
   console.log('全部完成。试听目录：' + outRoot)
-  console.log('试听结果请填入：docs/tts-emotion-test-form.md')
+  console.log('试听结果请记录到本目录 _note.txt；如需留档并入 docs/testing.md')
 }

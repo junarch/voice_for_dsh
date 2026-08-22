@@ -11,10 +11,10 @@
  * @param ctx - client root context.
  */
 export function apply(ctx) {
-  // TODO(phase 1): ctx.locale.register('voice', { zh, en })
-  // TODO(phase 1): ctx.slots.inject('conversation.chat.assistant-actions', ...)
-  // TODO(phase 1): ctx.slots.inject('conversation.input.left', ...)
-  // TODO(phase 1): ctx.conversationEvents.register(definition)
+  // v1 实现在 `../../lib/client.js`：locale 注册、槽位注入（assistant-actions / input.left /
+  // turnTail / settings.section / shell.overlay）、设置页与播放状态机。
+  void ctx;
 }
 
-export const inject = ['slots', 'locale', 'conversationEvents', 'connection'];
+// 与 lib/client.js 的 inject 保持一致
+export const inject = ['slots', 'locale', 'conversationEvents'];

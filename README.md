@@ -19,7 +19,8 @@
 - **TTS 双引擎**：
   - `browser`：浏览器 `speechSynthesis`（零配置、免费、离线兜底）；
   - `volcengine`：豆包语音合成 2.0（双向流 WebSocket 默认 + HTTP 单向兜底），
-    8 种方言、中英文音色、情感演绎指令。
+    8 种方言、中英文音色、情感演绎指令；网关可配（`plan` 智能体套餐 /
+    `standard` 标准付费 / `custom` 自定义端点，仅端点路径不同，鉴权一致）。
 - **省钱设计**（详见下方"成本与隐私"）：
   - 同一消息重复朗读 → 转写缓存命中，**零新增 LLM 调用**；
   - 重播同一消息 1h 内 → 豆包**服务端缓存命中，免重合成、不重复计费**；
@@ -27,15 +28,13 @@
 
 ## 截图
 
-<img src="docs/screenshots/Screenshot_20260822224837.png" width="640" alt="语音设置页">
-
-*设置页：转写/引擎/语种方言/音色与试听*
-
-<img src="docs/screenshots/Screenshot_20260822225031.png" width="640" alt="消息朗读按钮与播报状态">
+<img src="docs/screenshots/Screenshot_20260822224837.png" width="640" alt="消息朗读按钮与自动朗读开关">
 
 *对话：每条消息的朗读按钮、已朗读徽标与自动朗读开关*
 
-> 图注如与你的截图内容不符，直接改这两行文字即可。
+<img src="docs/screenshots/Screenshot_20260822225031.png" width="640" alt="语音设置页">
+
+*设置页：转写/引擎/语种方言/音色与试听*
 
 ---
 
@@ -65,6 +64,7 @@ cd voice_for_dsh
 
 # 1) 安装插件自身依赖
 cd packages/dsh-plugin-voice && npm install && cd ../..
+#    （若提示 peer 依赖 ERESOLVE，改用 npm install --legacy-peer-deps）
 
 # 2) 把插件装进 web profile（<path> 换成仓库绝对路径或相对路径）
 npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
@@ -76,7 +76,7 @@ npx @deepseek-ai/dsh web
 浏览器打开 `http://127.0.0.1:3080`，在设置页找到"语音播报"即可配置。
 
 > 提示：`dsh plugin add` 的相对路径锚定到**执行命令时的当前目录**；若解析失败，直接给绝对路径
-> （如 `link:C:\project\voice_for_dsh\packages\dsh-plugin-voice`）。
+> （如 `link:C:\path\to\voice_for_dsh\packages\dsh-plugin-voice`）。
 
 ### 配置
 
@@ -92,7 +92,7 @@ npx @deepseek-ai/dsh web
 - **TTS**：浏览器语音免费；豆包 TTS 按字符/时长计费。
   - 同一消息 **1h 内重播** → 豆包服务端缓存命中，**不重复计费**。
 - **隐私**：你的对话内容会发送给你配置的第三方服务（转写 LLM、豆包 TTS）。**在涉及敏感内容的会话里请谨慎。**
-- 默认**不开启自动播报**；"云TTS"开关默认关（引擎 = 免费 Windows TTS，全流程不花钱），
+- 默认**不开启自动播报**；"云TTS"开关默认关（引擎 = 免费系统 TTS，全流程不花钱），
   需要时在设置页勾选"云TTS"（= 显式启用付费的豆包 API）。
 
 ---

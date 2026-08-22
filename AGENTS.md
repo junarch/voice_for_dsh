@@ -14,7 +14,7 @@
 - **DSH 版本**：`@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出，路径用 `npm root` 定位，只读）。
 - **DSH_HOME**：默认 `~/.dsh`；web profile：`$DSH_HOME\profiles\web`
   （bundle 列表在 `profiles\web\package.json` 的 `dsh.profile.bundles`）。
-- **用户设置**：`$DSH_HOME\settings.yaml`（含 `llm-pi-ai.providers` 等本机私有配置，勿提交）。
+- **用户设置**：`$DSH_HOME\settings.yaml`（含本机私有 provider 配置，勿提交）。
 
 ### 插件形态（本仓库的产物）
 
@@ -58,7 +58,7 @@
    `$DSH_HOME\settings.yaml`（设置）。
 2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 需要重启 dsh（`dsh --profile web`）才能生效。
    **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
-   后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 是空操作），dev:web watcher / HMR 仅后续
+   后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 无实际产物），dev:web watcher / HMR 仅后续
    tsdown 化后才可用（详见 `docs/development.md` §1）。
 3. **验证循环**：装包 → 重启 dsh → 浏览器操作 → 看 console/日志；动态原型可用"创造模式"preset 会话。
 4. **命名空间/服务名统一用 `voice`**，避免与既有插件冲突。

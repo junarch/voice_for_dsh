@@ -8,13 +8,13 @@
 
 - [x] `git status` 干净（无未提交改动）。——已提交 `8b544f4`，分支 `master` 改名 `main` 后推送到 GitHub。
 - [ ] 最近改完 Host 半已重启 dsh（`lib/index.js` 本轮有改动：CSRF 防护 + 请求体上限，重启才生效）；
-      改完 Client 半已刷新浏览器（你的 `lib/client.js` 改动同样需要重启 + 刷新验证）。
+      改完 Client 半已刷新浏览器（`lib/client.js` 改动同样需要重启 + 刷新验证）。
 
 ## 1. 自动化测试（零成本，每次跑）
 
-- [x] `node scripts/test-host.mjs` 全绿（165 passed，0 failed）。
+- [x] `node scripts/test-host.mjs` 全绿（165 passed，0 failed；断言数随修复增长，以最新输出为准）。
 - [x] 真实外呼探针（`node scripts/tts-probe.mjs` / `tts-ws-probe.mjs --all`）已跑，输出在
-  `tmp/ws-probe-2026-08-22T14-45-07/`（basic/cache/dialect/expressive/instruct/section/stream2 等）——外部接口正常。
+  `tmp/` 下（basic/cache/dialect/expressive/instruct/section/stream2 等，探针目录未入库）——外部接口正常。
 
 > 记住 testing 的分级：A 类·不变量放心长期信；B 类·外部事实快照是对火山接口某天的记录，发布前跑探针是给它"续命"。
 
@@ -65,7 +65,7 @@
 
 ## 7. 提交前最终检查（[必须]）
 
-- [x] 全部自动化测试绿（165 passed）；全新安装测试（§3）待你本机模拟；手动验收无阻塞项（§4）。
+- [x] 全部自动化测试绿（断言数以最新输出为准）；全新安装测试（§3）待本机模拟；手动验收无阻塞项（§4）。
 - [x] 文档三者一致：`README.md` / `docs/pipeline.md` / `docs/development.md` 说的命令、行为、成本与代码对得上（本轮已对齐）。
 - [x] 代码注释无"工作日志/日期/人名"（已复查 `lib/*.js` 无日期/人名；版本信息归 git 管）。
 - [x] 打 tag + 写 release notes（`v0.1.0` 起步，已发布：https://github.com/junarch/voice_for_dsh/releases/tag/v0.1.0）。
@@ -96,6 +96,6 @@
 
 - [ ] 盯自己真实使用 + GitHub 首个 issue：有没有"装不上 / 转写多次 / 重复计费"类反馈。
 - [ ] 提交到 **awesome-dsh-plugin 精选列表**（`data/plugins/` YAML + `data/screenshots.json` 截图；
-      仓库创建满 1 天后提 PR，本地已备好 `tmp/awesome-dsh-plugin`，见 `tmp/awesome-dsh-plugin-pr-body.md`）。
+      仓库创建满 1 天后提 PR，PR 模板与截图素材先备好）。
 - [ ] 若有人报问题，先复现、先取证（看 `voice-transcript-cache.json` 和 `[voice]` 日志），再改代码。
 - [ ] 任何修复都先补一条断言，再改实现。

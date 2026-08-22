@@ -11,7 +11,7 @@
 - **为什么**：dsh web 是跨平台产品，用户不只有 Windows。
 - **现状**：Host 逻辑已在 CI 的 `ubuntu-latest` 上跑通（`node scripts/test-host.mjs`）；
   未验证的是浏览器语音（`speechSynthesis` 的 Mac/Linux 语音引擎行为、`getVoices` 时序）、
-  Windows 专属文案、`dsh plugin add` 路径分隔符等。
+  `dsh plugin add` 路径分隔符等。
 - **待办**：在 Mac / Linux 各跑一遍 `docs/release.md` §3 全新安装模拟 + §4 手动验收；
   把发现的差异记进 `docs/platform-notes.md`（新建），README"平台支持"随之更新。
 
@@ -31,7 +31,7 @@
 
 ### 4. 文档-代码一致性 CI 守护
 - **状态**：规划中。
-- **为什么**：本轮审计修了一大批"注释引用了不存在的文档/文件名漂移"，
+- **为什么**：此前审计修过一批"注释引用了不存在的文档/文件名漂移"，
   靠人盯会复发（AGENTS.md 约定"三处一起改"）。
 - **方向**：加一个零成本 CI 步骤——校验 `lib/*.js` 注释里引用的 `docs/*.md` 都存在、
   README 无本机绝对路径、音色/语种清单 Host 与 Client `FALLBACK_META` 一致。
@@ -40,11 +40,12 @@
 - **状态**：规划中。
 - **为什么**：当前同源校验已挡跨站 CSRF；以下属于纵深防御，非阻塞项。
 - **待办**：`getConfig` 对 apiKey 脱敏回传（只回传掩码，避免设置页/日志明文）；
-  给 `/voice/audio` 也加同源校验；考虑把 apiKey 改存 dsh 的 credential 域而非 settings.yaml 明文。
+  考虑把 apiKey 改存 dsh 的 credential 域而非 settings.yaml 明文。
 
 ## 已完成（近几轮）
 
 - 开源发布前审计与脱敏（本仓库：安全/隐私/SSOT/文档/测试，见 CHANGELOG）。
+- 安全收尾：`/voice/audio` 与 `/voice/api` 同源校验统一、custom 端点 https/wss 强制、音频路由 TTL/容量上限、非流式 speak 互斥。
 - 重播 1h 免重合成（服务端缓存 `cache_config` + 参数指纹防串音）。
 - 音调细粒度 `pitch`（连续半音）替代五档 `pitchLevel`，兼容层集中到 `voice-compat.js`。
 

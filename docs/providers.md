@@ -3,7 +3,7 @@
 > 回答两个问题：**现在有哪些供应商、怎么接入新的（含本地 TTS 模型）**。
 > 架构背景见 `docs/architecture.md` §7；管线与不变式见 `docs/pipeline.md`。
 
-## 1. 现状（v0.1 只有两个 TTS provider）
+## 1. 现状（两个 TTS provider）
 
 | provider | 引擎 | 免费/离线 | 鉴权 | 音频回传 |
 |---|---|---|---|---|
@@ -23,12 +23,12 @@
 |---|---|---|---|
 | `plan`（默认） | 智能体套餐（当前 key） | `/api/v3/plan/tts/unidirectional` | `/api/v3/plan/tts/bidirection` |
 | `standard` | 标准付费（新版控制台 key，格式同 plan） | `/api/v3/tts/unidirectional` | `/api/v3/tts/bidirection` |
-| `custom` | 自定义/转接（填 `httpUrl`/`wsUrl`） | 用户填 | 用户填 |
+| `custom` | 自定义端点（填 `httpUrl`/`wsUrl`） | 用户填 | 用户填 |
 
 - **旧版控制台**（`X-Api-App-Id` + `X-Api-Access-Key`）鉴权：**未实现**（官方推荐新版控制台，见 `docs/pipeline.md` §4.2）。
-- **第三方转接服务**分两种：
+- **第三方端点**分两种：
   - **原样转发火山协议**（NDJSON / WS 二进制帧 + `X-Api-Key`）→ 选 `custom`、把端点填进 `httpUrl`/`wsUrl` 即可；
-  - **OpenAI 兼容**（`/v1/audio/speech` + `Authorization: Bearer`，多数 LLM/TTS 中转平台）→ 当前**不支持**，需按 §3 新增一个 provider。
+  - **OpenAI 兼容**（`/v1/audio/speech` + `Authorization: Bearer`，多数 LLM/TTS 平台）→ 当前**不支持**，需按 §3 新增一个 provider。
 
 ## 2. 转写 LLM 供应商
 

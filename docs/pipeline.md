@@ -125,7 +125,7 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
     `POST https://openspeech.bytedance.com/api/v3/tts/unidirectional`——**需新版控制台 API Key**
     （[官方 V3 双向流文档](https://www.volcengine.com/docs/6561/1329505) 新版控制台鉴权同为 `X-Api-Key`；
     旧版控制台 `X-Api-App-Id`/`X-Api-Access-Key` 鉴权当前未实现）。
-  - `custom`（自定义/转接）：走 `voice.tts.volcengine.httpUrl`/`wsUrl` 指定端点（原样转发火山协议的转接服务，鉴权仍 `X-Api-Key`）。
+  - `custom`（自定义端点）：走 `voice.tts.volcengine.httpUrl`/`wsUrl` 指定端点（原样转发火山协议的端点，鉴权仍 `X-Api-Key`；须为 `https://`/`wss://`）。
 - 端点解析统一在 `volcEndpoints(v)`（`lib/index.js`）；HTTP 兜底为 chunked JSON 行（`{code:0,data:base64}` 累加 + `code 20000000` 结束）。
 - **协议（双向流）**：二进制帧——4 字节头 + event(int32 BE) + session_id + payload
   （事件 1 StartConnection / 100 StartSession / 200 TaskRequest / 102 FinishSession / 352 TTSResponse…）。
@@ -227,8 +227,8 @@ voice:
       pitchLevel: 2           # 音调五档（旧字段，仅供兼容；经 pitchOf 映射为 pitch；无 UI）
       interface: bidirection  # bidirection=WS 双向流（默认）| http=仅内部降级兜底（无 UI）
       streaming: true         # 双向流下启用"边转写边合成边播"（无 UI）
-      gateway: plan           # plan=智能体套餐(默认) | standard=标准付费(新版控制台 Key, 同 X-Api-Key 格式) | custom=自定义/转接
-      httpUrl: ""             # 空=按 gateway 默认；gateway=custom 必填（原样转发火山协议的转接端点）
+      gateway: plan           # plan=智能体套餐(默认) | standard=标准付费(新版控制台 Key, 同 X-Api-Key 格式) | custom=自定义端点
+      httpUrl: ""             # 空=按 gateway 默认；gateway=custom 必填（火山协议端点，https://）
       wsUrl: ""               # 空=按 gateway 默认端点（无 UI，高级）
       emotionGranularity: paragraph  # paragraph(每段动态) | message(整条) | off(仅预设指令)（无 UI）
       bitRate: 64000          # MP3 比特率（仅 HTTP 单向生效；双向流 pcm 无此参数）（无 UI）

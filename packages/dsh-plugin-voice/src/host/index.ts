@@ -11,17 +11,10 @@
  * @param ctx - host root context.
  */
 export function apply(ctx) {
-  ctx.on('session/event', (session, event) => {
-    // TODO(phase 1): collect assistant/message text per turn; on turn/end
-    // with reason.kind in {'completed','max-tokens'} and voice.autoSpeak,
-    // run transcribe → speak.
-    void session;
-    void event;
-  });
-
-  // TODO(phase 1): harness.handle('voice.speak', async (args) => { ... })
-  // TODO(phase 1): harness.handle('voice.stop', async () => { ... })
-  // TODO(phase 1): ctx.settings.register('voice', schema, { base })
+  // v1 实现在 `../../lib/index.js` 的 apply(ctx) 内：会话监听（assistant/message、turn/end）、
+  // harness 方法（voice.speak / voice.stop / voice.streamNext 等）、settings 注册 voice 命名空间、
+  // webServer 的 /voice/api 与 /voice/audio 路由。
+  void ctx;
 }
 
 export const inject = [];

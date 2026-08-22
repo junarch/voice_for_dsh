@@ -16,7 +16,7 @@
 改 → 重启 dsh（client-modules 重新扫描、rev 变化）→ 浏览器**手动刷新** `http://127.0.0.1:3080`。
 v1 无 dev watcher / HMR（后续 tsdown 化后才有 `pnpm run dev:web` 无刷新更新）。
 
-### 改完跑零成本集成测试
+### 改完跑集成测试（mock 零成本 + 探针花几分钱）
 ```powershell
 node scripts/test-host.mjs   # mock 驱动 Host 全链路（转写/缓存/TTS/防串音/重播零 LLM 等断言）
 node scripts/tts-probe.mjs       # 真实外呼（花几分钱）：HTTP 单向接口行为

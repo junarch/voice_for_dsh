@@ -9,7 +9,9 @@ Report a vulnerability），或直接私信维护者。
 ## 已知安全模型（现状，请知悉）
 
 - 本插件所有 `/voice/api/*` 与 `/voice/audio/*` 路由运行在 dsh web 进程内，
-  仅接受**同源**请求（跨站 POST 会被 403 拒绝，防 CSRF）。
+  带 `Origin` 的跨站请求会被 403 拒绝（同源校验，防 CSRF/跨站嵌入）；无 Origin 的本机工具请求放行。
+- `custom` 网关的自配端点仅接受 `https://`/`wss://`（`lib/index.js` 的 `volcEndpoints` 校验）：
+  明文 HTTP 会把 `X-Api-Key` 暴露给传输路径，插件会直接拒绝。
 - 请保持 dsh web 绑定 `127.0.0.1`（不要绑 `0.0.0.0`）：绑定到局域网等于把
   LLM/TTS 调用与配置写入口暴露给同网段设备。
 - `voice.tts.volcengine.apiKey` 明文存在 `settings.yaml`（本机私有，勿提交），
