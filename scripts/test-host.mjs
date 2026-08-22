@@ -290,6 +290,7 @@ sessionsState.sessions.s1 = {
     msgEvent('m14', 18, '归一化测试内容'),
     msgEvent('m15', 19, '流式缓存重播内容'),
     msgEvent('m16', 20, '重新生成测试内容'),
+    msgEvent('m17', 21, '兜底完整性测试内容'),
   ],
 }
 
@@ -786,20 +787,53 @@ check('regen 触发新转写（LLM 调用增加）', llmState.calls.length > cal
 const r17d = await rpc('speak', { sessionId: 's1', messageId: 'm16' })
 check('regen 后普通重读再次命中缓存（旧条目已覆盖，不膨胀）', r17d.cached === true, r17d)
 
-section('T18 双向流：流式重播命中转写缓存（不白烧转写 token，段落情感仍动态生成）')
+section('T18 双向流：重播零 LLM（转写与情感指令都用缓存）；regen 才全部重新生成')
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream' } }, language: 'auto', transcribe: { stylePreset: 'standard', enabled: true } } })
-const countTranscribeCalls = () => llmState.calls.filter((c) => c.maxTokens >= 1000).length
-const tc0 = countTranscribeCalls()
+const callsBefore18 = llmState.calls.length
 llmState.responses = [{ text: '流式首次。有第二句。', finish: 'stop' }, { text: '语气平稳\n中性\n2', finish: 'stop' }]
 const s18a = await rpc('speak', { sessionId: 's1', messageId: 'm15' })
 const sd18a = await awaitStreamDone(s18a.runId)
 check('流式首次生成 ≥1 段', sd18a.res && sd18a.urls.length >= 1, sd18a.urls.length)
-const tc1 = countTranscribeCalls()
-check('流式首次产生转写调用', tc1 > tc0, { tc0, tc1 })
+const callsMid18 = llmState.calls.length
+check('流式首次产生 LLM 调用（转写+段落指令）', callsMid18 > callsBefore18, { callsBefore18, callsMid18 })
+// 重播：缓存命中 → 转写与情感指令都用缓存，绝对零 LLM（不重新生成任何东西）
 const s18b = await rpc('speak', { sessionId: 's1', messageId: 'm15' })
 const sd18b = await awaitStreamDone(s18b.runId)
 check('流式重播也产出音频（缓存稿单段直喂）', sd18b.res && sd18b.urls.length >= 1, sd18b.urls.length)
-check('流式重播转写缓存命中（转写调用数不变）', countTranscribeCalls() === tc1, countTranscribeCalls())
+check('流式重播零 LLM（转写+情感指令都用缓存，LLM 调用数不变）', llmState.calls.length === callsMid18, llmState.calls.length - callsMid18)
+// 反向：regen（重新生成）必须重新转写 + 重新生成情感指令（LLM 增加）
+llmState.responses = [{ text: 'regen 全新转写。又有两句。', finish: 'stop' }, { text: '语气激动\n开心\n5', finish: 'stop' }]
+const calls18c = llmState.calls.length
+const s18c = await rpc('speak', { sessionId: 's1', messageId: 'm15', regen: true })
+const sd18c = await awaitStreamDone(s18c.runId)
+check('regen 重新生成：LLM 调用增加（转写+情感指令都重写）', llmState.calls.length > calls18c, llmState.calls.length - calls18c)
+check('regen 流式也产出音频', sd18c.res && sd18c.urls.length >= 1, sd18c.urls.length)
+
+section('T19 双向流兜底：WS 中途失败不写半截缓存，降级走 HTTP 整段且缓存完整')
+// 模拟"转写已完成但 WS 在收尾时挂掉"：FinishSession 时不回 SessionFinished、而是触发 onerror → 中止。
+// 这样 waitSessionFinished 被 abort 打断（确定性），转写仍是完整跑完（transcriptionDone=true），
+// 缓存保存完整稿，降级 transcribe 命中缓存 → 播放完整内容、零额外转写。
+class MidwayFailVolcWS extends MockVolcWS {
+  _serve(msg) {
+    if (msg.event === EV.FinishSession) {
+      setTimeout(() => this.onerror && this.onerror({ message: 'midway drop' }), 0)
+      return
+    }
+    super._serve(msg)
+  }
+}
+globalThis.WebSocket = MidwayFailVolcWS
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream' } }, language: 'auto', transcribe: { stylePreset: 'standard', enabled: true } } })
+llmState.responses = [{ text: '兜底完整转写内容。', finish: 'stop' }]
+const s19 = await rpc('speak', { sessionId: 's1', messageId: 'm17' })
+const sd19 = await awaitStreamDone(s19.runId)
+check('WS 中途失败自动降级 HTTP 整段（1 段 mp3 + warn 回退）', sd19.res && sd19.urls.length === 1 && sd19.formats[0] === 'mp3' && sd19.res.warn && sd19.res.warn.includes('回退'), sd19)
+// 缓存必须保存完整转写（不被半截稿污染）→ 切回 HTTP 重读应 cached=true 且内容完整
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'http' } } } })
+llmState.responses = []
+const r19 = await rpc('speak', { sessionId: 's1', messageId: 'm17' })
+check('兜底后缓存为完整转写（cached=true 且内容完整）', r19.ok === true && r19.cached === true && r19.transcript === '兜底完整转写内容。', { ok: r19.ok, cached: r19.cached, t: r19.transcript })
+globalThis.WebSocket = MockVolcWS
 
 // ---------- 收尾 ----------
 // 善后三件事：恢复真 fetch（否则这个进程里再联网会打到假货）、删临时目录、交成绩单。

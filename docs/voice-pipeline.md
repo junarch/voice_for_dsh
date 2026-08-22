@@ -141,10 +141,13 @@ interface TtsProvider {
      decodeAudioData；lookahead 无缝调度 + 预取 ≤3 段，无 AudioContext 时回退顺序 `<audio>`。
      首次交互预热 AudioContext。
   4. 指令链：段 0 用风格预设机械指令（零等待）；段 N 用段 N-1 的文本并行生成「指令+情感标签」
-     （`INSTRUCTION_EMOTION_SYSTEM`，重叠零延迟）。
+     （`INSTRUCTION_EMOTION_SYSTEM`，重叠零延迟）。**重播（缓存命中）不生成**——整条复用缓存指令，
+     段落照常切分但零 LLM（见 §5.7）。
   5. 结束：FinishSession → SessionFinished → FinishConnection；转写稿按 messageId 写本地缓存
-     （**与 HTTP 路径同形状**：净化稿 + 指令/情感/强度；流式与 HTTP 可互读，见 §5.7）。
-  6. 失败兜底：双向流失败/零音频 → 自动降级 HTTP 单向整段合成（run.warn 提示）。
+     （**与 HTTP 路径同形状**：净化稿 + 首条动态指令/情感/强度；流式与 HTTP 可互读，见 §5.7；
+     仅**转写完整**时写缓存，WS 中途失败不污染缓存）。
+  6. 失败兜底：双向流失败/零音频 → **丢弃未完成的半截音频段**（否则会误触发播放截断内容、抑制兜底）
+     → 自动降级 HTTP 单向整段合成（run.warn 提示；降级走转写缓存，命中则零重复转写、不烧 token）。
 - **参数（StartSession 级，session 内固定；改参数=开新 session）**：
   - `audio_params`：**双向流 `format=pcm`**（裸采样、无缝；HTTP 单向仍 `mp3`）、`sample_rate`、
     `speech_rate`（五档）、`bit_rate`（**mp3 专用，仅 HTTP 单向生效**）、`loudness_rate`（音量）。
@@ -196,7 +199,7 @@ interface TtsProvider {
 - 动态性：context_texts 为 **StartSession 级参数**（session 内固定）→ 动态 = 按段开新 session
   （paragraph 粒度）。
 
-#### 2.3.4 HTTP 单向（兜底，`interface='http'`）
+#### 2.3.4 HTTP 单向（内部兜底，`interface='http'`；设置页不暴露手动切换）
 
 - 保留原实现：`POST https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional`，chunked JSON 行，
   `{code:0,data:base64}` 累加 + `{code:20000000}` 结束；语速/音调走数值参数。同参数字段
@@ -296,7 +299,7 @@ voice:
       rateLevel: 2            # 语速五档 0很慢–4很快（2=正常）；经数值 speech_rate 参数实现
       pitchLevel: 2           # 音调五档 0很低–4很高（2=正常）；经 additions.post_process.pitch 实现
       # —— 双向流（2026-08-21 新增，带默认值，向后兼容）——
-      interface: bidirection  # bidirection=WS 双向流（默认）| http=HTTP 单向兜底
+      interface: bidirection  # bidirection=WS 双向流（默认；设置页不暴露手动切换）| http=仅内部降级兜底
       streaming: true         # 双向流下启用"边转写边合成边播"
       wsUrl: ""               # 空=plan 网关；可指 V3 网关（需对应 Key）
       emotionGranularity: paragraph  # paragraph=按段动态情感（默认）| message=整条单会话 | off=仅预设指令
@@ -312,7 +315,7 @@ voice:
 > **设置页层级（2026-08-21 整改，通用→专属 / 主→次）**：基本配置 = ① 播报方式（TTS 引擎）下拉
 > （Windows 系统 TTS / 豆包 TTS）② 是否需要转写模型（关=直读，表格/代码跳过）③ 自动播报。
 > 选中某引擎只展开该引擎专属区：Windows=语速/音调/语音名；豆包=鉴权→发音（音色/语种·方言/语速/音调/音量）→
-> 音频（sampleRate/bitRate）→双向流（interface/streaming/情感粒度/连续/表现力/WS 地址）。
+> 音频（sampleRate/bitRate）→双向流（流式/情感粒度/连续/表现力/WS 地址；interface 已从 UI 移除，HTTP 仅内部兜底）。
 > `language` 归入豆包「发音」区展示；`resolvePrompt` 仅在豆包引擎下叠加语种/方言要求（Windows 按原文）。
 > 文本净化统一走 `lib/speech-clean.js` 的 `sanitizeForSpeech`（§1.4）；播放端 Web Audio 无缝调度（§2.3.1/§2.4）。
 > **音色↔语种归一（2026-08-23 第 10 轮）**：`lib/voice-compat.js` 提供不变式
@@ -387,11 +390,14 @@ voice:
 - 「朗读」按钮旁新增 **↻ 重新生成**：仅在该消息**完整朗读过一次**后显示（`spokenState[messageId]==='done'`）；
   点击后 `speak { regen:true }` → **跳过转写缓存与指令缓存，用当前配置全新转写+合成**（改音色/语速/风格后
   想看新效果）。
-- 缓存策略（防膨胀）：regen 结果**覆盖**该 messageId 的缓存条目（单键覆盖 + `CACHE_LIMIT=200` 截断 +
-  audioStore 一次性即删 + `disposeRun` 8s 兜底）——不新增条目、不滞留旧音频。
+- **重播零 LLM（第 11 轮）**：重播 = 把刚生成的东西重新播一遍，**不重新生成任何东西**——转写文字与
+  情感指令**都用缓存**（HTTP 与双向流一致）。双向流重播时段落照常切分（音频分段）但复用缓存指令、
+  不再按段调 LLM。缓存缺指令（极短文稿/旧条目）= 初次本就没生成，重播同样不补。
+- **重新生成（↻）** = 转写 + 情感指令**全部重新生成**（force 跳过缓存），结果覆盖该 messageId 条目
+  （单键覆盖 + `CACHE_LIMIT=200` 截断 + audioStore 一次性即删 + `disposeRun` 8s 兜底 → 不膨胀）。
 - **流式/HTTP 缓存统一**（审计 A7 修复）：同一 messageId 两种路径共用同一形状
   `{ transcript(净化稿), provider, model, prompt, effort, sourceChars, at, instruction, emotion, intensity }`；
-  **流式也开始读缓存**（regen 除外）——同消息流式重播不再白烧转写 token，段落动态情感仍照常生成。
+  **流式也读缓存**（regen 除外）；仅**转写完整**时写缓存（WS 中途失败不污染，降级走 HTTP 时命中完整稿）。
 
 ### 5.6 健壮性与可视化（2026-08-18 收尾）
 - 转写超时：`transcribe.timeoutMs`（默认 60s），超时/失败 → 降级直读（§1.4）；

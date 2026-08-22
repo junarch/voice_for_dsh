@@ -263,7 +263,7 @@ const VoiceSettingsSchema = z.object({
       rateLevel: z.number().default(2),  // RATE_STOPS 下标 0–4
       pitchLevel: z.number().default(2), // PITCH_STOPS 下标 0–4
       // —— 双向流（新增，全部带默认值，向后兼容）——
-      interface: z.union([z.const('bidirection'), z.const('http')]).default('bidirection'), // bidirection=WS 双向流 | http=旧 HTTP 单向兜底
+      interface: z.union([z.const('bidirection'), z.const('http')]).default('bidirection'), // bidirection=WS 双向流（默认；设置页不再暴露手动切换）；http=仅内部降级兜底
       streaming: z.boolean().default(true),   // 双向流下启用"边转写边合成边播"
       wsUrl: z.string().default(''),          // 空 = 默认 plan 网关；可指到 v3 网关（需对应 Key）
       emotionGranularity: z.union([z.const('paragraph'), z.const('message'), z.const('off')]).default('paragraph'), // context_texts 情感指令的动态粒度
@@ -808,6 +808,12 @@ function apply(ctx) {
     let currentInstruction = presetInstruction(cfg)
     let currentEmotion = ''
     let currentIntensity = 4
+    let useCachedInstr = false        // 缓存命中重播：整条复用缓存指令，不再按段调 LLM（零重新生成）
+    let firstDynamicInstruction = ''  // 初次生成的段 1 动态指令（整条代表，缓存供重播复用）
+    let firstDynamicEmotion = ''
+    let firstDynamicIntensity = 4
+    let transcriptionDone = false     // 转写完整跑完才写缓存（WS 中途失败不污染缓存）
+    let cachedHit = null              // 缓存命中（重播）标记：供 try 外缓存写入判断
     let lastParagraphText = '' // 最近一段完整文本（生成下一段指令用）
     let pending = ''           // 未成句的文本（段 N 起用）
     let session = null
@@ -838,11 +844,15 @@ function apply(ctx) {
     }
     async function cutParagraph() {
       await conn.finishSession(session)
-      const giP = genInstr ? generateParagraphInstruction(route, cfg, lastParagraphText) : Promise.resolve(null)
+      // 初次生成：段 N 动态写情感指令；重播（缓存命中）：复用缓存指令，不再调 LLM
+      const giP = (genInstr && !useCachedInstr) ? generateParagraphInstruction(route, cfg, lastParagraphText) : Promise.resolve(null)
       await conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
       flushSegment(run)
       const gi = await giP
-      if (gi) { currentInstruction = gi.instruction; currentEmotion = gi.emotion; currentIntensity = gi.intensity || 4 }
+      if (gi) {
+        if (!firstDynamicInstruction) { firstDynamicInstruction = gi.instruction; firstDynamicEmotion = gi.emotion || ''; firstDynamicIntensity = gi.intensity || 4 }
+        currentInstruction = gi.instruction; currentEmotion = gi.emotion; currentIntensity = gi.intensity || 4
+      }
       lastParagraphText = ''
       session = null
       sessionReqParams = null
@@ -851,11 +861,16 @@ function apply(ctx) {
 
     try {
       let tstream
-      const cachedHit = !run.force && cfg.transcribe.enabled !== false
+      cachedHit = !run.force && cfg.transcribe.enabled !== false
         ? cachedTranscriptFor(run.messageId, route, promptUsed, effortUsed)
         : null
       if (cachedHit && cachedHit.transcript) {
-        // 缓存命中（与 HTTP 一致，regen 除外）：整段喂缓存稿，段落切分/动态情感照常走，不白烧转写 token
+        // 缓存命中（与 HTTP 一致，regen 除外）：整段喂缓存稿；转写与情感指令都用缓存，零 LLM。
+        // 段落照常切分（音频分段），但不再按段调 LLM——重播=把刚生成的东西重新播一遍，不重新生成任何东西。
+        currentInstruction = cachedHit.instruction || currentInstruction
+        currentEmotion = cachedHit.emotion || ''
+        currentIntensity = cachedHit.intensity || 4
+        useCachedInstr = true
         const cachedText = cachedHit.transcript
         tstream = (async function* () { yield cachedText })()
       } else if (cfg.transcribe.enabled === false) {
@@ -908,6 +923,7 @@ function apply(ctx) {
         }
         pending = ''
       }
+      transcriptionDone = !run.stopped // 转写完整跑完（未中途抛错）；WS 音频阶段失败不影响缓存完整性
       if (session) {
         await conn.finishSession(session)
         await conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
@@ -924,16 +940,17 @@ function apply(ctx) {
     const rawTranscript = transcriptParts.join('')
     const { clean: cleanTranscript } = extractVoiceTags(rawTranscript)
     const spokenTranscript = sanitizeForSpeech(cleanTranscript)
-    if (!run.stopped && spokenTranscript) {
-      // 与 HTTP 路径同形状（净化稿 + 指令/情感/强度），保证流式/HTTP 可互读
+    if (!run.stopped && transcriptionDone && !cachedHit && spokenTranscript) {
+      // 与 HTTP 路径同形状（净化稿 + 指令/情感/强度），保证流式/HTTP 可互读；
+      // 只在转写完整时写缓存（WS 中途失败不污染），重播不重写
       transcriptCache.set(String(run.messageId), {
         transcript: spokenTranscript,
         provider: route.provider, model: route.model,
         prompt: promptUsed, effort: effortUsed,
         sourceChars: found.text.length, at: Date.now(),
-        instruction: currentInstruction || undefined,
-        emotion: currentEmotion || undefined,
-        intensity: currentIntensity || 4,
+        instruction: firstDynamicInstruction || currentInstruction || undefined,
+        emotion: firstDynamicEmotion || currentEmotion || undefined,
+        intensity: firstDynamicIntensity || currentIntensity || 4,
       })
       saveTranscriptCache(transcriptCache)
       const hist = transcriptsBySession.get(run.sessionId) || []
@@ -945,7 +962,8 @@ function apply(ctx) {
     }
     run.transcript = spokenTranscript || rawTranscript
     run.paragraphs = paragraphs
-    flushSegment(run)
+    // 失败时丢弃未完成的半截音频段（否则 segments>0 会抑制 HTTP 兜底，用户听到截断内容）
+    if (!run.error) flushSegment(run)
     if (!run.segments && !run.error) run.error = '未收到音频（bidirection）'
     run.streamingDone = true
     run.doneAt = Date.now()
@@ -1178,11 +1196,14 @@ function apply(ctx) {
     const extractedCmd = cmds.length ? cmds[0] : '' // 官方仅第一个值有效
 
     // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：仅云 TTS + 转写开启 + 非降级。
-    // 结果随转写稿一起缓存：同一消息第二次播报零额外 LLM 调用。
+    // 结果随转写稿一起缓存：同一消息重播零额外 LLM 调用（指令完全用缓存，绝不再生成；
+    // 缓存缺指令=初次本就没生成，重播同样不补——"重播不重新生成任何东西"）。
     let generated = null // { instruction, emotion, intensity } | null
     if (route && ttsProviderOf(cfg) !== 'browser' && cfg.transcribe.enabled !== false && !degraded) {
-      if (fromCache && cached && typeof cached.instruction === 'string' && cached.instruction) {
-        generated = { instruction: cached.instruction, emotion: cached.emotion || '', intensity: cached.intensity || 4 } // 缓存命中：转写稿与指令都复用
+      if (fromCache && cached) {
+        generated = (typeof cached.instruction === 'string' && cached.instruction)
+          ? { instruction: cached.instruction, emotion: cached.emotion || '', intensity: cached.intensity || 4 }
+          : null
       } else {
         generated = await generateVoiceInstruction(route, cfg, transcript)
         if (generated) {
