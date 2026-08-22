@@ -2,7 +2,7 @@
 /**
  * 语音朗读插件 Client 半（正式 bundle，ModuleLoader 格式）。
  *
- *  - 每条助手消息 IconActions 行："🔊 朗读"按钮（转写→播报/停止）
+ *  - 每条助手消息 IconActions 行：喇叭图标"朗读"按钮（转写→播报/停止）+ ↻ 重新生成（纯图标）
  *  - 输入框左下角："自动朗读"开关（持久化 voice.autoSpeak）
  *  - turnTail 徽标：本轮已朗读 ✓ / 朗读中…（点击重播；只 claim 读过的轮次，不抢 deliverables 产物链）
  *  - 设置页（settings.section id=voice）：全配置可视化 + 试听
@@ -19,11 +19,10 @@ window.__ModuleLoader__.load({
     // ---------- i18n ----------
     var NS = "voice";
     var zh = {
-      "read.read": "🔊 朗读", "read.stop": "⏹ 停止", "read.busy": "转写中…", "read.retry": "⚠ 重试",
       "read.title": "转写并朗读此条消息", "read.busyTitle": "正在转写，请稍候", "read.stopTitle": "停止播报",
-      "read.regenerate": "↻ 重新生成", "read.regenerateTitle": "用当前配置重新生成（清除旧缓存）",
+      "read.regenerate": "重新生成",
       "read.failPrefix": "上次失败：", "read.degraded": "转写失败，已直读原文",
-      "auto.on": "🔊 自动朗读·开", "auto.off": "🔇 自动朗读·关",
+      "auto.on": "自动·开", "auto.off": "自动·关",
       "auto.title": "打开后，每轮回答结束自动转写并朗读",
       "badge.speaking": "朗读中…", "badge.done": "已朗读 ✓", "badge.replay": "点击重播此轮播报",
       "settings.title": "语音播报",
@@ -53,13 +52,11 @@ window.__ModuleLoader__.load({
       "dialect.hint": "方言：8 种方言均走 vv 音色 + explicit_dialect（实测生效）；音色/语种会自动互相适配（不锁定）",
     };
     var en = {
-      "read.read": "🔊 Read", "read.stop": "⏹ Stop", "read.busy": "Transcribing…", "read.retry": "⚠ Retry",
       "read.title": "Transcribe and read this message aloud", "read.busyTitle": "Transcribing, please wait",
-      "read.stopTitle": "Stop playback", "read.regenerate": "↻ Regenerate",
-      "read.regenerateTitle": "Regenerate with current settings (clears old cache)",
+      "read.stopTitle": "Stop playback", "read.regenerate": "Regenerate",
       "read.failPrefix": "Last failure: ",
       "read.degraded": "Transcription failed; read the raw text",
-      "auto.on": "🔊 Auto-read on", "auto.off": "🔇 Auto-read off",
+      "auto.on": "Auto · On", "auto.off": "Auto · Off",
       "auto.title": "When on, each finished turn is transcribed and read aloud",
       "badge.speaking": "Reading…", "badge.done": "Read ✓", "badge.replay": "Click to replay this turn",
       "settings.title": "Voice Readout",
@@ -431,6 +428,70 @@ window.__ModuleLoader__.load({
       rpc("getState").then((res) => { if (res && res.ok) setAutoEnabled(res.autoSpeak); }).catch(() => {});
     }
 
+    // ---------- 原生风格图标（对齐 ic_ds_*：16×16、currentColor、strokeWidth 1.3、圆角圆头） ----------
+    // 原生图标集无喇叭/停止；喇叭按 ic_ds_* 的 Outline 风格手绘（与刷新/停止同族权重），
+    // refresh/stop 直接内联原生 IconRefreshOutline16 / IconStopFill16 路径。
+    // 喇叭几何常量是唯一来源：React 组件与设置页 CSS 遮罩共用，重画图标时不会两处漂移。
+    // 经典喇叭口造型：左箱体 + 向右扩张的喇叭口（外缘圆角竖边）+ 双声波弧；所有角用 Q 圆化。
+    var SPEAKER_D = "M2.9 6.2 L4.4 6.2 Q5 6.2 5.5 5.87 L9.22 3.42 Q10.3 2.7 10.3 4 L10.3 12 Q10.3 13.3 9.22 12.58 L5.5 10.13 Q5 9.8 4.4 9.8 L2.9 9.8 Q1.9 9.8 1.9 8.8 L1.9 7.2 Q1.9 6.2 2.9 6.2 Z";
+    var SPEAKER_WAVE1_D = "M12.55 5.95 A2.9 2.9 0 0 1 12.55 10.05";
+    var SPEAKER_WAVE2_D = "M13.89 4.61 A4.8 4.8 0 0 1 13.89 11.39";
+    var SPEAKER_MUTE_D = "M2 2.9 L10.8 13.1";
+    /** 喇叭：Outline 主体 + 两段声波弧；muted=true 主体 + 斜杠（静音）。 */
+    function IconSpeaker(props) {
+      const size = props && props.size || 16;
+      const muted = !!(props && props.muted);
+      return React.createElement("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": true },
+        React.createElement("path", { d: SPEAKER_D, stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round" }),
+        React.createElement("path", { d: muted ? SPEAKER_MUTE_D : SPEAKER_WAVE1_D, stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round" }),
+        muted ? null : React.createElement("path", { d: SPEAKER_WAVE2_D, stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round" }));
+    }
+    /** 停止方块（播放中，点击即停）——内联原生 IconStopFill16。 */
+    function IconStop(props) {
+      const size = props && props.size || 16;
+      return React.createElement("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": true },
+        React.createElement("path", { d: "M2 4.88C2 3.68009 2 3.08013 2.30557 2.65954C2.40426 2.52371 2.52371 2.40426 2.65954 2.30557C3.08013 2 3.68009 2 4.88 2H11.12C12.3199 2 12.9199 2 13.3405 2.30557C13.4763 2.40426 13.5957 2.52371 13.6944 2.65954C14 3.08013 14 3.68009 14 4.88V11.12C14 12.3199 14 12.9199 13.6944 13.3405C13.5957 13.4763 13.4763 13.5957 13.3405 13.6944C12.9199 14 12.3199 14 11.12 14H4.88C3.68009 14 3.08013 14 2.65954 13.6944C2.52371 13.5957 2.40426 13.4763 2.30557 13.3405C2 12.9199 2 12.3199 2 11.12V4.88Z", fill: "currentColor" }));
+    }
+    /** 重新生成（一个圈）——内联原生 IconRefreshOutline16。 */
+    function IconRegen(props) {
+      const size = props && props.size || 16;
+      return React.createElement("svg", { width: size, height: size, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": true },
+        React.createElement("path", { d: "M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052 13.9557 3.29894L15.1281 2.12759C15.3303 1.92546 15.6767 2.06943 15.6767 2.35538V5.53923C15.6766 5.71626 15.5329 5.85976 15.3559 5.86002H12.171C11.8854 5.8597 11.7426 5.51465 11.9443 5.31249L12.9641 4.29056C11.8237 2.74305 9.98908 1.74106 7.92136 1.74097C4.46436 1.74097 1.66233 4.543 1.66233 8C1.66233 11.457 4.46436 14.259 7.92136 14.259C11.3782 14.2589 14.1804 11.4569 14.1804 8H15.5722C15.5722 12.2251 12.1465 15.6507 7.92136 15.6508C3.69614 15.6508 0.270508 12.2252 0.270508 8C0.270508 3.77478 3.69614 0.349152 7.92136 0.349152Z", fill: "currentColor" }));
+    }
+
+    // ---------- 设置页导航图标补丁 ----------
+    // shell 的 navIcon(id) 只识别 models/agent-presets/plugins，voice 回退为齿轮（源码硬编码，无扩展点）；
+    // settings.section 槽位注册不支持自定义 icon，故在设置面板挂载后给语音行加类名，
+    // 由 CSS 隐藏齿轮 svg、以喇叭遮罩替身展示（不动 React 节点，避免被 reconcile 覆盖）。
+    // 遮罩 URL 由喇叭几何常量生成（与 React 组件同源）：重画图标时只改常量一处即可。
+    function speakerMaskBackground() {
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none">'
+        + '<path d="' + SPEAKER_D + '" stroke="#000" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+        + '<path d="' + SPEAKER_WAVE1_D + '" stroke="#000" stroke-width="1.3" stroke-linecap="round"/>'
+        + '<path d="' + SPEAKER_WAVE2_D + '" stroke="#000" stroke-width="1.3" stroke-linecap="round"/></svg>';
+      const url = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
+      return 'background:currentColor;-webkit-mask:' + url + ' center/contain no-repeat;mask:' + url + ' center/contain no-repeat;';
+    }
+    function patchSettingsNavIcon() {
+      const labels = ["语音播报", "Voice Readout"];
+      document.querySelectorAll('[role="dialog"] nav button').forEach((btn) => {
+        const span = btn.querySelector("span");
+        if (!span || labels.indexOf((span.textContent || "").trim()) < 0) return;
+        if (btn.classList.contains("dsh-voice-nav-speaker")) return;
+        btn.classList.add("dsh-voice-nav-speaker");
+      });
+    }
+    let navIconObserver = null;
+    function startNavIconPatching() {
+      patchSettingsNavIcon();
+      if (navIconObserver || typeof MutationObserver === "undefined") return;
+      navIconObserver = new MutationObserver(function () { patchSettingsNavIcon(); });
+      navIconObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    function stopNavIconPatching() {
+      if (navIconObserver) { navIconObserver.disconnect(); navIconObserver = null; }
+    }
+
     // ---------- 每条消息的"朗读"按钮 ----------
     function VoiceReadButton(props) {
       const statusPair = React.useState("idle"); // idle | busy | speaking | error
@@ -476,28 +537,33 @@ window.__ModuleLoader__.load({
         runSpeak(true);
       }
 
-      let label = t("read.read");
+      // 图标按钮（ic_ds_* 原生风格）：idle=喇叭 / busy=喇叭（禁用降透明）/
+      // speaking=停止方块 / error=喇叭+错误色；文字进 title（hover 提示）+ aria-label
+      let icon = React.createElement(IconSpeaker, { size: 16 });
       let title = t("read.title");
-      if (status === "busy") { label = t("read.busy"); title = t("read.busyTitle"); }
-      else if (status === "speaking") { label = t("read.stop"); title = t("read.stopTitle"); }
-      else if (status === "error") { label = t("read.retry"); title = t("read.failPrefix") + (lastError || "unknown"); }
+      let iconClass = "dsh-voice-icon-btn";
+      if (status === "busy") { title = t("read.busyTitle"); }
+      else if (status === "speaking") { icon = React.createElement(IconStop, { size: 16 }); title = t("read.stopTitle"); }
+      else if (status === "error") { title = t("read.failPrefix") + (lastError || "unknown"); iconClass = "dsh-voice-icon-btn err"; }
 
       // 重新生成按钮：仅在该消息完整朗读过一次（spokenState=done）后出现；busy 时禁用
       const regenShown = spokenState[String(props.messageId)] === "done";
 
       return React.createElement(React.Fragment, null,
         React.createElement("button", {
-          className: "dsh-voice-read-btn",
+          className: iconClass,
           onClick,
           title,
+          "aria-label": title,
           disabled: status === "busy",
-        }, label),
+        }, icon),
         regenShown ? React.createElement("button", {
-          className: "dsh-voice-read-btn",
+          className: "dsh-voice-icon-btn",
           onClick: onRegen,
-          title: t("read.regenerateTitle"),
+          title: t("read.regenerate"),
+          "aria-label": t("read.regenerate"),
           disabled: status === "busy",
-        }, t("read.regenerate")) : null);
+        }, React.createElement(IconRegen, { size: 16 })) : null);
     }
 
     // ---------- 输入框左下角"自动朗读"开关 ----------
@@ -523,7 +589,9 @@ window.__ModuleLoader__.load({
         className: "dsh-voice-read-btn" + (enabled ? " on" : ""),
         onClick,
         title: t("auto.title"),
-      }, enabled ? t("auto.on") : t("auto.off"));
+      },
+        React.createElement(IconSpeaker, { size: 14, muted: !enabled }),
+        React.createElement("span", null, enabled ? t("auto.on") : t("auto.off")));
     }
 
     // ---------- turnTail 徽标（只 claim 读过的轮次，不抢 deliverables 产物链） ----------
@@ -874,6 +942,12 @@ window.__ModuleLoader__.load({
           ".dsh-voice-read-btn:hover{background:rgba(127,127,127,.12);}",
           ".dsh-voice-read-btn:disabled{opacity:.6;cursor:default;}",
           ".dsh-voice-read-btn.on{border-color:rgba(46,139,87,.7);background:rgba(46,139,87,.12);}",
+          ".dsh-voice-icon-btn{width:28px;height:28px;color:var(--dsw-alias-label-tertiary, rgba(127,127,127,.85));cursor:pointer;background:0 0;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex;}",
+          ".dsh-voice-icon-btn:hover{background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.12));color:var(--dsw-alias-label-secondary, rgba(127,127,127,.95));}",
+          ".dsh-voice-icon-btn:disabled{cursor:default;opacity:.4;}",
+          ".dsh-voice-icon-btn.err{color:var(--dsw-alias-state-error-primary, #d97706);}",
+          ".dsh-voice-nav-speaker svg{display:none;}",
+          ".dsh-voice-nav-speaker::before{content:\"\";width:16px;height:16px;flex:none;" + speakerMaskBackground() + "}",
           ".dsh-voice-badge{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border:none;border-radius:6px;background:transparent;color:inherit;opacity:.65;font-size:12px;cursor:pointer;}",
           ".dsh-voice-badge:hover{opacity:1;background:rgba(127,127,127,.12);}",
           ".dsh-voice-settings{max-width:680px;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:1.6;}",
@@ -898,6 +972,12 @@ window.__ModuleLoader__.load({
         document.head.append(tag);
         return () => tag.remove();
       }, "voice: styles");
+
+      // 设置页导航图标：把语音行的齿轮换成喇叭（面板挂载/React 重渲染后由 observer 补丁）
+      ctx.effect(() => {
+        startNavIconPatching();
+        return () => stopNavIconPatching();
+      }, "voice: settings nav icon");
 
       // 自动播报轮询 + stopOnNewTurn（gen 变化 → 停旧播报）
       let pollBusy = false;
@@ -958,7 +1038,7 @@ window.__ModuleLoader__.load({
         VoiceSettingsSection,
       ));
 
-      console.log("[voice] client half applied (badge + i18n + resilience)");
+      console.log("[voice] client half applied (icons + badge + i18n + resilience)");
     }
 
     const inject = ["slots", "locale", "conversationEvents"];

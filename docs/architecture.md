@@ -73,6 +73,11 @@ Host 用 `ctx.settings.register('voice', VoiceSettingsSchema)` 注册 `voice:` �
 - 云 TTS 默认仅手动按钮触发（`autoSpeakCloudTts=false` 成本门控）：防自动播报账单失控。
 - UI 只占 additive 小槽位，不碰 `root`/`conversation.session` 等高风险整槽位。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
+- 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，
+  其余回退齿轮（源码硬编码，无扩展点）；`settings.section` 注册仅 id/order/label，不支持自定义 icon。
+  做法：面板挂载后给语音行加类名 → CSS 隐藏齿轮 svg、`::before` mask 显示喇叭（不动 React 节点，
+  MutationObserver 负责补齐类名）；DSH 升级若改导航 DOM/文案，最坏回退为齿轮，无副作用，升级后需回查。
+  喇叭 SVG 几何存一份常量（`SPEAKER_*`）：React 组件与遮罩 data-URI 共用，避免两处漂移。
 
 ## 8. 参考（DSH 源码，只读）
 
