@@ -95,5 +95,7 @@
 ## 9. 发布后 72 小时观察窗
 
 - [ ] 盯自己真实使用 + GitHub 首个 issue：有没有"装不上 / 转写多次 / 重复计费"类反馈。
+- [ ] 提交到 **awesome-dsh-plugin 精选列表**（`data/plugins/` YAML + `data/screenshots.json` 截图；
+      仓库创建满 1 天后提 PR，本地已备好 `tmp/awesome-dsh-plugin`，见 `tmp/awesome-dsh-plugin-pr-body.md`）。
 - [ ] 若有人报问题，先复现、先取证（看 `voice-transcript-cache.json` 和 `[voice]` 日志），再改代码。
 - [ ] 任何修复都先补一条断言，再改实现。
