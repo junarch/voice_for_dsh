@@ -1,9 +1,9 @@
 # 语音转写与 TTS 播报管线（voice pipeline）
 
 > 本文描述**当前实现**的语音播报管线：一轮 DeepSeek 输出结束后，先口语化转写，再交给 TTS 播报。
-> 源码：`E:\project\voice_for_dsh\packages\dsh-plugin-voice\lib\index.js`（Host 半，主实现）、
-> `lib\volcengine-ws.js`（豆包双向流 WS 客户端）、`lib\speech-clean.js`（净化）、
-> `lib\voice-compat.js`（音色↔语种归一）、`lib\client.js`（Client 半）。
+> 源码：`packages/dsh-plugin-voice/lib/index.js`（Host 半，主实现）、
+> `lib/volcengine-ws.js`（豆包双向流 WS 客户端）、`lib/speech-clean.js`（净化）、
+> `lib/voice-compat.js`（音色↔语种归一）、`lib/client.js`（Client 半）。
 
 ## 核心原则
 
@@ -31,7 +31,7 @@
 ### 2.1 触发与输入
 
 - **手动**：每条消息的"朗读"按钮（`conversation.chat.assistant-actions` 槽），对当条消息转写。
-- **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；云 TTS 自动播报还需 `autoSpeakCloudTts=true`（成本门控）。
+- **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；云 TTS 自动播报还需 `autoSpeakCloudTts=true`（设置页"云TTS"开关，成本门控）。
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
 - **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).events` 按 messageId 定位。
 
@@ -53,7 +53,7 @@
 ### 2.3 请求参数
 
 - `provider/model`：`voice.provider`/`voice.model`（空 = 启动发现可用路由；配置路由失败自动回退发现并自愈写回 settings）。
-- `maxTokens`：`voice.transcribe.maxTokens`（默认 8192）。推理模型（如 deepseek-v4-flash）先烧 reasoning token；撞顶且空稿自动 4 倍额度重试一次。
+- `maxTokens`：`voice.transcribe.maxTokens`（默认 8192，设置页无 UI）。推理模型（如 deepseek-v4-flash）先烧 reasoning token；撞顶且空稿自动按 4 倍额度重试一次。
 - `temperature`：`voice.transcribe.temperature`（默认 0.3）。
 - `reasoningEffort`：`voice.transcribe.reasoningEffort`（默认 off）。抽象档位跨 provider 词汇不同，模型不支持时按 `EFFORT_FALLBACK` 降级到语义最近档；非推理模型忽略；降级对用户可见（`effortMapped`/`effortNote`）。
 - 超时：`voice.transcribe.timeoutMs`（默认 60s）。
@@ -67,7 +67,7 @@
 ### 2.5 缓存（转写稿）
 
 - 键：messageId。命中条件：provider/model/prompt/effort 四者与当前配置完全一致（`cachedTranscriptFor`）。
-- 落盘：`$DSH_HOME\voice-transcript-cache.json`（本机 = `C:\Users\junar\.dsh\voice-transcript-cache.json`），重启不丢，上限 200 条（先进先出截断）。
+- 落盘：`$DSH_HOME\voice-transcript-cache.json`，重启不丢，上限 200 条（先进先出截断）。
 - 缓存形状：`{ transcript(净化稿), provider, model, prompt, effort, sourceChars, at, instruction, emotion, intensity, ttsFp, segments }`。HTTP 与双向流共用同一形状，可互读。
 - 文件损坏按空缓存起步。
 
@@ -106,7 +106,7 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
 ## 4. TTS Provider 适配层
 
 > 自研薄适配层（每 provider 一个文件），零第三方 TTS 适配器依赖
-> （调研结论：无现成 JS 库支持火山 v3 接口，见 `docs/research/plan-review-tts-adapter-report.html`）。
+> （调研结论：无现成 JS 库支持火山 v3 接口，协议依官方《接入语音模型》文档实现）。
 
 ### 4.1 browser（零配置兜底，默认）
 
@@ -178,11 +178,13 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   失败/零音频自动降级 HTTP 整段（warn 提示）。
 - 重播（缓存命中）：转写 + 指令全用缓存（零 LLM），段落照常切分但复用缓存指令；音频重合成但 1h 内走服务端缓存免费。
 - 重新生成（↻）：转写 + 指令全部重新生成（force 跳过缓存），结果覆盖该 messageId 条目。
-- 成本门控：云 TTS 自动播报需 `voice.autoSpeakCloudTts=true`（默认关），否则自动播报跳过并 toast 提示；手动"朗读"按钮不受限。
+- 成本门控：设置页"云TTS"复选框未勾选时引擎为 `browser`，根本不走云 TTS（全免费，含手动按钮）；
+  勾选 = 用户显式选择付费 API（引擎切 `volcengine`、`autoSpeakCloudTts` 同步写入 true）。
+  settings.yaml 直改的旧配置若 `autoSpeakCloudTts=false`，自动播报仍被拦截（防手工配置烧钱），手动按钮不受限。
 
 ## 6. `voice:` 配置 schema 定稿
 
-> 字段见 `$DSH_HOME\settings.yaml`（本机 `C:\Users\junar\.dsh\settings.yaml`）的 `voice:` 块；
+> 字段见 `$DSH_HOME\settings.yaml` 的 `voice:` 块；
 > schema 定义在 `index.js` `VoiceSettingsSchema`。所有字段带默认值 → 全新安装不带 voice 块也能跑
 > （默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）只暴露常用项，
 > 以下标注"（无 UI）"的字段**已从设置页隐藏**：schema 保留（向后兼容，老 settings 里的值仍生效）、
@@ -191,14 +193,14 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 ```yaml
 voice:
   autoSpeak: false            # 每轮结束自动播报
-  autoSpeakCloudTts: false    # 自动播报允许用云 TTS（默认关：云 TTS 仅手动按钮触发）
+  autoSpeakCloudTts: false    # 云TTS 开关：设置页勾选时与 tts.provider=volcengine 同步写入 true（默认关 = 仅免费 Windows TTS）
   language: auto              # auto|zh|en|yue|shanghai|henan|beijing|tianjin|sichuan|shaanxi|dongbei
                               #   固定语种/方言时无论原文语言都按所选转写；8 方言统一走 vv + explicit_dialect
   provider: ""                # 转写 LLM provider（空=启动发现；配置错自动回退并自愈写回可用路由）
   model: deepseek-v4-flash
   transcribe:
     enabled: true             # 主开关：关=不调模型，直接读原文（去 Markdown/跳过表格代码）
-    maxTokens: 8192           # 推理模型先烧 reasoning token；撞顶空稿自动 4 倍重试
+    maxTokens: 8192           # 转写长度上限（设置页无 UI）；撞顶空稿自动按 4 倍额度重试一次
     temperature: 0.3
     prompt: ""                # stylePreset=custom 时生效
     reasoningEffort: off      # 固定 off（转写不开启思考，省 token）；旧值仍走降级链；设置页无 UI
@@ -213,7 +215,7 @@ voice:
       apiKey: ""              # 火山方舟专属 API Key（settings.yaml 为明文，注意保管，别提交）
       resourceId: seed-tts-2.0
       speaker: zh_female_vv_uranus_bigtts  # Vivi 2.0；下拉另含 中文4男4女 + 英文3 + 自定义
-      sampleRate: 24000       # 8000|16000|24000|44100|48000
+      sampleRate: 24000       # 采样率（设置页无 UI：固定默认 24000，客户端/管线自适应；老值仍生效）
       rateLevel: 2            # 语速五档 0很慢–4很快
       pitch: 0                # 音调连续半音 [-12,12]，0=正常（步进 0.1 细粒度）
       pitchLevel: 2           # 音调五档（旧字段，仅供兼容；经 pitchOf 映射为 pitch；无 UI）
@@ -246,7 +248,9 @@ voice:
 5. **服务端缓存只认文本**——`cache_config` 仅当 `ttsFp` 指纹未变才下发；试听/重新生成绝不下发（防"永远四川口音"串音）。
 6. **转写完整才写缓存**——WS 中途失败不污染缓存（否则降级命中坏稿、播不完整内容）。
 7. **重播零 LLM**——转写 + 情感指令全用缓存（不重新生成）；重新生成（↻）= 全部重新生成。
-8. **推理模型撞顶空稿自动 4 倍重试**（先烧 reasoning token）。
+8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
+9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
+   付费调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
 
 ## 8. 设计决策（为什么）
 
@@ -254,7 +258,8 @@ voice:
 - 默认 TTS = 浏览器兜底：零配置、免费、离线。
 - 云 TTS 走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；动态沙箱禁 fetch。
-- 云 TTS 默认仅手动按钮触发（`autoSpeakCloudTts=false` 成本门控）：防自动播报账单失控。
+- 云 TTS 默认关闭（设置页"云TTS"未勾选 = 引擎 browser，全免费）；勾选 = 用户显式为付费 API 买单，
+  自动播报才可能走云 TTS；settings.yaml 直改的旧配置仍由 `autoSpeakCloudTts` 门控防账单失控。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - 自研 TTS 适配层（不引第三方库）：无现成 JS 库支持火山 v3；HTTP 单向协议极简（~150 行零依赖）；避免供应链与失维护风险。
 - UI 只占 additive 小槽位（assistant-actions / input.left / turnTail / settings.section / shell.overlay），不碰 `root`/`conversation.session`。
@@ -266,7 +271,9 @@ voice:
   TTS `synthesizeVolcengine`/`buildVolcReqParams`；双向流 `streamSpeak`；
   服务端缓存 `serverCacheAllowed`/`serverCacheMark`/`ttsFpOf`。
 - `volcengine-ws.js`：双向流协议（帧编解码 / 事件 / 连接管理器）。
-- `speech-clean.js`：`sanitizeForSpeech`（净化）+ `ttsProviderOf`（引擎归一）。
-- `voice-compat.js`：`VOLC_VOICES` / `LANGUAGE_OPTIONS` / `normalizeVoiceConfig` / `correctSpeakerForLanguage`。
+- `speech-clean.js`：`sanitizeForSpeech`（净化）。
+- `voice-compat.js`：`LANGUAGE_OPTIONS` / `normalizeVoiceConfig` / `correctSpeakerForLanguage` /
+  `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——配置兼容/归一单一事实源；
+  `VOLC_VOICES`（音色精选清单）定义在 `index.js`。
 - `client.js`：设置页（`settings.section id=voice`）、朗读按钮（`assistant-actions`）、流式播放（Web Audio lookahead）、转写/播报状态机。
 - 测试：`scripts/test-host.mjs`（零成本 mock，覆盖转写/缓存/TTS/防串音/重播零 LLM 等）、`scripts/tts-*.mjs`（真实外呼探针，花几分钱）。

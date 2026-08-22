@@ -5,9 +5,9 @@
 
 ## 1. 版本与环境（本机）
 
-- `@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出：`C:\Users\junar\AppData\Local\npm-cache\_npx\1e7f6d9597241db0`）
-- `DSH_HOME=C:\Users\junar\.dsh`；web profile：`C:\Users\junar\.dsh\profiles\web`
-- 用户设置：`C:\Users\junar\.dsh\settings.yaml`；web 界面 `http://127.0.0.1:3080`
+- `@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出，路径见 `npm root` 或 `npm cache`，仅作只读参考）
+- `DSH_HOME`（默认 `~/.dsh`）；web profile：`$DSH_HOME\profiles\web`
+- 用户设置：`$DSH_HOME\settings.yaml`；web 界面 `http://127.0.0.1:3080`
 
 ## 2. 组合包（bundle）机制
 
@@ -59,7 +59,8 @@ Client 注册方式：`ctx.slots.inject('<slot>', () => ctx.slots.register({ nam
 ## 6. 设置命名空间
 
 Host 用 `ctx.settings.register('voice', VoiceSettingsSchema)` 注册 `voice:` 命名空间（schema 定义在
-`packages/dsh-plugin-voice/lib/index.js`）。Client 用 `ctx.settingsScope` 读快照、`set` 写。
+`packages/dsh-plugin-voice/lib/index.js`）。Client 设置页经 `/voice/api` 的 `getConfig`/`setConfig`
+RPC 读写（Host 归一后返回，UI 显示 = 实际发声）。
 
 ## 7. 设计决策（为什么这么搭）
 
@@ -69,8 +70,9 @@ Host 用 `ctx.settings.register('voice', VoiceSettingsSchema)` 注册 `voice:` �
   （不能 POST/鉴权头/二进制）；创造模式动态沙箱禁 `fetch`。
 - 成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - TTS 用自研适配层（不引第三方库）：无现成 JS 库支持火山 v3 接口；HTTP 单向协议极简（~150 行零依赖）；
-  避免供应链与失维护风险。调研见 `docs/research/plan-review-tts-adapter-report.html`。
-- 云 TTS 默认仅手动按钮触发（`autoSpeakCloudTts=false` 成本门控）：防自动播报账单失控。
+  避免供应链与失维护风险。调研见火山《接入语音模型》官方文档（链接见 `docs/pipeline.md` §4.2）。
+- 云 TTS 默认关闭（设置页"云TTS"复选框 = 引擎总开关：未勾选 = 免费 Windows TTS，全部走 browser；
+  勾选 = 用户显式为付费 API 买单），`autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控。
 - UI 只占 additive 小槽位，不碰 `root`/`conversation.session` 等高风险整槽位。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
 - 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，

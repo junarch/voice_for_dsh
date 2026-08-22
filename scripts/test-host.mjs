@@ -18,7 +18,7 @@
  *   不用浏览器、不花一分钱 API 费，1 秒左右跑完 160 条检查。
  *
  * 【3. 怎么跑？（VS Code 完整步骤）】
- *   ① 用 VS Code 打开仓库文件夹 E:\project\voice_for_dsh
+ *   ① 用 VS Code 打开仓库文件夹（本仓库根目录）
  *   ② 顶部菜单"终端" -> "新建终端"（快捷键 Ctrl + ` ，就是 Esc 下面那个键）
  *      --底部会出现一个黑乎乎的输入框，这叫"终端"
  *   ③ 在终端里输入下面这行，然后按回车：
@@ -41,12 +41,12 @@
  *   【B 类·外部事实快照】对"火山 TTS 接口怎么表现"的记录，依据是某天的
  *      探针实测（scripts/tts-probe.mjs），它可能过时、甚至可能本来就是错的：
  *      例："请求 text 里不得出现 [#...] 标签"--依据是三轮
- *      探针 + 你旧项目 secretary-agent 的独立实测（两边结论一致，可信度高）；
+ *      探针 + 旧项目独立实测（两边结论一致，可信度高）；
  *      例："context_texts 传指令"--依据是旧项目经验 + 探针显示偶发时长变化，
  *      但效果不稳定（vv 音色上几乎无效果，xiaohe 上有）。
  *   推翻 B 类断言的正确姿势：
  *      ① 先跑 node scripts/tts-probe.mjs 拿新的实测证据（音频会存到 tmp\ 下，亲耳听）
- *      ② 证据确凿后，同时更新：本文件对应断言 + lib/index.js 实现 + docs/voice-pipeline.md
+ *      ② 证据确凿后，同时更新：本文件对应断言 + lib/index.js 实现 + docs/pipeline.md
  *      ③ 三处一起改，避免"文档说 A、代码做 B、测试断言 C"的精神分裂
  *   --记住：测试是"把今天的证据钉在墙上"，不是真理本身。
  * ===================================================================== */
@@ -234,10 +234,10 @@ const apiHandler = routes.find((r) => r.path === '/voice/api').handler
 const audioHandler = routes.find((r) => r.path === '/voice/audio').handler
 
 // rpc = 模拟"浏览器向插件发 HTTP 请求"。和 curl 的区别：不用起服务器，直接调处理函数。
-async function rpc(method, args) {
+async function rpc(method, args, headers) {
   const body = JSON.stringify(args || {})
   const req = {
-    method: 'POST', url: '/voice/api/' + method,
+    method: 'POST', url: '/voice/api/' + method, headers: headers || {},
     async *[Symbol.asyncIterator]() { yield Buffer.from(body, 'utf8') },
   }
   const res = { code: 0, body: '', writeHead(c) { this.code = c }, end(b) { this.body = String(b || '') } }
@@ -304,6 +304,18 @@ sessionsState.sessions.s1 = {
 section('T1 apply/路由注册')
 check('注册了 /voice/api 与 /voice/audio 两条路由', routes.length === 2 && !!apiHandler && !!audioHandler)
 check('ping', (await rpc('ping')).ok === true)
+
+section('T1b 同源校验（CSRF 防护：跨站不得触发付费调用/改配置）')
+const cr1 = await rpc('ping', {}, { origin: 'http://127.0.0.1:3080', host: '127.0.0.1:3080' })
+check('同源 POST（Origin host == Host）放行', cr1.ok === true, cr1)
+const cr2 = await rpc('ping', {}, { origin: 'https://evil.example.com', host: '127.0.0.1:3080' })
+check('跨站 POST（Origin 与 Host 不一致）拒绝 403', cr2.ok === false && cr2.error === 'cross-origin request rejected', cr2)
+const cr3 = await rpc('ping', {}, { origin: 'http://localhost:3080', host: '127.0.0.1:3080' })
+check('跨端口/跨 host（localhost vs 127.0.0.1）拒绝 403', cr3.ok === false && cr3.error === 'cross-origin request rejected', cr3)
+const cr4 = await rpc('ping')
+check('无 Origin 头（本地 curl/非浏览器）放行', cr4.ok === true, cr4)
+const cr5 = await rpc('ping', { big: 'x'.repeat(1_000_001) })
+check('请求体超 1MB 拒绝 413', cr5.ok === false && cr5.error === 'payload too large', cr5)
 
 section('T3 重复朗读 = 缓存命中，LLM 调用数不变【防"转写 N 次"烧 token】')
 // 剧本：让假 LLM 返回一段带 [#...] 标签的转写稿（模拟自定义 prompt/旧缓存残留）
@@ -593,7 +605,7 @@ section('T4 getConfig')
 check('getConfig 返回配置', (await rpc('getConfig')).ok === true)
 
 section('T6 火山 TTS 请求组装【快照：text 无标签 + 指令走 context_texts + 数值参数】')
-// 依据：tmp 下三轮探针音频 + 你旧项目 secretary-agent 的独立实测。
+// 依据：tmp 下三轮探针音频 + 旧项目独立实测。
 // - 内嵌 [#...] 会被逐字照读（D 实验：时长 2.37 倍）=> text 必须干净
 // - 数值 speech_rate 可靠生效（-50 -> 时长 2.2 倍）=> 语速/音调走数值参数
 // - context_texts 是官方指令通道（不计费、仅第一个值有效），效果依赖音色/措辞

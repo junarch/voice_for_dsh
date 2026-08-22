@@ -14,23 +14,41 @@
   替代原五档 `pitchLevel` 的粗糙调节。旧 `pitchLevel` 仍兼容（自动映射到对应半音，不丢配置）。
 - **设置页精简（UI 隐藏，schema 保留，向后兼容）**：以下选项不再显示、走固定默认值——
   `bitRate`(64000)、`expressive`(false)、`emotionGranularity`(paragraph)、`wsUrl`('')、
-  `streaming`(true)、`useSectionId`(true)、`interface`(bidirection)。
+  `streaming`(true)、`useSectionId`(true)、`interface`(bidirection)、`sampleRate`(24000)。
   老用户在 settings.yaml 里手动配过的这些值仍会被读取生效，不受影响。
+- **设置页"云TTS"复选框升级为引擎总开关**：原"云 TTS 自动播报"更名为"云TTS"，并移除"播报方式"下拉。
+  勾选 = 引擎切到豆包（付费 API Key 生效）并展开豆包专属配置；取消 = 免费 Windows TTS，
+  豆包配置全部隐藏（含手动"朗读"按钮也走免费 TTS）。
+  `tts.provider`/`autoSpeakCloudTts` 字段不变：勾选/取消分别写入 `volcengine`/`browser` 与 `true`/`false`，
+  直改 settings.yaml 的旧值行为不变。
+- 设置页删除"情感控制"说明文字（context_texts 动态情感指令行为未变，仅不再展示）；
+  `transcribe.temperature` 滑块补充作用说明（值越大越发散、准确度越低）。
 - **`transcribe.reasoningEffort` 固定默认 `off`（转写不开启思考）**，设置页不再显示下拉；
   旧值仍兼容（走降级链）。
 - **`transcribe.contextTurns` 固定为 2（引用上文最多往前两轮）**，设置页不再显示输入框。
+- **`transcribe.maxTokens` 设置页不再显示**（schema 保留，默认 8192，无需用户调节）：撞顶空稿时
+  自动按 4 倍额度重试一次；老用户在 settings.yaml 里手动配置的值仍生效。
 - **兼容层集中**：`ttsProviderOf`（引擎归一）、`pitchOf`（音调归一）并入 `lib/voice-compat.js`
   成为配置兼容/归一单一事实源；`speech-clean.js` 只保留文本净化。
 
 ### Added
 
 - 开源发布准备：根 `README.md`、`LICENSE`（MIT）、`.github/workflows/test.yml`（CI 自动跑 160 条断言）、
-  `docs/`（architecture / pipeline / development / testing / release / open-source-guide）。
+  `docs/`（architecture / pipeline / development / testing / release）。
 - 重播 1h 内免重合成（豆包服务端缓存 `cache_config`，参数指纹一致才命中，试听/regen 不下发）。
 
 ### Changed
 
 - 转写、指令、TTS 走缓存；重播零 LLM、1h 内重播零重合成（详见 docs/pipeline.md）。
+- **安全加固**：`/voice/api` 增加**同源校验**（`Origin` 与 `Host` 不一致即 403，防恶意网页跨站
+  触发付费转写/TTS 与改配置）+ 请求体 1MB 上限；新增对应回归断言（见 scripts/test-host.mjs T1b）。
+- 新增 `CODE_OF_CONDUCT.md` / `CONTRIBUTING.md` / `SECURITY.md`；README 增加"贡献与安全"入口。
+- 文档/注释脱敏：去除本机绝对路径（`C:\Users\...`）与旧项目引用；修复代码注释对
+  `docs/voice-pipeline.md`/`dev-playbook.md`/`PLAN.md` 的断链；移除 `docs/research/` 下的
+  火山官方文档副本与内部规划报告（版权/隐私考量）。
+- **修复潜在破坏**：`tsconfig.json` 输出目录 `lib`→`dist`（避免 `tsc` 覆盖手写 `lib/client.js`）；
+  `package.json` 移除指向不存在的 `lib/types/*` 的类型声明，补 `files` 白名单。
+- CI 增加手写 `lib/*.js` 语法冒烟（`node --check`）。
 - **图标对齐 DeepSeek 原生风格（`ic_ds_*`）**：消息行的"朗读"按钮去掉文字、改喇叭图标（播放中变停止方块），
   "重新生成"改为纯圆形刷新图标（hover 提示"重新生成"）；"自动朗读"开关只保留"自动"+ 喇叭图标；
   设置页"语音播报"导航图标由齿轮改为喇叭（shell 对未知 section id 回退齿轮，插件用 CSS 替身实现，不侵入 shell）。

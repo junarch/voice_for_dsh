@@ -33,22 +33,22 @@ window.__ModuleLoader__.load({
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
       "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（云 TTS）…",
       "sec.basic": "基本配置", "sec.transcribe": "转写（口语化）",
-      "row.ttsEngine": "播报方式", "row.transcribeEnabled": "需要转写模型",
-      "tts.engine.browser": "Windows 系统 TTS（免费）", "tts.engine.volcengine": "豆包 TTS（火山方舟）",
+      "row.transcribeEnabled": "需要转写模型",
       "tts.section.browser": "播报引擎 · Windows 系统 TTS（免费）", "tts.section.volcengine": "播报引擎 · 豆包 TTS",
       "transcribe.hint.on": "开=LLM 口语化转写（风格/情绪/自动跳过代码与表格）",
       "transcribe.hint.off": "关=不调模型，输出什么直接读；表格和代码块自动跳过",
-      "group.auth": "鉴权", "group.pronounce": "发音", "group.audio": "音频",
-      "row.autoSpeak": "自动播报", "row.autoSpeakCloudTts": "云 TTS 自动播报", "row.language": "语种/方言",
-      "row.provider": "Provider", "row.model": "模型", "row.maxTokens": "maxTokens",
+      "group.auth": "鉴权", "group.pronounce": "发音",
+      "row.autoSpeak": "自动播报", "row.cloudTts": "云TTS", "row.language": "语种/方言",
+      "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
+      "temperature.hint": " 值越大，转写越有创意、越发散，但准确度越低；越小越忠实原文（默认 0.3）/ higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
+      "cloudTts.hint": " 勾选=用豆包云 TTS（按字符计费，付费 API Key 生效）；取消=免费 Windows TTS，豆包配置隐藏 / checked = Doubao cloud TTS (per-char billing); unchecked = free Windows TTS, Doubao config hidden",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
-      "row.sampleRate": "sampleRate", "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
+      "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
       "row.loudness": "音量",
       "streaming.degraded": "双向流不可用，已回退整段合成",
-      "emoVoices.title": "情感控制：LLM 按内容动态生成自然语言语音指令，经 context_texts 对所有豆包 2.0 音色生效（无需额外资源/Key）",
       "dialect.hint": "方言：8 种方言均走 vv 音色 + explicit_dialect（实测生效）；音色/语种会自动互相适配（不锁定）",
     };
     var en = {
@@ -67,22 +67,22 @@ window.__ModuleLoader__.load({
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
       "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (cloud TTS)…",
       "sec.basic": "General", "sec.transcribe": "Transcription",
-      "row.ttsEngine": "TTS engine", "row.transcribeEnabled": "Use transcription model",
-      "tts.engine.browser": "Windows system TTS (free)", "tts.engine.volcengine": "Doubao TTS (Volcano Ark)",
+      "row.transcribeEnabled": "Use transcription model",
       "tts.section.browser": "Engine · Windows system TTS (free)", "tts.section.volcengine": "Engine · Doubao TTS",
       "transcribe.hint.on": "On = LLM spoken-style rewrite (style/emotion, code & tables auto-skipped)",
       "transcribe.hint.off": "Off = read the text as-is; tables and code blocks are skipped",
-      "group.auth": "Auth", "group.pronounce": "Pronunciation", "group.audio": "Audio",
-      "row.autoSpeak": "Auto-read", "row.autoSpeakCloudTts": "Cloud TTS auto", "row.language": "Language/Dialect",
-      "row.provider": "Provider", "row.model": "Model", "row.maxTokens": "maxTokens",
+      "group.auth": "Auth", "group.pronounce": "Pronunciation",
+      "row.autoSpeak": "Auto-read", "row.cloudTts": "Cloud TTS", "row.language": "Language/Dialect",
+      "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
+      "temperature.hint": " Higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
+      "cloudTts.hint": " Checked = Doubao cloud TTS (per-char billing, paid API key active); unchecked = free Windows TTS, Doubao config hidden",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
-      "row.sampleRate": "sampleRate", "row.rateLevel": "Speech rate", "row.pitchSemitone": "Pitch (semitones)",
+      "row.rateLevel": "Speech rate", "row.pitchSemitone": "Pitch (semitones)",
       "row.loudness": "Loudness",
       "streaming.degraded": "Bidirection unavailable; fell back to one-shot synthesis",
-      "emoVoices.title": "Emotion: LLM generates a natural-language voice instruction per content, delivered via context_texts on all Doubao 2.0 voices (no extra resource/key needed)",
       "dialect.hint": "Dialects: all 8 dialects use vv speaker + explicit_dialect (tested working); voice & language auto-adapt to each other (never locked)",
     };
     var T = (k) => k; // apply 时绑定 locale
@@ -791,6 +791,15 @@ window.__ModuleLoader__.load({
         setCfg(next);
         setMsg("");
       }
+      /** 云TTS 复选框 = 引擎总开关（父配置）：勾选→豆包（付费 API Key 生效）、取消→免费 Windows TTS；
+       * autoSpeakCloudTts 同步写入，保持 Host 成本门控与 UI 一致；取消勾选时豆包子配置不再显示。 */
+      function onCloudTtsChange(v) {
+        const next = JSON.parse(JSON.stringify(cfg));
+        next.tts.provider = v ? "volcengine" : "browser";
+        next.autoSpeakCloudTts = !!v;
+        setCfg(next);
+        setMsg("");
+      }
 
       // TTS 引擎归一：只有 volcengine 视为豆包，其余（含旧值 openai-compatible）按 Windows
       const ttsEngine = cfg.tts.provider === "volcengine" ? "volcengine" : "browser";
@@ -799,16 +808,11 @@ window.__ModuleLoader__.load({
         React.createElement("h2", null, t("settings.title")),
         React.createElement("p", { className: "dsh-voice-dim" }, t("settings.intro")),
 
-        // —— 基本配置（通用 · 主 → 次）：先选引擎，再决定要不要转写 ——
+        // —— 基本配置（通用 · 主 → 次）：先决定要不要转写，播报引擎由下方"云TTS"复选框切换 ——
         React.createElement("h3", null, t("sec.basic")),
-        React.createElement(Row, { label: t("row.ttsEngine") },
-          React.createElement(SelectInput, { value: ttsEngine, onChange: (v) => setField("tts.provider", v) },
-            React.createElement("option", { value: "browser" }, t("tts.engine.browser")),
-            React.createElement("option", { value: "volcengine" }, t("tts.engine.volcengine"))),
-          React.createElement("span", { className: "dsh-voice-dim" }, " 选哪个引擎，下面只展开它的专属配置 / pick an engine below")),
         React.createElement(Row, { label: t("row.transcribeEnabled") },
           React.createElement(CheckInput, { value: cfg.transcribe.enabled, onChange: (v) => setField("transcribe.enabled", v) }),
-          React.createElement("span", { className: "dsh-voice-dim" }, t("transcribe.hint.on"))),
+          React.createElement("span", { className: "dsh-voice-dim" }, cfg.transcribe.enabled ? t("transcribe.hint.on") : t("transcribe.hint.off"))),
         cfg.transcribe.enabled ? React.createElement("div", { className: "dsh-voice-sub" },
           React.createElement(Row, { label: t("row.provider") },
             providerList
@@ -831,11 +835,9 @@ window.__ModuleLoader__.load({
               : React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "deepseek-v4-flash" }),
             modelList && !modelKnown ? React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "模型 ID" }) : null,
             modelList ? null : React.createElement("span", { className: "dsh-voice-dim" }, " 模型列表加载中… / loading…")),
-          React.createElement(Row, { label: t("row.maxTokens") },
-            React.createElement(TextInput, { type: "number", value: cfg.transcribe.maxTokens, onChange: (v) => setField("transcribe.maxTokens", v), min: 256, step: 256 }),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 撞顶无正文自动 4 倍重试 / 4x retry on max-tokens")),
           React.createElement(Row, { label: t("row.temperature") },
-            React.createElement(SliderInput, { value: cfg.transcribe.temperature, onChange: (v) => setField("transcribe.temperature", v), min: 0, max: 2, step: 0.05 })),
+            React.createElement(SliderInput, { value: cfg.transcribe.temperature, onChange: (v) => setField("transcribe.temperature", v), min: 0, max: 2, step: 0.05 }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("temperature.hint"))),
           React.createElement(Row, { label: t("row.stylePreset") },
             React.createElement(SelectInput, { value: styleShown, onChange: (v) => setField("transcribe.stylePreset", v) },
               presets.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name)),
@@ -849,14 +851,14 @@ window.__ModuleLoader__.load({
               placeholder: "自定义模式下在此编辑 / editable in Custom mode",
               onChange: (e) => isCustom && setField("transcribe.prompt", e.target.value),
             }))
-        ) : React.createElement("p", { className: "dsh-voice-dim" }, t("transcribe.hint.off")),
+        ) : null,
 
         React.createElement(Row, { label: t("row.autoSpeak") },
           React.createElement(CheckInput, { value: cfg.autoSpeak, onChange: (v) => setField("autoSpeak", v) }),
           React.createElement("span", { className: "dsh-voice-dim" }, " 每轮结束自动转写并朗读 / auto read each turn")),
-        React.createElement(Row, { label: t("row.autoSpeakCloudTts") },
-          React.createElement(CheckInput, { value: cfg.autoSpeakCloudTts, onChange: (v) => setField("autoSpeakCloudTts", v) }),
-          React.createElement("span", { className: "dsh-voice-dim" }, " 云 TTS 按字符计费：默认仅手动触发 / cloud TTS billed per char")),
+        React.createElement(Row, { label: t("row.cloudTts") },
+          React.createElement(CheckInput, { value: ttsEngine === "volcengine", onChange: onCloudTtsChange }),
+          React.createElement("span", { className: "dsh-voice-dim" }, t("cloudTts.hint"))),
 
         // —— 播报引擎 · Windows 系统 TTS（免费）——
         ttsEngine === "browser" ? React.createElement(React.Fragment, null,
@@ -868,7 +870,7 @@ window.__ModuleLoader__.load({
           React.createElement(Row, { label: t("row.voiceName") },
             React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }))) : null,
 
-        // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音 → 音频 → 双向流）——
+        // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音；仅有"云TTS"勾选时显示）——
         ttsEngine === "volcengine" ? React.createElement(React.Fragment, null,
           React.createElement("h3", null, t("tts.section.volcengine")),
           React.createElement("h4", null, t("group.auth")),
@@ -911,11 +913,6 @@ window.__ModuleLoader__.load({
           React.createElement(Row, { label: t("row.loudness") },
             React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
             React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate")),
-          React.createElement("h4", null, t("group.audio")),
-          React.createElement(Row, { label: t("row.sampleRate") },
-            React.createElement(SelectInput, { value: String(cfg.tts.volcengine.sampleRate), onChange: (v) => setField("tts.volcengine.sampleRate", Number(v)) },
-              [8000, 16000, 24000, 44100, 48000].map((s) => React.createElement("option", { key: s, value: String(s) }, String(s))))),
-          React.createElement("p", { className: "dsh-voice-dim" }, t("emoVoices.title")),
           React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.hint"))) : null,
 
         React.createElement("div", { className: "dsh-voice-actions" },

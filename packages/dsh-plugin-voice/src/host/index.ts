@@ -2,8 +2,8 @@
  * dsh-plugin-voice — Host half (node).
  *
  * ⚠️ v1 实现直接手工编写在 `../../lib/index.js`（纯 JS，无构建步骤，见
- * docs/dev-playbook.md §1）。本文件仅为结构占位/后续 TS 化时的家。
- * 运行时行为以 lib/index.js 为准（已经创造模式 spike 验证，pkg-9）。
+ * docs/development.md §1）。本文件仅为结构占位/后续 TS 化时的家。
+ * 运行时行为以 lib/index.js 为准。
  */
 
 /**

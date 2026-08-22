@@ -15,7 +15,7 @@
 ## 安装（开发期）
 ```powershell
 # 在仓库根目录执行（相对路径锚定到 cwd；未全局安装 dsh 时走 npx）
-npx @deepseek-ai/dsh plugin --profile web add link:../packages/dsh-plugin-voice
+npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
 # 首次或改动依赖后，在插件目录安装一次依赖（link 不会代装插件自身依赖）：
 cd packages/dsh-plugin-voice; npm install
 # 重启 dsh

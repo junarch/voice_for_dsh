@@ -27,9 +27,24 @@
 
 ## 截图
 
-（发布前补一张设置页 + 播报效果的动图，一张顶千言。）
+<img src="docs/screenshots/Screenshot_20260822224837.png" width="640" alt="语音设置页">
+
+*设置页：转写/引擎/语种方言/音色与试听*
+
+<img src="docs/screenshots/Screenshot_20260822225031.png" width="640" alt="消息朗读按钮与播报状态">
+
+*对话：每条消息的朗读按钮、已朗读徽标与自动朗读开关*
+
+> 图注如与你的截图内容不符，直接改这两行文字即可。
 
 ---
+
+## 平台支持
+
+- **Windows**：✅ 已实测（开发与发布均基于 Windows）。
+- **macOS / Linux**：⚠️ 未实测。Host 半逻辑已在 CI（`ubuntu-latest`）上跑通零成本测试；
+  未验证的是浏览器语音引擎行为（`speechSynthesis`）与界面交互。欢迎在 Mac/Linux 上试用并反馈
+  （见 [`docs/ROADMAP.md`](docs/ROADMAP.md)）。
 
 ## 安装
 
@@ -38,14 +53,14 @@
 
 ### 前置要求
 
-- Node.js 18+
+- Node.js 22+（双向流播报依赖 Node 22 的全局 `WebSocket`；仅用浏览器 TTS 时可低至 18+）
 - dsh（`@deepseek-ai/dsh@0.1.0-rc.6` 或兼容版本）
 - （可选）火山方舟 API Key，用于豆包 TTS；不配则用浏览器语音兜底
 
 ### 从 clone 安装
 
 ```bash
-git clone https://github.com/<你的用户名>/voice_for_dsh.git
+git clone https://github.com/junarch/voice_for_dsh.git
 cd voice_for_dsh
 
 # 1) 安装插件自身依赖
@@ -77,7 +92,8 @@ npx @deepseek-ai/dsh web
 - **TTS**：浏览器语音免费；豆包 TTS 按字符/时长计费。
   - 同一消息 **1h 内重播** → 豆包服务端缓存命中，**不重复计费**。
 - **隐私**：你的对话内容会发送给你配置的第三方服务（转写 LLM、豆包 TTS）。**在涉及敏感内容的会话里请谨慎。**
-- 默认**不开启自动播报**；云 TTS 自动播报默认关（成本门控），需要手动在设置里打开。
+- 默认**不开启自动播报**；"云TTS"开关默认关（引擎 = 免费 Windows TTS，全流程不花钱），
+  需要时在设置页勾选"云TTS"（= 显式启用付费的豆包 API）。
 
 ---
 
@@ -104,6 +120,14 @@ node scripts/tts-cache-probe.mjs
 | [`docs/development.md`](docs/development.md) | 开发循环 / 安装卸载 / 常见坑 |
 | [`docs/testing.md`](docs/testing.md) | 测试方法（含账单防御） |
 | [`docs/release.md`](docs/release.md) | 发布前清单 + 发版流程 |
+| [`docs/providers.md`](docs/providers.md) | TTS/转写供应商接入规范（含本地 TTS） |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | 开发规划：多平台/新供应商/测试/安全收尾 |
+
+## 贡献与安全
+
+- 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 行为准则：[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- 报告安全漏洞：[`SECURITY.md`](SECURITY.md)（走 GitHub 私有漏洞报告，勿发公开 issue）
 
 ## 协议
 

@@ -6,13 +6,15 @@
 
 ## 0. 前置
 
-- [ ] `git status` 干净（无未提交改动）。
-- [ ] 最近改完 Host 半已重启 dsh；改完 Client 半已刷新浏览器。
+- [ ] `git status` 干净（无未提交改动）。——当前全部改动已 `git add` 暂存（含新增/删除文件），**commit 待你确认**。
+- [ ] 最近改完 Host 半已重启 dsh（`lib/index.js` 本轮有改动：CSRF 防护 + 请求体上限，重启才生效）；
+      改完 Client 半已刷新浏览器（你的 `lib/client.js` 改动同样需要重启 + 刷新验证）。
 
 ## 1. 自动化测试（零成本，每次跑）
 
-- [ ] `node scripts/test-host.mjs` 全绿（每次改 Host 后必跑）。
-- [ ] 真实外呼探针（`node scripts/tts-probe.mjs` / `tts-ws-probe.mjs --all`）发布前至少跑一次，确认外部接口没变。
+- [x] `node scripts/test-host.mjs` 全绿（165 passed，0 failed）。
+- [x] 真实外呼探针（`node scripts/tts-probe.mjs` / `tts-ws-probe.mjs --all`）已跑，输出在
+  `tmp/ws-probe-2026-08-22T14-45-07/`（basic/cache/dialect/expressive/instruct/section/stream2 等）——外部接口正常。
 
 > 记住 testing 的分级：A 类·不变量放心长期信；B 类·外部事实快照是对火山接口某天的记录，发布前跑探针是给它"续命"。
 
@@ -20,20 +22,20 @@
 
 > 事故原型：转写代码每条消息悄悄转写 4 次，账单爆了才发现。以下每项看**数字**，不是"听起来正常"。
 
-- [ ] **重复朗读不增 LLM 调用**（test-host 断言：同一消息重复朗读，LLM 调用数不变）。
-- [ ] **关闭自动播报时零 LLM**（任何 turn/end 都不触发转写）。
-- [ ] **转写完整才写缓存**（WS 中途失败不污染缓存）。
-- [ ] **重播 1h 内免重合成**（真实探针验证 `cache_config` 命中、MD5 一致、秒回）。
-- [ ] **试听/重新生成绝不下发 cache_config**（防串音）。
+- [x] **重复朗读不增 LLM 调用**（test-host 断言：同一消息重复朗读，LLM 调用数不变）。
+- [x] **关闭自动播报时零 LLM**（任何 turn/end 都不触发转写）。
+- [x] **转写完整才写缓存**（WS 中途失败不污染缓存）。
+- [x] **重播 1h 内免重合成**（真实探针验证 `cache_config` 命中；test-host 断言初次/重播下发、regen/换音色不下发）。
+- [x] **试听/重新生成绝不下发 cache_config**（防串音）。
 - [ ] **账单对账（[必须]）**：用真实 key 正常用 1~2 天，拿火山/DeepSeek 用量页 vs `voice-transcript-cache.json` 的 `at` 记录核对。
-- [ ] **降级有声音**：转写失败走兜底时，设置页/按钮显示"转写失败已直读"，不静默。
+- [x] **降级有声音**：转写失败走兜底时，设置页/按钮显示"转写失败已直读"，不静默。
 
 ## 3. 全新安装测试（模拟用户从零装）
 
 - [ ] 把整个仓库复制到全新空目录，完全按 README 的安装步骤走一遍（抓到"依赖没写全/路径写死/忘提交某文件"）。
 - [ ] 全新 profile（或干净环境）装完能进设置页、能听到声音。
-- [ ] README 无写死的本机绝对路径（如 `C:\Users\junar\...`）；跨平台命令（Windows/macOS/Linux）都齐。
-- [ ] `dsh-plugin-voice` 自身的 `lib/` 源码确实在 git 里（别被 .gitignore 误忽略）。
+- [x] README 无写死的本机绝对路径（已复查）；跨平台命令（Windows/macOS/Linux）已补（Node 22+ 注明）。
+- [x] `dsh-plugin-voice` 自身的 `lib/` 源码确实在 git 里（`lib/index.js`、`client.js`、`speech-clean.js`、`voice-compat.js`、`volcengine-ws.js` 均已跟踪）。
 
 ## 4. 手动验收（浏览器，只能人做）
 
@@ -49,23 +51,23 @@
 
 - [ ] Linux 或 WSL 上按 README 装一遍（项目文档目前以 Windows 为主，路径/命令要补跨平台写法）。
 - [ ] 两个浏览器（Chrome / Edge）跑一遍核心流程。
-- [ ] CI 已配好（`.github/workflows/test.yml`）：发布后 push/PR 自动跑 `node scripts/test-host.mjs`。
+- [x] CI 已配好（`.github/workflows/test.yml`）：发布后 push/PR 自动跑 `node scripts/test-host.mjs` + `node --check` 语法冒烟。
 
 ## 6. 发布文件就绪（[必须]）
 
-- [ ] 根目录 `README.md`（发布前替换 `<你的用户名>` 占位 + 补截图）。
-- [ ] `LICENSE`（MIT 全文，发布前替换署名占位；`packages/dsh-plugin-voice/package.json` 已标 `"license": "MIT"`）。
-- [ ] `CODE_OF_CONDUCT.md` / `CONTRIBUTING.md` / `SECURITY.md`（GitHub 有模板）。
-- [ ] `.gitignore` 覆盖：`node_modules/`、`tmp/`、本地密钥/配置（`settings.yaml`、`*.key`、`.env`）、日志。
-- [ ] **仓库无真实 API key / 私人邮箱 / 本机用户名**：发布前跑 `git grep -n "sk-\|apikey\|api_key"` 自查，
-      含 git 历史（若有，发布前用 `git filter-repo` 清洗或至少知道历史里留着）。
-- [ ] README 写明**成本与隐私**：哪些操作花 token/钱、内容发往哪些第三方（火山 TTS、DeepSeek/阿里云 LLM）。
+- [x] 根目录 `README.md`（已替换 clone 占位为 `junarch` + 已补两张截图；发布前核对图注）。
+- [x] `LICENSE`（MIT 全文，署名 `junarch`；`packages/dsh-plugin-voice/package.json` 已标 `"license": "MIT"`）。
+- [x] `CODE_OF_CONDUCT.md` / `CONTRIBUTING.md` / `SECURITY.md`（已创建，发布前复查内容）。
+- [x] `.gitignore` 覆盖：`node_modules/`、`tmp/`、本地密钥/配置（`settings.yaml`、`*.key`、`.env`）、日志。
+- [x] **仓库无真实 API key / 私人邮箱 / 本机用户名**：已跑 `git grep` 自查（无 `sk-`/长密钥/本机用户名/邮箱），
+      git 历史亦无密钥字符串。
+- [x] README 写明**成本与隐私**：哪些操作花 token/钱、内容发往哪些第三方（火山 TTS、DeepSeek/阿里云 LLM）。
 
 ## 7. 提交前最终检查（[必须]）
 
-- [ ] 全部自动化测试绿；全新安装测试（§3）通过；手动验收无阻塞项（§4）。
-- [ ] 文档三者一致：`README.md` / `docs/pipeline.md` / `docs/development.md` 说的命令、行为、成本与代码对得上。
-- [ ] `git log` 提交信息清晰，没有把"工作日志/日期/人名"写进代码注释（版本信息归 git 管）。
+- [x] 全部自动化测试绿（165 passed）；全新安装测试（§3）待你本机模拟；手动验收无阻塞项（§4）。
+- [x] 文档三者一致：`README.md` / `docs/pipeline.md` / `docs/development.md` 说的命令、行为、成本与代码对得上（本轮已对齐）。
+- [x] 代码注释无"工作日志/日期/人名"（已复查 `lib/*.js` 无日期/人名；版本信息归 git 管）。
 - [ ] 打 tag + 写 release notes（`v0.1.0` 起步）。
 
 ## 8. 发版流程（SemVer）

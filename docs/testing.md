@@ -28,7 +28,7 @@
 ### 第 1 层：零成本——mock 集成测试 `scripts/test-host.mjs`
 不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路。
 已固化大量断言，每条对应一个历史坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
-撞顶 4 倍重试、失败降级、自动播报门控、context_texts 指令组装、音色↔语种归一、重播零 LLM、regen 重新生成、
+撞顶 4 倍额度重试、失败降级、自动播报门控、context_texts 指令组装、音色↔语种归一、重播零 LLM、regen 重新生成、
 cache_config 初次/重播下发而 regen/换音色重播不下发等。
 每次改完 Host 半必跑。
 

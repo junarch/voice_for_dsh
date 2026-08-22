@@ -36,3 +36,7 @@ jobs:
       # （test-host.mjs 用 DSH_HOME 指向临时目录 + mock 的 llm/sessions/settings/fetch）
       - name: Run host test suite
         run: node scripts/test-host.mjs
+
+      # 手写纯 JS 无构建步骤：Client/Host 半至少做语法级冒烟，抓低级拼写/括号错误
+      - name: Syntax-check hand-written lib
+        run: node --check packages/dsh-plugin-voice/lib/index.js && node --check packages/dsh-plugin-voice/lib/client.js && node --check packages/dsh-plugin-voice/lib/speech-clean.js && node --check packages/dsh-plugin-voice/lib/voice-compat.js && node --check packages/dsh-plugin-voice/lib/volcengine-ws.js

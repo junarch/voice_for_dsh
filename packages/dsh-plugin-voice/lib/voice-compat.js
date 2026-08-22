@@ -1,7 +1,7 @@
 //#region dsh-plugin-voice — 音色 ↔ 语种/方言 兼容矩阵（纯函数，单一事实源）
 /**
  * 不变式：方言 ⟺ vv；English ⟺ 英文音色；中文/自动 配中文音色（含 vv）。
- * 设计（docs/voice-pipeline.md §5.5）：
+ * 设计（docs/pipeline.md §4.2）：
  *  - 交互（设置页）＝后改的字段胜出：改语言→纠音色；改音色→纠语言。
  *  - 静态（settings.yaml 直改）＝normalizeVoiceConfig 确定性定序。
  * 两条路径产出的配置都满足不变式，UI 显示 = 实际发声；合成期 correctSpeakerForLanguage

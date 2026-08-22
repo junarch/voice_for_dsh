@@ -2,8 +2,8 @@
  * dsh-plugin-voice — Client half (browser).
  *
  * ⚠️ v1 实现直接手工编写在 `../../lib/client.js`（window.__ModuleLoader__.load
- * 格式，无构建步骤，见 docs/dev-playbook.md §1）。本文件仅为结构占位/后续 TS 化时的家。
- * 运行时行为以 lib/client.js 为准（已经创造模式 spike 验证，pkg-9）。
+ * 格式，无构建步骤，见 docs/development.md §1）。本文件仅为结构占位/后续 TS 化时的家。
+ * 运行时行为以 lib/client.js 为准。
  */
 
 /**

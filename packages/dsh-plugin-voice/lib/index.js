@@ -2,7 +2,7 @@
 /**
  * 语音朗读插件 Host 半（正式 bundle，普通 Node ESM 模块，非沙箱）。
  *
- * 职责（PLAN.md §3 / docs/voice-pipeline.md）：
+ * 职责（docs/pipeline.md §1）：
  *  - 注册 `voice` settings 命名空间（→ settings.yaml，热重载）
  *  - 监听 session/event：assistant/message（含 text 块）记录每会话最新可朗读消息；
  *    turn/end（completed|max-tokens）且 autoSpeak=on 时挂起自动播报队列
@@ -13,10 +13,10 @@
  *  - TTS Provider 适配层：browser（Client speechSynthesis 透传）/ volcengine
  *    （HTTP 单向 chunked JSON 行；语速/音调走数值 speech_rate/pitch 参数，
  *    text 一律剥离 [#...] 指令标签--该接口不解析会照读，探针实测，见
- *    docs/voice-pipeline.md §2.3 与 scripts/tts-probe.mjs）
+ *    docs/pipeline.md §2.3 与 scripts/tts-probe.mjs）
  *  - 经 ctx.webServer 暴露 /voice/api/* JSON RPC 与 /voice/audio/<id> 音频一次性路由
  *
- * 实测要点（docs/dev-playbook.md §5）：
+ * 实测要点（docs/testing.md §1）：
  *  - SessionEvent 为信封结构 { type, seq, time, data, ... }，payload 在 event.data
  *  - PreparedLlmCall.stream 的 call-config 字段必须与 prepared.config 一致
  *    → 用 Object.assign({}, prepared.config, { system, messages }) 构造请求
@@ -33,7 +33,7 @@ import {
   dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
 } from './voice-compat.js'
 
-/** 转写基线 system prompt（docs/voice-pipeline.md §1.2；可被 voice.transcribe.prompt 覆盖）
+/** 转写基线 system prompt（docs/pipeline.md §1.2；可被 voice.transcribe.prompt 覆盖）
  * 规则 9：把内容里的情绪自然写进文字（文本有情绪 → 指令模型才能读出情绪 → TTS 才有情感）。 */
 const TRANSCRIBE_SYSTEM = '你是一个"文本口语化转写器"。把用户给你的 AI 助手输出改写为适合 TTS 语音朗读的口语文稿。\n输出语言与原文保持一致：中文原文输出中文口播，英文原文输出英文口播，混合内容跟随主体语言。\n规则：\n1. 代码块（``` ... ``` 或行内 `code`）：不要逐字朗读。用一句话概括其作用，例如"这里给出了一段 Python 代码，作用是读取文件并统计行数"；必要时才读出关键符号名（读作字母/单词）。\n2. 表格：不要朗读 Markdown 表格符号。按行转述："表格第一列是X，第二列是Y；第一行……第二行……"，或概括要点。\n3. 列表：用口语连接词："第一、……；第二、……" 或 "其中包括……"。\n4. URL：只读域名部分（如"链接指向 github 点 com"），不逐字符读。\n5. 符号/缩写：保留重要术语与数字；英文缩写按常见读法（如 API 读作 A-P-I）。\n6. 删除所有 Markdown 标记（#、*、-、|、> 等）、代码符号、JSON 花括号等，除非其内容是结论的一部分。\n7. 保留结论、建议、关键数字、文件名（文件名可读出）、时间等信息。\n8. 语气自然口语化，可用"首先/然后/最后/总之"组织；输出纯文本口播稿，不得包含任何 Markdown 标记（#、*、-、|、> 等）、代码符号、JSON 花括号、表情符号，也不加任何解释或前缀。\n9. 情绪引导：注意内容里的情绪信号（成功/失败/意外/风险/惊喜等），把这种情绪自然地写进措辞与节奏（如"好消息，全部测试通过了"或"这一步有点麻烦，不过……"），让播报带上与内容相符的情绪；但不得编造原文没有的事实或结论。'
 
@@ -56,8 +56,7 @@ function toPlainSpoken(text) {
 
 /**
  * 提取并剥离 [#...] 语音指令标签。
- * 豆包 plan 接口不解析内嵌标签、会当正文照读（探针实测 +
- * 用户旧项目 secretary-agent/src/broadcast.ts:44 同结论）；指令内容经官方
+ * 豆包 plan 接口不解析内嵌标签、会当正文照读（探针实测 + 旧项目独立实测同结论）；指令内容经官方
  * additions.context_texts 通道下发（指令文本不计费、仅第一个值有效--旧项目注释记录的官方行为）。
  * 返回 { clean, cmds }：clean = 剥离后的文稿，cmds = 提取出的指令内容列表。
  */
@@ -228,10 +227,10 @@ function resolveEffort(info, configured) {
   return { effort: undefined, mapped: true, note: '模型不支持思考档位 "' + configured + '"，已忽略该设置' }
 }
 
-/** settings.yaml 的 voice: 命名空间（字段一次定稿，避免迁移；docs/voice-pipeline.md §4） */
+/** settings.yaml 的 voice: 命名空间（字段一次定稿，避免迁移；docs/pipeline.md §4） */
 const VoiceSettingsSchema = z.object({
   autoSpeak: z.boolean().default(false),
-  autoSpeakCloudTts: z.boolean().default(false),
+  autoSpeakCloudTts: z.boolean().default(false), // 云TTS 开关（设置页"云TTS"复选框）：与 tts.provider 联动（勾选→volcengine 并写入 true）；false=Host 成本门控（自动播报不碰云 TTS）
   language: z.string().default('auto'), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
   provider: z.string().default(''), // 转写 LLM provider（空 = 启动时发现并自愈写回可用路由）
   model: z.string().default('deepseek-v4-flash'),
@@ -256,7 +255,7 @@ const VoiceSettingsSchema = z.object({
       apiKey: z.string().default(''),
       resourceId: z.string().default('seed-tts-2.0'),
       speaker: z.string().default('zh_female_vv_uranus_bigtts'),
-      sampleRate: z.number().default(24000),
+      sampleRate: z.number().default(24000), // 采样率：设置页无 UI（固定默认 24000，客户端/管线自适应）；老配置值仍生效
       rateLevel: z.number().default(2),  // RATE_STOPS 下标 0–4
       pitch: z.number().default(0),      // 音调半音连续值 [-12,12]，0=正常（细粒度；替代旧五档 pitchLevel）
       pitchLevel: z.number().default(2), // PITCH_STOPS 下标 0–4（旧字段，仅供兼容；无 UI）
@@ -743,7 +742,7 @@ function apply(ctx) {
       if (currentAbort === ac) currentAbort = null
     }
   }
-  /** 转写流：yield 文本增量；撞顶空稿 4 倍重试 / effort 降级链。失败抛错由调用方降级。 */
+  /** 转写流：yield 文本增量；撞顶空稿按 4 倍额度重试 / effort 降级链。失败抛错由调用方降级。 */
   async function* streamTranscription(route, cfg, found, promptUsed, ctxRef, run) {
     const maxTokens = cfg.transcribe.maxTokens
     const timeoutMs = cfg.transcribe.timeoutMs || 60000
@@ -1224,7 +1223,7 @@ function apply(ctx) {
             throw e1
           }
         }
-        // 推理模型思考烧光额度 → 4 倍重试（沿用解析后的档位，避免退回适配器默认的更高思考档）
+        // 推理模型思考烧光额度 → 按 4 倍额度重试（沿用解析后的档位，避免退回适配器默认的更高思考档）
         if (!result.transcript && result.finishKind === 'max-tokens') {
           console.warn('[voice] transcript empty at max-tokens, retrying with 4x budget')
           result = await attempt(route, maxTokens * 4, effortPlan.effort)
@@ -1463,6 +1462,16 @@ function apply(ctx) {
     },
   }
 
+  /** 跨站请求伪造（CSRF）防护：/voice/api 会触发付费 LLM/TTS 调用与改配置，
+   * 恶意网页可用 text/plain POST 免预检跨站触发（烧 token/钱）。浏览器发起的
+   * 合法请求（dsh 前端同源）Origin 的 host 与 Host 头一致；跨站页面 Origin 不同。
+   * 无 Origin 头（curl / 同源 GET 等非浏览器调用）放行，保持本地工具可用。 */
+  function isSameOrigin(req) {
+    const origin = req.headers && req.headers.origin
+    if (!origin) return true
+    try { return !!req.headers.host && new URL(origin).host === req.headers.host } catch { return false }
+  }
+
   ctx.webServer.register({
     kind: 'prefix',
     path: '/voice/api',
@@ -1473,13 +1482,17 @@ function apply(ctx) {
         res.end(body)
       }
       try {
+        if (!isSameOrigin(req)) { send(403, { ok: false, error: 'cross-origin request rejected' }); return }
         if (req.method !== 'POST') { send(405, { ok: false, error: 'POST only' }); return }
         const pathname = new URL(req.url, 'http://127.0.0.1').pathname
         const name = pathname.slice('/voice/api/'.length)
         const method = methods[name]
         if (!method) { send(404, { ok: false, error: 'unknown method: ' + name }); return }
         let raw = ''
-        for await (const chunk of req) raw += chunk
+        for await (const chunk of req) {
+          raw += chunk
+          if (raw.length > 1_000_000) { send(413, { ok: false, error: 'payload too large' }); return }
+        }
         const args = raw ? JSON.parse(raw) : {}
         send(200, await method(args))
       } catch (error) {

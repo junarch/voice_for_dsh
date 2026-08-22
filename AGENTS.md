@@ -11,13 +11,10 @@
 ## 技术栈与关键事实（先读这里，避免走弯路）
 
 - **目标平台**：dsh web（`dsh --profile web`），运行于 `http://127.0.0.1:3080`。
-- **DSH 版本**：`@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出：
-  `C:\Users\junar\AppData\Local\npm-cache\_npx\1e7f6d9597241db0`）。
-  该检出**不是 git 仓库**，是 npx 缓存；不要在里面改任何文件。
-- **DSH_HOME**：`C:\Users\junar\.dsh`；web profile：`C:\Users\junar\.dsh\profiles\web`
+- **DSH 版本**：`@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出，路径用 `npm root` 定位，只读）。
+- **DSH_HOME**：默认 `~/.dsh`；web profile：`$DSH_HOME\profiles\web`
   （bundle 列表在 `profiles\web\package.json` 的 `dsh.profile.bundles`）。
-- **用户设置**：`C:\Users\junar\.dsh\settings.yaml`（含 `llm-pi-ai.providers`：
-  `aliyuncs` 阿里云百炼、`quanzil` 全智；默认模型 `quanzil/deepseek-v4-flash-0731`）。
+- **用户设置**：`$DSH_HOME\settings.yaml`（含 `llm-pi-ai.providers` 等本机私有配置，勿提交）。
 
 ### 插件形态（本仓库的产物）
 
@@ -57,8 +54,8 @@
 ## 工作约定（开发时遵守）
 
 1. **不要修改 DSH 安装/缓存/ shipped preset**（`agent-presets` 目录、npx 检出、`$DSH_HOME` 下 shipped 文件）。
-   用户可写的只有：本仓库、`C:\Users\junar\.dsh\profiles\web\cordis.patch.yml`（用户的 patch 层）、
-   `C:\Users\junar\.dsh\settings.yaml`（设置）。
+   用户可写的只有：本仓库、`$DSH_HOME\profiles\web\cordis.patch.yml`（用户的 patch 层）、
+   `$DSH_HOME\settings.yaml`（设置）。
 2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 需要重启 dsh（`dsh --profile web`）才能生效。
    **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
    后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 是空操作），dev:web watcher / HMR 仅后续
@@ -80,7 +77,7 @@ voice_for_dsh/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
         │                    #   index.js=Host 半 / client.js=Client 半 /
-        │                    #   speech-clean.js(净化/引擎归一) / voice-compat.js(音色↔语种) /
+        │                    #   speech-clean.js(文本净化) / voice-compat.js(音色↔语种+兼容/归一) /
         │                    #   volcengine-ws.js(豆包双向流)
         └── src/             # 仅结构占位（host/index.ts、client/index.ts 桩，无实际逻辑；
                              #   后续 TS/tsdown 化时的家）

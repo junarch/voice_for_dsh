@@ -28,10 +28,10 @@ node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针
 ## 2. 安装 / 卸载插件（web profile）
 
 ```powershell
-# 安装（相对路径锚定到调用时的 cwd；未全局安装 dsh 时走 npx）
-npx @deepseek-ai/dsh plugin --profile web add ../packages/dsh-plugin-voice
+# 在仓库根目录执行（相对路径锚定到调用时的 cwd；未全局安装 dsh 时走 npx）
+npx @deepseek-ai/dsh plugin --profile web add packages/dsh-plugin-voice
 # 链接式（开发时改代码即生效；注意：link 不会代装插件自身依赖，见 §4）
-npx @deepseek-ai/dsh plugin --profile web add link:../packages/dsh-plugin-voice
+npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
 
 # 卸载
 npx @deepseek-ai/dsh plugin --profile web remove dsh-plugin-voice
