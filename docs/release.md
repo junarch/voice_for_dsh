@@ -6,7 +6,7 @@
 
 ## 0. 前置
 
-- [ ] `git status` 干净（无未提交改动）。——当前全部改动已 `git add` 暂存（含新增/删除文件），**commit 待你确认**。
+- [x] `git status` 干净（无未提交改动）。——已提交 `8b544f4`，分支 `master` 改名 `main` 后推送到 GitHub。
 - [ ] 最近改完 Host 半已重启 dsh（`lib/index.js` 本轮有改动：CSRF 防护 + 请求体上限，重启才生效）；
       改完 Client 半已刷新浏览器（你的 `lib/client.js` 改动同样需要重启 + 刷新验证）。
 
@@ -68,7 +68,7 @@
 - [x] 全部自动化测试绿（165 passed）；全新安装测试（§3）待你本机模拟；手动验收无阻塞项（§4）。
 - [x] 文档三者一致：`README.md` / `docs/pipeline.md` / `docs/development.md` 说的命令、行为、成本与代码对得上（本轮已对齐）。
 - [x] 代码注释无"工作日志/日期/人名"（已复查 `lib/*.js` 无日期/人名；版本信息归 git 管）。
-- [ ] 打 tag + 写 release notes（`v0.1.0` 起步）。
+- [x] 打 tag + 写 release notes（`v0.1.0` 起步，已发布：https://github.com/junarch/voice_for_dsh/releases/tag/v0.1.0）。
 
 ## 8. 发版流程（SemVer）
 
