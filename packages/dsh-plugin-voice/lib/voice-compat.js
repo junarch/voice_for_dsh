@@ -35,6 +35,33 @@ export const LANGUAGE_OPTIONS = [
 /** 方言 id 集合（由 LANGUAGE_OPTIONS 派生，避免两处漂移）。 */
 export const DIALECT_IDS = new Set(LANGUAGE_OPTIONS.filter((l) => l.dialect && l.dialectId).map((l) => l.dialectId))
 
+/** 语速/音调五档 → 数值参数（speech_rate ∈ [-50,100] 实测生效；pitch 为半音经 additions.post_process.pitch）。
+ * 2=正常档不发送参数。 */
+export const RATE_VALUES = [-50, -25, 0, 30, 60]
+export const PITCH_VALUES = [-6, -3, 0, 3, 6]
+/** 音调细粒度：连续半音值（-12~12，0=正常）。 */
+export const PITCH_MIN = -12
+export const PITCH_MAX = 12
+
+/**
+ * 归一音调半音值（兼容迁移）：新字段 `pitch`（连续半音，-12~12，0=正常）优先；
+ * 旧字段 `pitchLevel`（五档下标 0–4）映射到 PITCH_VALUES；都没有 → 0（正常）。
+ */
+export function pitchOf(v) {
+  if (v && typeof v.pitch === 'number' && !Number.isNaN(v.pitch)) return v.pitch
+  if (v && Number.isInteger(v.pitchLevel) && v.pitchLevel >= 0 && v.pitchLevel < PITCH_VALUES.length) return PITCH_VALUES[v.pitchLevel]
+  return 0
+}
+
+/**
+ * 归一化 TTS 引擎：只有 'volcengine' 视为豆包；其余（含旧值 openai-compatible）
+ * 一律按 'browser' 处理——容忍存量配置里的已废弃值，避免把未知 provider 当云 TTS。
+ */
+export function ttsProviderOf(cfg) {
+  const p = cfg && cfg.tts && cfg.tts.provider
+  return p === 'volcengine' ? 'volcengine' : 'browser'
+}
+
 export function isEnVoice(speaker) {
   return !!speaker && EN_VOICE_PREFIXES.some((p) => speaker.startsWith(p))
 }
@@ -107,7 +134,12 @@ export function normalizeVoiceConfig(cfg) {
   } else if (language === 'en' && !isEnVoice(speaker)) {
     newSpeaker = EN_DEFAULT_SPEAKER
   }
-  if (newSpeaker === speaker) return cfg
-  return Object.assign({}, cfg, { tts: Object.assign({}, cfg.tts, { volcengine: Object.assign({}, v, { speaker: newSpeaker }) }) })
+  // 音调归一：仅提供旧 pitchLevel（无新 pitch）时，把五档映射为连续半音，保证 UI 滑块有值
+  const pitch = pitchOf(v)
+  const vNorm = (typeof v.pitch === 'number' && !Number.isNaN(v.pitch)) || Number.isInteger(v.pitchLevel)
+    ? Object.assign({}, v, { pitch })
+    : v
+  if (newSpeaker === speaker && vNorm === v) return cfg
+  return Object.assign({}, cfg, { tts: Object.assign({}, cfg.tts, { volcengine: Object.assign({}, vNorm, { speaker: newSpeaker }) }) })
 }
 //#endregion

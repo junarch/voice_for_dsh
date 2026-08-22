@@ -2,8 +2,9 @@
 
 > 本插件 v1 为**手写纯 JS、无构建步骤**：`packages/dsh-plugin-voice/lib/` 下
 > `index.js`（Host 半）、`client.js`（Client 半）、`volcengine-ws.js`（双向流 WS 客户端）、
-> `speech-clean.js`（净化 `sanitizeForSpeech` + 引擎归一 `ttsProviderOf`）、
-> `voice-compat.js`（音色↔语种归一 `normalizeVoiceConfig`）是**源码，直接提交进 git**。
+> `speech-clean.js`（净化 `sanitizeForSpeech`）、
+> `voice-compat.js`（配置兼容/归一单一事实源：音色↔语种 `normalizeVoiceConfig`、
+> 引擎归一 `ttsProviderOf`、音调归一 `pitchOf`）是**源码，直接提交进 git**。
 > `src/` 仅为后续 TS/tsdown 化预留的占位。
 
 ## 1. 开发循环

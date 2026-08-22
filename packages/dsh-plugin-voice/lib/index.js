@@ -27,10 +27,10 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
-import { sanitizeForSpeech, ttsProviderOf } from './speech-clean.js'
+import { sanitizeForSpeech } from './speech-clean.js'
 import {
   VV_SPEAKER, LANGUAGE_OPTIONS,
-  dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig,
+  dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
 } from './voice-compat.js'
 
 /** 转写基线 system prompt（docs/voice-pipeline.md §1.2；可被 voice.transcribe.prompt 覆盖）
@@ -141,9 +141,6 @@ const STREAM = {
  * 2=正常档不发送参数。[#语音指令] 标签在该接口不解析、会被照读，一律不得进入 text。
  */
 const RATE_STOPS = ['很慢', '稍慢', '正常', '稍快', '很快']
-const PITCH_STOPS = ['很低', '稍低', '正常', '稍高', '很高']
-const RATE_VALUES = [-50, -25, 0, 30, 60]
-const PITCH_VALUES = [-6, -3, 0, 3, 6]
 
 /**
  * 播报风格预设（三档 + custom，删除默认/活力/暧昧）。
@@ -261,21 +258,22 @@ const VoiceSettingsSchema = z.object({
       speaker: z.string().default('zh_female_vv_uranus_bigtts'),
       sampleRate: z.number().default(24000),
       rateLevel: z.number().default(2),  // RATE_STOPS 下标 0–4
-      pitchLevel: z.number().default(2), // PITCH_STOPS 下标 0–4
+      pitch: z.number().default(0),      // 音调半音连续值 [-12,12]，0=正常（细粒度；替代旧五档 pitchLevel）
+      pitchLevel: z.number().default(2), // PITCH_STOPS 下标 0–4（旧字段，仅供兼容；无 UI）
       // —— 双向流（新增，全部带默认值，向后兼容）——
       interface: z.union([z.const('bidirection'), z.const('http')]).default('bidirection'), // bidirection=WS 双向流（默认；设置页不再暴露手动切换）；http=仅内部降级兜底
-      streaming: z.boolean().default(true),   // 双向流下启用"边转写边合成边播"
-      wsUrl: z.string().default(''),          // 空 = 默认 plan 网关；可指到 v3 网关（需对应 Key）
-      emotionGranularity: z.union([z.const('paragraph'), z.const('message'), z.const('off')]).default('paragraph'), // context_texts 情感指令的动态粒度
-      bitRate: z.number().default(64000),     // MP3 比特率（0=不设置；默认 64k 防音质损耗）
+      streaming: z.boolean().default(true),   // 双向流下启用"边转写边合成边播"（无 UI，默认开）
+      wsUrl: z.string().default(''),          // 空 = 默认 plan 网关（无 UI，高级）
+      emotionGranularity: z.union([z.const('paragraph'), z.const('message'), z.const('off')]).default('paragraph'), // context_texts 情感指令的动态粒度（无 UI，默认 paragraph）
+      bitRate: z.number().default(64000),     // MP3 比特率（0=不设置；默认 64k 防音质损耗；无 UI）
       loudness: z.number().default(0),        // 音量 [-50,100]（0=不变）
-      useSectionId: z.boolean().default(true),   // additions.section_id（跨次合成语气连续）
-      expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强）
-    }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
+      useSectionId: z.boolean().default(true),   // additions.section_id（跨次合成语气连续；无 UI，默认开）
+      expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强；无 UI，默认关）
+    }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
-    volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
+    volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
   }),
   stopOnNewTurn: z.boolean().default(true),
 })
@@ -622,7 +620,7 @@ function apply(ctx) {
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
     const explicitLang = lang && !lang.dialect && lang.id === 'en' ? 'en' : ''
     const rate = Number.isInteger(v.rateLevel) ? RATE_VALUES[v.rateLevel] : undefined
-    const pitch = Number.isInteger(v.pitchLevel) ? PITCH_VALUES[v.pitchLevel] : undefined
+    const pitch = pitchOf(v)
     return JSON.stringify([speaker, dialectFor(cfg), explicitLang, rate ?? '', pitch ?? '',
       v.loudness ?? '', v.expressive ? 'ex' : '', v.sampleRate ?? '', v.bitRate ?? ''])
   }
@@ -674,7 +672,7 @@ function apply(ctx) {
     // 写缓存须带 cache_config；缓存键 = 会话整段文本（分片无关）；命中=免服务端重合成。
     if (opts.useServerCache) additions.cache_config = { use_cache: true, text_type: 1 }
     if (v.useSectionId && opts.sectionId) additions.section_id = opts.sectionId
-    const pitch = Number.isInteger(v.pitchLevel) ? PITCH_VALUES[v.pitchLevel] : undefined
+    const pitch = pitchOf(v) // 连续半音（-12~12），0=正常不发送；旧 pitchLevel 经 pitchOf 兼容
     if (pitch) additions.post_process = { pitch }
     if (Object.keys(additions).length) reqParams.additions = JSON.stringify(additions)
     return reqParams
@@ -1352,7 +1350,6 @@ function apply(ctx) {
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
-      pitchStops: PITCH_STOPS,
     }),
     getState: async () => {
       const cfg = scope.get()

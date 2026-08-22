@@ -136,7 +136,7 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
   - `explicit_language`：仅固定英文下发（中文/方言不下发，避免与 explicit_dialect 冲突）。
   - `cache_config`：服务端缓存（见 §4.4）。
   - `section_id`：跨次合成语气连续（`voice.tts.volcengine.useSectionId`）。
-  - `post_process.pitch`：音调（半音，五档 `PITCH_VALUES`）。
+  - `post_process.pitch`：音调（连续半音 -12~12，经 `pitchOf` 归一；旧五档 `pitchLevel` 兼容映射）。
 - `req_params.model`：`voice.tts.volcengine.expressive=true` 时 `seed-tts-2.0-expressive`（表现力增强）。
 
 #### 音色↔语种归一（`lib/voice-compat.js`）
@@ -184,7 +184,9 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 
 > 字段见 `$DSH_HOME\settings.yaml`（本机 `C:\Users\junar\.dsh\settings.yaml`）的 `voice:` 块；
 > schema 定义在 `index.js` `VoiceSettingsSchema`。所有字段带默认值 → 全新安装不带 voice 块也能跑
-> （默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）可全量可视化编辑。
+> （默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）只暴露常用项，
+> 以下标注"（无 UI）"的字段**已从设置页隐藏**：schema 保留（向后兼容，老 settings 里的值仍生效）、
+> 走固定默认值，仅需高级/内部逻辑时在 settings.yaml 直改。
 
 ```yaml
 voice:
@@ -199,11 +201,10 @@ voice:
     maxTokens: 8192           # 推理模型先烧 reasoning token；撞顶空稿自动 4 倍重试
     temperature: 0.3
     prompt: ""                # stylePreset=custom 时生效
-    reasoningEffort: off      # '' = 跟随适配器默认；off|minimal|low|medium|high|max 等"抽象档位"，跨 provider 词汇不同
-                              #   模型不支持自动降级到语义最近档；非推理模型忽略；降级对用户可见
+    reasoningEffort: off      # 固定 off（转写不开启思考，省 token）；旧值仍走降级链；设置页无 UI
     stylePreset: standard     # standard(标准) | companion(陪伴) | playful(俏皮) | custom
                               #   旧值 ambiguous/default/energetic 自动回退 standard
-    contextTurns: 2           # 引用上文：最近 N 轮用户输入+播报文稿（陪伴/俏皮情绪捕捉依赖它）
+    contextTurns: 2           # 引用上文：固定 2 轮（最多往前读两轮）；设置页无 UI
     timeoutMs: 60000          # 单次转写超时；超时/失败降级为直读
   tts:
     provider: browser         # browser | volcengine（存量旧值 openai-compatible 归一为 browser）
@@ -214,17 +215,27 @@ voice:
       speaker: zh_female_vv_uranus_bigtts  # Vivi 2.0；下拉另含 中文4男4女 + 英文3 + 自定义
       sampleRate: 24000       # 8000|16000|24000|44100|48000
       rateLevel: 2            # 语速五档 0很慢–4很快
-      pitchLevel: 2           # 音调五档 0很低–4很高
-      interface: bidirection  # bidirection=WS 双向流（默认，UI 不暴露切换）| http=仅内部降级兜底
-      streaming: true         # 双向流下启用"边转写边合成边播"
-      wsUrl: ""               # 空=plan 网关；可指 V3 网关（需对应 Key）
-      emotionGranularity: paragraph  # paragraph(每段动态) | message(整条) | off(仅预设指令)
-      bitRate: 64000          # MP3 比特率（仅 HTTP 单向生效；双向流 pcm 无此参数）
+      pitch: 0                # 音调连续半音 [-12,12]，0=正常（步进 0.1 细粒度）
+      pitchLevel: 2           # 音调五档（旧字段，仅供兼容；经 pitchOf 映射为 pitch；无 UI）
+      interface: bidirection  # bidirection=WS 双向流（默认）| http=仅内部降级兜底（无 UI）
+      streaming: true         # 双向流下启用"边转写边合成边播"（无 UI）
+      wsUrl: ""               # 空=plan 网关；可指 V3 网关（需对应 Key）（无 UI）
+      emotionGranularity: paragraph  # paragraph(每段动态) | message(整条) | off(仅预设指令)（无 UI）
+      bitRate: 64000          # MP3 比特率（仅 HTTP 单向生效；双向流 pcm 无此参数）（无 UI）
       loudness: 0             # 音量 [-50,100]
-      useSectionId: true      # section_id（跨次合成语气连续）
-      expressive: false       # req_params.model=seed-tts-2.0-expressive（表现力增强）
+      useSectionId: true      # section_id（跨次合成语气连续）（无 UI）
+      expressive: false       # req_params.model=seed-tts-2.0-expressive（表现力增强）（无 UI）
   stopOnNewTurn: true
 ```
+
+### 6.1 配置演进约定（升级纪律）
+
+用户本地 `settings.yaml` 是私有数据，**只补默认、绝不覆盖**。升级时按此纪律处理，防止"用户配置静默丢失 / 悄悄烧 token"：
+
+1. **新字段必须带默认值**（老用户缺了就按默认走，零冲突、零报错）；
+2. **改字段语义 / 删字段** → 必须加兼容层（读新名、读不到读旧名，如 `pitchOf` 的 `pitch`→`pitchLevel`）+ **升大版本** + CHANGELOG 顶部写"升级指引"；
+3. **字段淘汰优先"UI 隐藏 + schema 保留"**（零风险、向后兼容）；确需真删才写迁移；
+4. **兼容/归一逻辑集中在 `lib/voice-compat.js`**（`ttsProviderOf`/`pitchOf`/`normalizeVoiceConfig`），新增归一只往这里加；Client 半同步维护内联镜像。
 
 ## 7. 必须守住的不变式（regression 防线）
 

@@ -15,7 +15,7 @@
  * 【2. 为什么需要它？】
  *   手动测试（打开网页、点按钮、用耳朵听）很贵，而且测不到内部：
  *   "听起来正常"不等于"没重复调 4 次 LLM"。这个脚本不用打开 dsh、
- *   不用浏览器、不花一分钱 API 费，1 秒左右跑完 153 条检查。
+ *   不用浏览器、不花一分钱 API 费，1 秒左右跑完 160 条检查。
  *
  * 【3. 怎么跑？（VS Code 完整步骤）】
  *   ① 用 VS Code 打开仓库文件夹 E:\project\voice_for_dsh
@@ -72,10 +72,10 @@ process.env.DSH_HOME = home
 const { apply } = await import('../packages/dsh-plugin-voice/lib/index.js')
 // 双向流帧编解码（volcengine-ws.js 导出的纯函数，字节级单测用）
 const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/dsh-plugin-voice/lib/volcengine-ws.js')
-// 口播净化 / TTS 引擎归一（speech-clean.js 纯函数）
-const { sanitizeForSpeech, ttsProviderOf } = await import('../packages/dsh-plugin-voice/lib/speech-clean.js')
-// 音色 ↔ 语种/方言 兼容矩阵（voice-compat.js 纯函数：归一/纠错/纠语言）
-const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
+// 口播净化（speech-clean.js 纯函数）
+const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/speech-clean.js')
+// 音色 ↔ 语种/方言 兼容矩阵 + 配置归一（voice-compat.js 纯函数：归一/纠错/纠语言/引擎归一/音调）
+const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
 
 // ---------- 断言工具：测试的"计分器" ----------
 // 断言（assertion）= 一句"我宣称 X 应该为真"的检查。
@@ -291,6 +291,8 @@ sessionsState.sessions.s1 = {
     msgEvent('m15', 19, '流式缓存重播内容'),
     msgEvent('m16', 20, '重新生成测试内容'),
     msgEvent('m17', 21, '兜底完整性测试内容'),
+    msgEvent('m6e', 22, '音调细粒度测试内容'),
+    msgEvent('m6e0', 23, '音调正常测试内容'),
   ],
 }
 
@@ -615,6 +617,29 @@ check('指令调用用的是独立 system prompt（演绎指令撰写器）', ll
 const callsAfterFirst = llmState.calls.length
 await rpc('speak', { sessionId: 's1', messageId: 'm4' })
 check('第二次播报：LLM 调用数不变（转写与指令均缓存命中）', llmState.calls.length === callsAfterFirst, { callsAfterFirst, now: llmState.calls.length })
+
+section('T6e 音调细粒度 pitch（连续半音优先；旧 pitchLevel 经 pitchOf 兼容映射）')
+// 依据：设置页音调改连续半音（-12~12, step 0.1），旧五档 pitchLevel 字段保留兼容。
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { apiKey: 'k-test', resourceId: 'seed-tts-2.0', speaker: 'spk-1', sampleRate: 24000, rateLevel: 2, pitch: 1.5, interface: 'http' } } } })
+const fcT6e = fetchState.calls.length
+llmState.responses = [{ text: '音调细粒度转写', finish: 'stop' }]
+const rT6e = await rpc('speak', { sessionId: 's1', messageId: 'm6e' })
+check('ok', rT6e.ok === true, rT6e)
+const bodyT6e = fetchState.calls[fetchState.calls.length - 1].body
+const addT6e = bodyT6e.req_params.additions ? JSON.parse(bodyT6e.req_params.additions) : {}
+check('新字段 pitch=1.5 -> additions.pitch=1.5（连续半音）', addT6e.post_process && addT6e.post_process.pitch === 1.5, addT6e)
+check('外呼 1 次', fetchState.calls.length === fcT6e + 1)
+// pitch=0（正常）不应发送 post_process（沿用旧逻辑：0=正常不发送）
+await rpc('setConfig', { patch: { tts: { volcengine: { pitch: 0 } } } })
+llmState.responses = [{ text: '音调正常转写', finish: 'stop' }]
+const rT6e0 = await rpc('speak', { sessionId: 's1', messageId: 'm6e0' })
+const bodyT6e0 = fetchState.calls[fetchState.calls.length - 1].body
+const addT6e0 = bodyT6e0.req_params.additions ? JSON.parse(bodyT6e0.req_params.additions) : {}
+check('pitch=0（正常）-> 不发送 post_process', !addT6e0.post_process, addT6e0)
+// 纯函数：pitchOf 直接断言（旧 pitchLevel 映射 + 新 pitch 优先）
+check('pitchOf 新字段优先', pitchOf({ pitch: 2.2, pitchLevel: 1 }) === 2.2)
+check('pitchOf 旧 pitchLevel 映射', pitchOf({ pitchLevel: 4 }) === 6 && pitchOf({ pitchLevel: 0 }) === -6)
+check('pitchOf 缺省=0', pitchOf({}) === 0 && pitchOf(undefined) === 0)
 
 section('T6d 指令生成失败 -> 回退预设 instruct（不能因指令坏了就整个播报失败）')
 // 用 m2：它在 T4（browser 模式）下写过缓存、但旧条目没有 instruction 字段——
