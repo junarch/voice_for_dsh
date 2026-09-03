@@ -431,7 +431,8 @@ function apply(ctx) {
   function extractText(sessionId, messageId) {
     const session = sessions.get(sessionId)
     if (!session) return { error: 'session not found: ' + sessionId }
-    const events = session.events
+    // DSH 0.1.2 起不再暴露可变的 session.events；读取稳定快照，避免与追加事件竞争。
+    const events = session.snapshotEvents()
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]
       if (!ev || ev.type !== 'assistant/message') continue

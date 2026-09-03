@@ -1021,9 +1021,7 @@ window.__ModuleLoader__.load({
       }, "voice: auto-speak poller");
 
       // conversation Definition：turn 数据写入 voice.messageId（供 turnTail 徽标定位）
-      if (ctx.conversationEvents && ctx.conversationEvents.register) {
-        ctx.conversationEvents.register(voiceDefinition);
-      }
+      ctx.uiConversation.events.register(voiceDefinition);
 
       // 槽位注册
       ctx.slots.inject("conversation.chat.assistant-actions", () => ctx.slots.register(
@@ -1055,7 +1053,7 @@ window.__ModuleLoader__.load({
       console.log("[voice] client half applied (icons + badge + i18n + resilience)");
     }
 
-    const inject = ["slots", "locale", "conversationEvents"];
+    const inject = ["slots", "locale", "uiConversation"];
     exports.apply = apply;
     exports.inject = inject;
     return module.exports;

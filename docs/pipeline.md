@@ -33,7 +33,7 @@
 - **手动**：每条消息的"朗读"按钮（`conversation.chat.assistant-actions` 槽），对当条消息转写。
 - **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；云 TTS 自动播报还需 `autoSpeakCloudTts=true`（设置页"云TTS"开关，成本门控）。
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
-- **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).events` 按 messageId 定位。
+- **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).snapshotEvents()` 按 messageId 定位。
 
 ### 2.2 系统提示词（风格预设）
 

@@ -17,4 +17,4 @@ export function apply(ctx) {
 }
 
 // 与 lib/client.js 的 inject 保持一致
-export const inject = ['slots', 'locale', 'conversationEvents'];
+export const inject = ['slots', 'locale', 'uiConversation'];

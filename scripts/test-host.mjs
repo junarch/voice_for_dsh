@@ -272,9 +272,7 @@ settingsState.config = {
   },
   stopOnNewTurn: true,
 }
-sessionsState.sessions.s1 = {
-  header: { id: 's1' },
-  events: [
+const sessionEvents = [
     msgEvent('m1', 1, '原始回复内容'),
     msgEvent('m2', 2, '撞顶测试内容'),
     msgEvent('m3', 3, '# 降级测试\n```js\nlet x = 1\n```'),
@@ -293,7 +291,11 @@ sessionsState.sessions.s1 = {
     msgEvent('m17', 21, '兜底完整性测试内容'),
     msgEvent('m6e', 22, '音调细粒度测试内容'),
     msgEvent('m6e0', 23, '音调正常测试内容'),
-  ],
+]
+sessionsState.sessions.s1 = {
+  header: { id: 's1' },
+  // 与 DSH 0.1.2 一致：只暴露快照读取 API，禁止测试意外依赖已移除的 events 字段。
+  snapshotEvents: () => Object.freeze([...sessionEvents]),
 }
 
 /* =====================================================================

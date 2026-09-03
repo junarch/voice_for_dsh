@@ -5,7 +5,7 @@
 
 ## 1. 版本与环境（本机）
 
-- `@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出，路径见 `npm root` 或 `npm cache`，仅作只读参考）
+- `@deepseek-ai/dsh@0.1.2-rc.1`（全局安装包，作为当前最低兼容基线；仅作只读参考）
 - `DSH_HOME`（默认 `~/.dsh`）；web profile：`$DSH_HOME\profiles\web`
 - 用户设置：`$DSH_HOME\settings.yaml`；web 界面 `http://127.0.0.1:3080`
 
@@ -36,6 +36,7 @@ Node API（fetch/fs 等）在正式 bundle 里可直接用（普通 Node 模块�
 
 - `ctx.sessions`（`SessionStore`）：`session/event`（`(session, event)`）等。事件：`turn/start`、
   `turn/end`（`{turn, reason}`）、`assistant/message`（`{turn, step, message, usage?}`）、`user/message` 等。
+  已加载会话的历史须用 `session.snapshotEvents()` 读取；`session.events` 已在 0.1.2 移除。
 - `ctx.llm`（`LlmRuntime`）：`prepareCall(config, signal?)` → `PreparedLlmCall`；`stream(options)` → AsyncIterable<StreamChunk>。
   StreamChunk：`text-delta`、`reasoning-delta`、`block-end`、`usage`、`finish` 等。
 - `ctx.settings`（`SettingsProvider`）：`register(ns, schema, opts)` → `SettingsScope`（`get/watch/update/replace`）；
@@ -87,7 +88,8 @@ RPC 读写（Host 归一后返回，UI 显示 = 实际发声）。
 - 双半插件范例：`dsh-client-ui-deliverables`、`dsh-client-ui-message-feedback`
 - 客户端闭包：`dsh-cordis-client-runner/lib/client.js`（`CLIENT_BUILTIN_INSPECTION`）
 - Host 闭包：`dsh-cordis-host-runner/lib/types/sandbox.d.ts`（`HOST_BUILTIN_INSPECTION`）
-- 会话事件：`dsh-session/lib/types/types.d.ts`（`SessionEventMap`）
+- 会话事件：`dsh-session/lib/types/types.d.ts`（`SessionEventMap`）与 `lib/types/index.d.ts`
+  （`snapshotEvents()`）
 - LLM：`dsh-llm/lib/types/index.d.ts`（`prepareCall`/`stream`）、`types.d.ts`（`GenerateOptions`）
 - 设置：`dsh-settings`（`SettingsScope`）、`dsh-settings-file`
 - 槽位契约：`dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts`、`dsh-client-ui-settings/.../slots.d.ts`

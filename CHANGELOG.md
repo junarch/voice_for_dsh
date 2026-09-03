@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 适配 DSH `0.1.2-rc.1`：Client 的会话 Definition 注册由已移除的
+  `conversationEvents` 迁移到 `uiConversation.events`，恢复插件启动；Host 历史消息读取由
+  已移除的 `session.events` 迁移到 `session.snapshotEvents()`，恢复手动与自动朗读。
+
 ### 安全加固
 
 - `custom` 网关端点强制 `https://`/`wss://`（避免 apiKey 明文传输），缺 URL 时报错；
