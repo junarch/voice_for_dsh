@@ -11,7 +11,7 @@
 ## 技术栈与关键事实（先读这里，避免走弯路）
 
 - **目标平台**：dsh web（`dsh --profile web`），运行于 `http://127.0.0.1:3080`。
-- **DSH 版本**：`@deepseek-ai/dsh@0.1.0-rc.6`（npx 缓存检出，路径用 `npm root` 定位，只读）。
+- **DSH 版本**：`@deepseek-ai/dsh@0.1.2-rc.1`（npx 缓存检出，路径用 `npm root` 定位，只读）。
 - **DSH_HOME**：默认 `~/.dsh`；web profile：`$DSH_HOME\profiles\web`
   （bundle 列表在 `profiles\web\package.json` 的 `dsh.profile.bundles`）。
 - **用户设置**：`$DSH_HOME\settings.yaml`（含本机私有 provider 配置，勿提交）。
