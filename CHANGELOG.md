@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-03
+
 ### Fixed
 
 - 适配 DSH `0.1.2-rc.1`：Client 的会话 Definition 注册由已移除的
