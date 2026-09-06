@@ -197,11 +197,12 @@ const ctx = {
   on: (name, fn) => { if (!eventListeners.has(name)) eventListeners.set(name, []); eventListeners.get(name).push(fn) },
 }
 
-// 替身 6：fetch（网络电话）。插件调火山 TTS 用的是全局 fetch；
-// 我们把它整个换成假货--不联网、立刻返回一小段假音频，并记下"打了什么电话、说了什么"。
+// 替身 6：fetch（网络电话）。插件调火山 TTS / 本地 Kokoro 用的是全局 fetch；
+// 我们把它整个换成假货--不联网、立刻返回假音频，并记下"打了什么电话、说了什么"。
 // 这就是为什么本测试零花费：外呼根本没发生，但请求体会被完整记下来供断言。
 const realFetch = globalThis.fetch
 const fetchState = { calls: [], nextOk: true }
+const LOCAL_TTS_URL = 'http://127.0.0.1:8880/v1/audio/speech' // 与 schema 默认值一致；URL 含此串即路由到 local 假响应
 function fakeTtsResponse() {
   // 伪造"分块 JSON 行"响应：两段 base64 音频（解码后是 'ABC'/'DEF'）+ 结束帧。
   const enc = new TextEncoder()
@@ -222,10 +223,17 @@ function fakeTtsResponse() {
     text: async () => '',
   }
 }
+function fakeLocalWavResponse() {
+  // 伪造本地 Kokoro 服务响应：合法 WAV 头（'RIFF' 魔数）+ 占位数据，经 arrayBuffer() 消费。
+  const bytes = new Uint8Array(64)
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0) // 'RIFF'
+  return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer, text: async () => 'mock wav' }
+}
 globalThis.fetch = async (url, init) => {
-  fetchState.calls.push({ url: String(url), body: init && init.body ? JSON.parse(init.body) : null })
-  if (fetchState.nextOk) return fakeTtsResponse()
-  return { ok: false, status: 500, body: null, text: async () => 'mock tts boom' }
+  const isLocal = String(url).includes('127.0.0.1:8880')
+  fetchState.calls.push({ url: String(url), local: isLocal, body: init && init.body ? JSON.parse(init.body) : null })
+  if (!fetchState.nextOk) return { ok: false, status: 500, body: null, text: async () => 'mock tts boom', arrayBuffer: async () => new ArrayBuffer(0) }
+  return isLocal ? fakeLocalWavResponse() : fakeTtsResponse()
 }
 
 // ---------- 把真插件"装配"到替身上，并做 HTTP 请求的仿真驱动 ----------
@@ -935,6 +943,59 @@ llmState.responses = []
 const r19 = await rpc('speak', { sessionId: 's1', messageId: 'm17' })
 check('兜底后缓存为完整转写（cached=true 且内容完整）', r19.ok === true && r19.cached === true && r19.transcript === '兜底完整转写内容。', { ok: r19.ok, cached: r19.cached, t: r19.transcript })
 globalThis.WebSocket = MockVolcWS
+
+section('T20 本地 TTS provider（local：英文不变式 / 零额外 LLM / 免费门控 / WAV / 失败降级）')
+// —— 引擎归一（voice-compat 单测）——
+check('ttsProviderOf：local 识别为 local', ttsProviderOf({ tts: { provider: 'local' } }) === 'local')
+check('ttsProviderOf：旧值 openai-compatible 归一 browser', ttsProviderOf({ tts: { provider: 'openai-compatible' } }) === 'browser')
+check('ttsProviderOf：未知值归一 browser', ttsProviderOf({ tts: { provider: 'whatever' } }) === 'browser')
+// meta 暴露 Kokoro 音色清单（设置页下拉数据源）
+check('meta 带 kokoroVoices 精选清单', (await rpc('meta')).kokoroVoices.some((v) => v.id === 'af_heart'))
+// —— 切到 local：转写 prompt 含英文不变式；只调转写 LLM、零情感指令调用；合成走本地 WAV ——
+// （测试 mock 不套 schema 默认值，显式补 tts.local；真机由 schema 默认补齐）
+await rpc('setConfig', { patch: { language: 'auto', transcribe: { stylePreset: 'standard' }, tts: { provider: 'local', local: { baseUrl: LOCAL_TTS_URL, voice: 'af_heart', speed: 1, timeoutMs: 30000 } } } })
+fetchState.calls = []
+llmState.responses = [{ text: 'Local English transcript.', finish: 'stop' }]
+const instrCount20 = llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length
+const calls20 = llmState.calls.length
+const r20 = await rpc('speak', { sessionId: 's1', messageId: 'm1' })
+const sys20 = llmState.streamOpts[llmState.streamOpts.length - 1] && llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('speak ok 且挂了音频路由', r20.ok === true && typeof r20.audioUrl === 'string' && r20.audioUrl.startsWith('/voice/audio/'), r20)
+check('转写 prompt 含英文不变式（中文也转写为英文）', !!sys20 && sys20.includes('English') && sys20.includes('不得输出中文'), sys20)
+check('零情感指令 LLM 调用（local 无 context_texts 通道）', llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length === instrCount20)
+check('LLM 只调 1 次（转写；重播零新增由 T3/T18 保证）', llmState.calls.length === calls20 + 1, llmState.calls.length - calls20)
+const localCall = fetchState.calls.find((c) => c.local)
+check('本地请求打到 baseUrl，OpenAI 兼容字段正确', !!localCall && localCall.url.includes('/v1/audio/speech') && localCall.body.model === 'kokoro' && localCall.body.voice === 'af_heart' && localCall.body.response_format === 'wav' && localCall.body.speed === 1, localCall)
+check('本地请求 input = 英文转写稿（净化后）', localCall && localCall.body.input === 'Local English transcript.', localCall && localCall.body.input)
+const wav20 = await fetchAudio(r20.audioUrl.replace('/voice/audio/', ''))
+check('音频一次性路由返回 WAV（RIFF 魔数，取一次即删）', wav20.code === 200 && wav20.body && wav20.body.slice(0, 4).toString('ascii') === 'RIFF')
+check('同一路由第二次取 404（一次性）', (await fetchAudio(r20.audioUrl.replace('/voice/audio/', ''))).code === 404)
+// —— 免费引擎不受成本门控：autoSpeak=true + autoSpeakCloudTts=false 仍自动播报 ——
+sessionEvents.push(msgEvent('m18', 30, '本地自动播报内容'))
+fire({ type: 'turn/start', data: { turn: 30 } })
+fire(msgEvent('m18', 30, '本地自动播报内容'))
+fire({ type: 'turn/end', data: { turn: 30, reason: { kind: 'completed' } } })
+const pLocal20 = await rpc('pollSpeak')
+check('local 免费：autoSpeakCloudTts=false 不拦截自动播报', pLocal20.pending && pLocal20.pending.messageId === 'm18', pLocal20)
+check('pending 只消费一次', (await rpc('pollSpeak')).pending === null)
+// —— 本地服务失败：ttsError 可见（客户端降级系统 TTS），不静默 ——
+fetchState.nextOk = false
+llmState.responses = [{ text: 'Failure path transcript.', finish: 'stop' }]
+const r20b = await rpc('speak', { sessionId: 's1', messageId: 'm2' })
+check('本地服务 500 → ttsError 可见、audioUrl 为空', r20b.ok === true && r20b.audioUrl === undefined && typeof r20b.ttsError === 'string' && r20b.ttsError.includes('500'), r20b.ttsError)
+check('转写稿仍正常返回（失败只在合成层）', r20b.transcript === 'Failure path transcript.', r20b.transcript)
+fetchState.nextOk = true
+// —— 降级直读（中文原文）不送 local：客户端走系统 TTS ——
+llmState.failAll = true
+const r20c = await rpc('speak', { sessionId: 's1', messageId: 'm3' })
+check('降级直读 degraded=true 且不产生音频路由（local 只读英文转写稿）', r20c.ok === true && r20c.degraded === true && r20c.audioUrl === undefined && r20c.ttsError === undefined, { d: r20c.degraded, a: r20c.audioUrl, e: r20c.ttsError })
+llmState.failAll = false
+// —— preview：local 固定英文样例 ——
+const pv20 = await rpc('preview')
+const pvLocalCall = fetchState.calls[fetchState.calls.length - 1]
+check('preview 走本地并播英文样例', pv20.ok === true && pv20.mode === 'audio' && pvLocalCall.local === true && String(pvLocalCall.body.input).startsWith('Hi, this is a preview'), { pv: pv20, input: pvLocalCall.body && pvLocalCall.body.input })
+// 恢复 browser（测试以免费引擎收尾，保持无副作用）
+await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })
 
 // ---------- 收尾 ----------
 // 善后三件事：恢复真 fetch（否则这个进程里再联网会打到假货）、删临时目录、交成绩单。

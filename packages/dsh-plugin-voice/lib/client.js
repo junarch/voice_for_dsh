@@ -36,14 +36,18 @@ window.__ModuleLoader__.load({
       "sec.basic": "基本配置", "sec.transcribe": "转写（口语化）",
       "row.transcribeEnabled": "需要转写模型",
       "tts.section.browser": "播报引擎 · 系统 TTS（免费）", "tts.section.volcengine": "播报引擎 · 豆包 TTS",
+      "tts.section.local": "播报引擎 · 本地 Kokoro（英文播报）",
       "transcribe.hint.on": "开=LLM 口语化转写（风格/情绪/自动跳过代码与表格）",
       "transcribe.hint.off": "关=不调模型，输出什么直接读；表格和代码块自动跳过",
       "group.auth": "鉴权", "group.pronounce": "发音",
-      "row.autoSpeak": "自动播报", "row.cloudTts": "云TTS", "row.language": "语种/方言",
+      "row.autoSpeak": "自动播报", "row.engine": "播报引擎", "row.language": "语种/方言",
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
       "temperature.hint": " 值越大，转写越有创意、越发散，但准确度越低；越小越忠实原文（默认 0.3）/ higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "cloudTts.hint": " 勾选=用豆包云 TTS（按字符计费，付费 API Key 生效）；取消=免费系统 TTS，豆包配置隐藏 / checked = Doubao cloud TTS (per-char billing); unchecked = free system TTS, Doubao config hidden",
+      "engine.hint": " 系统=免费离线；豆包=付费云 TTS（自动播报受“云TTS”成本门控）；本地=Kokoro 英文播报（免费离线，需先启动本地服务） / system=free; Doubao=paid; local=Kokoro English (free, needs local server)",
+      "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（英文·免费）",
+      "row.localBaseUrl": "服务地址", "row.localVoice": "音色 voice", "row.localSpeed": "语速 speed",
+      "local.hint": "中文回复先转写为英文口语再朗读（数据不出本机）；需先部署并启动本地服务：pwsh scripts/setup-local-tts.ps1（自检 GET /health），详见 docs/local-tts.md",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
@@ -73,14 +77,18 @@ window.__ModuleLoader__.load({
       "sec.basic": "General", "sec.transcribe": "Transcription",
       "row.transcribeEnabled": "Use transcription model",
       "tts.section.browser": "Engine · System TTS (free)", "tts.section.volcengine": "Engine · Doubao TTS",
+      "tts.section.local": "Engine · Local Kokoro (English)",
       "transcribe.hint.on": "On = LLM spoken-style rewrite (style/emotion, code & tables auto-skipped)",
       "transcribe.hint.off": "Off = read the text as-is; tables and code blocks are skipped",
       "group.auth": "Auth", "group.pronounce": "Pronunciation",
-      "row.autoSpeak": "Auto-read", "row.cloudTts": "Cloud TTS", "row.language": "Language/Dialect",
+      "row.autoSpeak": "Auto-read", "row.engine": "TTS engine", "row.language": "Language/Dialect",
       "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
       "temperature.hint": " Higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "cloudTts.hint": " Checked = Doubao cloud TTS (per-char billing, paid API key active); unchecked = free system TTS, Doubao config hidden",
+      "engine.hint": " System = free & offline; Doubao = paid cloud TTS (auto-read cost-gated); Local = Kokoro English (free & offline, start the local server first)",
+      "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (English · free)",
+      "row.localBaseUrl": "Server URL", "row.localVoice": "Voice", "row.localSpeed": "Speed",
+      "local.hint": "Chinese replies are transcribed into spoken English, then read locally (data never leaves this machine). Deploy & start the server first: pwsh scripts/setup-local-tts.ps1 (health check: GET /health); see docs/local-tts.md",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
@@ -139,6 +147,13 @@ window.__ModuleLoader__.load({
         { id: "playful", name: "俏皮", prompt: "" },
       ],
       rateStops: ["很慢", "稍慢", "正常", "稍快", "很快"],
+      kokoroVoices: [
+        { id: "af_heart", name: "Heart（美·女）" }, { id: "af_bella", name: "Bella（美·女）" },
+        { id: "af_nicole", name: "Nicole（美·女）" }, { id: "af_sarah", name: "Sarah（美·女）" },
+        { id: "am_adam", name: "Adam（美·男）" }, { id: "am_fenrir", name: "Fenrir（美·男）" },
+        { id: "am_michael", name: "Michael（美·男）" }, { id: "bf_emma", name: "Emma（英·女）" },
+        { id: "bm_george", name: "George（英·男）" },
+      ],
     };
 
     // ---------- 音色 ↔ 语种/方言 兼容矩阵（与 Host lib/voice-compat.js 同步的内联镜像，client 无 import） ----------
@@ -757,7 +772,11 @@ window.__ModuleLoader__.load({
       const presets = m.stylePresets || [];
       const languages = m.languages || [];
       const voices = m.voices || [];
+      const kokoroVoices = m.kokoroVoices || [];
       const speakerKnown = voices.some((v) => v.id === cfg.tts.volcengine.speaker);
+      // local 子配置（旧 Host/缓存无该对象时补默认，避免 UI 读空崩溃）
+      if (!cfg.tts.local) cfg.tts.local = { baseUrl: "http://127.0.0.1:8880/v1/audio/speech", voice: "af_heart", speed: 1, timeoutMs: 30000 };
+      const kokoroVoiceKnown = kokoroVoices.some((v) => v.id === cfg.tts.local.voice);
       // 转写模型路由下拉数据（Host routeInfo 提供；未就绪时退化为文本输入）
       const providerList = info && Array.isArray(info.providers) && info.providers.length ? info.providers : null;
       const modelList = info && Array.isArray(info.models) && info.models.length ? info.models : null;
@@ -798,18 +817,19 @@ window.__ModuleLoader__.load({
         setCfg(next);
         setMsg("");
       }
-      /** 云TTS 复选框 = 引擎总开关（父配置）：勾选→豆包（付费 API Key 生效）、取消→免费系统 TTS；
-       * autoSpeakCloudTts 同步写入，保持 Host 成本门控与 UI 一致；取消勾选时豆包子配置不再显示。 */
-      function onCloudTtsChange(v) {
+      /** 播报引擎三选一（引擎总开关）：browser=免费系统 TTS；volcengine=豆包（付费 API Key 生效）；
+       * local=本地 Kokoro 英文播报（免费）。切到豆包时 autoSpeakCloudTts 同步写入 true
+       * （Host 成本门控与 UI 一致）；切到免费引擎写 false。 */
+      function onEngineChange(v) {
         const next = JSON.parse(JSON.stringify(cfg));
-        next.tts.provider = v ? "volcengine" : "browser";
-        next.autoSpeakCloudTts = !!v;
+        next.tts.provider = v;
+        next.autoSpeakCloudTts = v === "volcengine";
         setCfg(next);
         setMsg("");
       }
 
-      // TTS 引擎归一：只有 volcengine 视为豆包，其余（含旧值 openai-compatible）按系统 TTS 处理
-      const ttsEngine = cfg.tts.provider === "volcengine" ? "volcengine" : "browser";
+      // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro；其余（含旧值 openai-compatible）按系统 TTS 处理
+      const ttsEngine = cfg.tts.provider === "volcengine" || cfg.tts.provider === "local" ? cfg.tts.provider : "browser";
 
       return React.createElement("div", { className: "dsh-voice-settings" },
         React.createElement("h2", null, t("settings.title")),
@@ -863,9 +883,12 @@ window.__ModuleLoader__.load({
         React.createElement(Row, { label: t("row.autoSpeak") },
           React.createElement(CheckInput, { value: cfg.autoSpeak, onChange: (v) => setField("autoSpeak", v) }),
           React.createElement("span", { className: "dsh-voice-dim" }, " 每轮结束自动转写并朗读 / auto read each turn")),
-        React.createElement(Row, { label: t("row.cloudTts") },
-          React.createElement(CheckInput, { value: ttsEngine === "volcengine", onChange: onCloudTtsChange }),
-          React.createElement("span", { className: "dsh-voice-dim" }, t("cloudTts.hint"))),
+        React.createElement(Row, { label: t("row.engine") },
+          React.createElement(SelectInput, { value: ttsEngine, onChange: onEngineChange },
+            React.createElement("option", { value: "browser" }, t("engine.browser")),
+            React.createElement("option", { value: "volcengine" }, t("engine.volcengine")),
+            React.createElement("option", { value: "local" }, t("engine.local"))),
+          React.createElement("span", { className: "dsh-voice-dim" }, t("engine.hint"))),
 
         // —— 播报引擎 · 系统 TTS（免费）——
         ttsEngine === "browser" ? React.createElement(React.Fragment, null,
@@ -877,7 +900,28 @@ window.__ModuleLoader__.load({
           React.createElement(Row, { label: t("row.voiceName") },
             React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }))) : null,
 
-        // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音；仅有"云TTS"勾选时显示）——
+        // —— 播报引擎 · 本地 Kokoro（英文播报，免费；需先启动本地服务）——
+        ttsEngine === "local" ? React.createElement(React.Fragment, null,
+          React.createElement("h3", null, t("tts.section.local")),
+          React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
+          React.createElement(Row, { label: t("row.localBaseUrl") },
+            React.createElement(TextInput, { value: cfg.tts.local.baseUrl, onChange: (v) => setField("tts.local.baseUrl", v), placeholder: "http://127.0.0.1:8880/v1/audio/speech" })),
+          React.createElement(Row, { label: t("row.localVoice") },
+            React.createElement(SelectInput, {
+              value: kokoroVoiceKnown ? cfg.tts.local.voice : VOICE_CUSTOM,
+              onChange: (v) => { if (v !== VOICE_CUSTOM) setField("tts.local.voice", v); },
+            },
+              kokoroVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+              React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
+            (kokoroVoiceKnown ? null : React.createElement(TextInput, {
+              value: cfg.tts.local.voice,
+              onChange: (v) => setField("tts.local.voice", v),
+              placeholder: "af_heart",
+            }))),
+          React.createElement(Row, { label: t("row.localSpeed") },
+            React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" }))) : null,
+
+        // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音；仅选择豆包时显示）——
         ttsEngine === "volcengine" ? React.createElement(React.Fragment, null,
           React.createElement("h3", null, t("tts.section.volcengine")),
           React.createElement("h4", null, t("group.auth")),

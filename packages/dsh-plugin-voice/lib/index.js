@@ -13,7 +13,8 @@
  *  - TTS Provider 适配层：browser（Client speechSynthesis 透传）/ volcengine
  *    （HTTP 单向 chunked JSON 行；语速/音调走数值 speech_rate/pitch 参数，
  *    text 一律剥离 [#...] 指令标签--该接口不解析会照读，探针实测，见
- *    docs/pipeline.md §7 与 scripts/tts-probe.mjs）
+ *    docs/pipeline.md §7 与 scripts/tts-probe.mjs）/ local（本地 Kokoro-82M v1.0，
+ *    OpenAI 兼容 /v1/audio/speech，英文播报不变式，见 docs/pipeline.md §4.3）
  *  - 经 ctx.webServer 暴露 /voice/api/* JSON RPC 与 /voice/audio/<id> 音频一次性路由
  *
  * 实测要点（docs/testing.md §1）：
@@ -90,6 +91,20 @@ const VOLC_VOICES = [
   { id: 'en_male_tim_uranus_bigtts', name: 'Tim（英·男）' },
   { id: 'en_female_dacey_uranus_bigtts', name: 'Dacey（英·女）' },
   { id: 'en_female_stokie_uranus_bigtts', name: 'Stokie（英·女）' },
+]
+
+/** 本地 Kokoro-82M v1.0 精选音色（af=美式女/男、bf/bm=英式女/男；全英文）。
+ * 设置页下拉 + 允许自定义输入；完整 26 音色清单见 hexgrad/Kokoro-82M VOICES.md。 */
+const KOKORO_VOICES = [
+  { id: 'af_heart', name: 'Heart（美·女）' },
+  { id: 'af_bella', name: 'Bella（美·女）' },
+  { id: 'af_nicole', name: 'Nicole（美·女）' },
+  { id: 'af_sarah', name: 'Sarah（美·女）' },
+  { id: 'am_adam', name: 'Adam（美·男）' },
+  { id: 'am_fenrir', name: 'Fenrir（美·男）' },
+  { id: 'am_michael', name: 'Michael（美·男）' },
+  { id: 'bf_emma', name: 'Emma（英·女）' },
+  { id: 'bm_george', name: 'George（英·男）' },
 ]
 
 /**
@@ -245,7 +260,7 @@ const VoiceSettingsSchema = z.object({
     timeoutMs: z.number().default(60000), // 单次转写超时；超时/失败降级为直读
   }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }),
   tts: z.object({
-    provider: z.string().default('browser'), // TTS 引擎：volcengine=豆包；其余（含旧值 openai-compatible）归一为 browser
+    provider: z.string().default('browser'), // TTS 引擎：browser（免费系统）| volcengine（豆包付费）| local（本地 Kokoro 英文，免费）；其余旧值归一为 browser
     browser: z.object({
       rate: z.number().default(1),
       pitch: z.number().default(1),
@@ -271,10 +286,18 @@ const VoiceSettingsSchema = z.object({
       useSectionId: z.boolean().default(true),   // additions.section_id（跨次合成语气连续；无 UI，默认开）
       expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强；无 UI，默认关）
     }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
+    local: z.object({
+      // 本地 Kokoro-82M v1.0（英文播报，免费；docs/pipeline.md §4.3 / docs/local-tts.md）
+      baseUrl: z.string().default('http://127.0.0.1:8880/v1/audio/speech'), // OpenAI 兼容端点（允许 http：仅本机回环、无密钥）
+      voice: z.string().default('af_heart'),   // KOKORO_VOICES 精选清单 + 允许自定义
+      speed: z.number().default(1),            // 语速 [0.5, 2]
+      timeoutMs: z.number().default(30000),    // 单次合成超时；失败 → ttsError，客户端降级系统 TTS
+    }).default({ baseUrl: 'http://127.0.0.1:8880/v1/audio/speech', voice: 'af_heart', speed: 1, timeoutMs: 30000 }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
+    local: { baseUrl: 'http://127.0.0.1:8880/v1/audio/speech', voice: 'af_heart', speed: 1, timeoutMs: 30000 },
   }),
   stopOnNewTurn: z.boolean().default(true),
 })
@@ -398,8 +421,8 @@ function apply(ctx) {
       try { cfg = scope.get() } catch { return }
       if (!cfg.autoSpeak) return
       if (kind !== 'completed' && kind !== 'max-tokens') return
-      // 云 TTS 成本门控：未显式允许时自动播报不碰云 TTS
-      if (ttsProviderOf(cfg) !== 'browser' && !cfg.autoSpeakCloudTts) {
+      // 云 TTS 成本门控：未显式允许时自动播报不碰豆包（付费）；local 本地合成免费，不受限
+      if (ttsProviderOf(cfg) === 'volcengine' && !cfg.autoSpeakCloudTts) {
         console.log('[voice] auto-speak skipped: cloud tts gated (autoSpeakCloudTts=false)')
         return
       }
@@ -453,8 +476,15 @@ function apply(ctx) {
     if (preset === 'custom') base = cfg.transcribe.prompt || TRANSCRIBE_SYSTEM
     else { const hit = STYLE_PRESETS.find((p) => p.id === preset); base = (hit && hit.prompt) || TRANSCRIBE_SYSTEM }
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
+    const provider = ttsProviderOf(cfg)
+    // local 英文不变式（docs/pipeline.md §2.2/§4.3）：无论原文语言，转写稿固定英文口语。
+    // local 定位为"英文播报"引擎；voice.language 的音色联动只作用于豆包，对 local 不生效。
+    if (provider === 'local') {
+      base += '\n附加要求（最高优先级）：无论原文是什么语言，口播稿必须用英文（English）输出——中文内容也要转写为地道、自然的英文口语，完整保留关键信息、结论与数字，不得输出中文。'
+      return base
+    }
     // 语种/方言属于豆包发音专属：仅豆包 TTS 时叠加转写语言要求（系统 TTS 按原文即可）
-    if (lang && lang.id !== 'auto' && ttsProviderOf(cfg) === 'volcengine') {
+    if (lang && lang.id !== 'auto' && provider === 'volcengine') {
       base += '\n附加要求：无论原文是什么语言，口播稿必须用' + lang.instruct + '输出'
         + (lang.dialect ? '（用字保持中文书写习惯，语汇贴近该方言的口语）' : '') + '。'
     }
@@ -612,10 +642,47 @@ function apply(ctx) {
     return Buffer.concat(parts.map((b64) => Buffer.from(b64, 'base64')))
   }
 
+  /**
+   * 本地 Kokoro 合成（OpenAI 兼容 /v1/audio/speech，docs/pipeline.md §4.3）。
+   * 只接英文转写稿（英文不变式，§2.2）；返回完整 WAV Buffer。
+   * 允许 http：仅本机回环、无密钥（不适用豆包 custom 网关的 https 强制）。
+   */
+  async function synthesizeLocal(text, cfg) {
+    const v = cfg.tts.local
+    if (!v || !v.baseUrl) throw new Error('local tts baseUrl 未配置（voice.tts.local.baseUrl，部署见 docs/local-tts.md）')
+    const timeoutMs = v.timeoutMs || 30000
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), timeoutMs)
+    try {
+      const res = await fetch(v.baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'kokoro', input: text, voice: v.voice || 'af_heart', speed: v.speed ?? 1, response_format: 'wav' }),
+        signal: ac.signal,
+      })
+      if (!res.ok) throw new Error('local tts http ' + res.status + ' ' + (await res.text().catch(() => '')).slice(0, 200))
+      const buf = Buffer.from(await res.arrayBuffer())
+      if (!buf.length) throw new Error('local tts returned no audio')
+      return buf
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw new Error('local tts timeout after ' + timeoutMs + 'ms（本地服务未启动或合成超时，见 docs/local-tts.md）')
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** 合成并挂一次性音频路由；返回 '/voice/audio/<id>'。cmd = 已组装的完整语音指令（仅豆包用）。 */
   async function synthToRoute(text, cfg, cmd, opts = {}) {
-    const buf = await synthesizeVolcengine(text, cfg, cmd, opts)
-    const id = storeAudio(buf, 'audio/mpeg')
+    let buf, mime
+    if (ttsProviderOf(cfg) === 'local') {
+      buf = await synthesizeLocal(text, cfg)
+      mime = 'audio/wav'
+    } else {
+      buf = await synthesizeVolcengine(text, cfg, cmd, opts)
+      mime = 'audio/mpeg'
+    }
+    const id = storeAudio(buf, mime)
     return '/voice/audio/' + id
   }
 
@@ -1163,7 +1230,8 @@ function apply(ctx) {
       if (!plain) return { ok: false, error: 'message text empty' }
       const v = cfg.tts.volcengine
       let audioUrl, ttsError
-      if (ttsProviderOf(cfg) !== 'browser') {
+      // local 只合成英文转写稿（§4.3）：直读稿是原文（可能是中文），不送 local，客户端走系统 TTS
+      if (ttsProviderOf(cfg) === 'volcengine') {
         try {
           audioUrl = await synthToRoute(plain, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
         } catch (error) { ttsError = String(error && error.message || error) }
@@ -1307,11 +1375,12 @@ function apply(ctx) {
     transcript = sanitizeForSpeech(cleanTranscript)
     const extractedCmd = cmds.length ? cmds[0] : '' // 官方仅第一个值有效
 
-    // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：仅云 TTS + 转写开启 + 非降级。
+    // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：仅豆包（context_texts 是豆包专属，
+    // local 无此通道，跳过 = 零额外 LLM）+ 转写开启 + 非降级。
     // 结果随转写稿一起缓存：同一消息重播零额外 LLM 调用（指令完全用缓存，绝不再生成；
     // 缓存缺指令=初次本就没生成，重播同样不补——"重播不重新生成任何东西"）。
     let generated = null // { instruction, emotion, intensity } | null
-    if (route && ttsProviderOf(cfg) !== 'browser' && cfg.transcribe.enabled !== false && !degraded) {
+    if (route && ttsProviderOf(cfg) === 'volcengine' && cfg.transcribe.enabled !== false && !degraded) {
       if (fromCache && cached) {
         generated = (typeof cached.instruction === 'string' && cached.instruction)
           ? { instruction: cached.instruction, emotion: cached.emotion || '', intensity: cached.intensity || 4 }
@@ -1336,17 +1405,22 @@ function apply(ctx) {
     }
     const voiceInstruction = buildVoiceInstruction(cfg, extractedCmd, generated)
 
-    // 服务端缓存（cache_config）：初次合成写入（供 1h 内重播命中免费）；重播仅参数指纹未变才命中（防串音）；
-    // regen 绝不。旧缓存无 ttsFp → 不命中（无法确认参数未变，宁可不省这钱也不串音）。
+    // 服务端缓存（cache_config）：豆包语义（§4.5）；local 本地合成零边际成本，直接跳过。
+    // 初次合成写入（供 1h 内重播命中免费）；重播仅参数指纹未变才命中（防串音）；regen 绝不。
+    // 旧缓存无 ttsFp → 不命中（无法确认参数未变，宁可不省这钱也不串音）。
     const curFp = ttsFpOf(cfg, cfg.tts.volcengine)
-    const useServerCache = ttsProviderOf(cfg) !== 'browser' && !opts.force && transcript
+    const useServerCache = ttsProviderOf(cfg) === 'volcengine' && !opts.force && transcript
       && ((fromCache && cached) ? cached.ttsFp === curFp && serverCacheAllowed(transcript, curFp)
         : serverCacheAllowed(transcript, curFp))
 
-    // TTS：browser 透传 Client speechSynthesis；云 provider 在 Host 合成后挂一次性音频路由
+    // TTS：browser 透传 Client speechSynthesis；豆包/本地在 Host 合成后挂一次性音频路由。
+    // local 只合成英文转写稿（§4.3）：降级直读稿是原文（可能是中文）→ 不送 local，
+    // audioUrl 留空让客户端走系统 TTS 兜底（中文可正常朗读）。
+    const wantHostTts = ttsProviderOf(cfg) === 'volcengine'
+      || (ttsProviderOf(cfg) === 'local' && cfg.transcribe.enabled !== false && !degraded)
     let audioUrl
     let ttsError
-    if (ttsProviderOf(cfg) !== 'browser') {
+    if (wantHostTts) {
       try {
         audioUrl = await synthToRoute(transcript, cfg, voiceInstruction, {
           sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? stableHashId(sessionId) : '',
@@ -1356,7 +1430,7 @@ function apply(ctx) {
         })
         if (useServerCache) serverCacheMark(transcript, curFp)
       } catch (error) {
-        console.error('[voice] cloud tts failed:', error)
+        console.error('[voice] tts synthesis failed:', error)
         ttsError = String(error && error.message || error) // Client 端降级 speechSynthesis
       }
     }
@@ -1385,6 +1459,7 @@ function apply(ctx) {
     meta: async () => ({
       ok: true,
       voices: VOLC_VOICES,
+      kokoroVoices: KOKORO_VOICES,
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
@@ -1450,8 +1525,9 @@ function apply(ctx) {
         return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
       }
       try {
-        const en = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
-        const text = (en && en.id === 'en') ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+        // 试听样例语言：local 固定英文播报 → 英文样例；豆包跟随 voice.language（固定 en → 英文）
+        const text = ttsProviderOf(cfg) === 'local' ? PREVIEW_SAMPLE_EN
+          : (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).id === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
         const audioUrl = await synthToRoute(text, cfg, '', { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
         return { ok: true, mode: 'audio', audioUrl }
       } catch (error) {

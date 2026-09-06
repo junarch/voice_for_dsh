@@ -54,12 +54,13 @@ export function pitchOf(v) {
 }
 
 /**
- * 归一化 TTS 引擎：只有 'volcengine' 视为豆包；其余（含旧值 openai-compatible）
- * 一律按 'browser' 处理——容忍存量配置里的已废弃值，避免把未知 provider 当云 TTS。
+ * 归一化 TTS 引擎：'volcengine'=豆包云（付费），'local'=本地 Kokoro（免费，英文播报）；
+ * 其余（含旧值 openai-compatible）一律按 'browser' 处理——容忍存量配置里的已废弃值，
+ * 避免把未知 provider 当云 TTS。
  */
 export function ttsProviderOf(cfg) {
   const p = cfg && cfg.tts && cfg.tts.provider
-  return p === 'volcengine' ? 'volcengine' : 'browser'
+  return p === 'volcengine' ? 'volcengine' : p === 'local' ? 'local' : 'browser'
 }
 
 export function isEnVoice(speaker) {
