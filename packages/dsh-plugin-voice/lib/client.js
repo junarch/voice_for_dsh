@@ -48,6 +48,8 @@ window.__ModuleLoader__.load({
       "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（英文·免费）",
       "row.localBaseUrl": "服务地址", "row.localVoice": "音色 voice", "row.localSpeed": "语速 speed",
       "local.hint": "中文回复先转写为英文口语再朗读（数据不出本机）；需先部署并启动本地服务：pwsh scripts/setup-local-tts.ps1（自检 GET /health），详见 docs/local-tts.md",
+      "local.needTranscribe": "⚠ 本地引擎固定英文播报：需开启上方「需要转写模型」，否则回退系统 TTS 朗读中文原文",
+      "toast.fallback": "TTS 失败，已回退系统朗读",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
@@ -89,6 +91,8 @@ window.__ModuleLoader__.load({
       "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (English · free)",
       "row.localBaseUrl": "Server URL", "row.localVoice": "Voice", "row.localSpeed": "Speed",
       "local.hint": "Chinese replies are transcribed into spoken English, then read locally (data never leaves this machine). Deploy & start the server first: pwsh scripts/setup-local-tts.ps1 (health check: GET /health); see docs/local-tts.md",
+      "local.needTranscribe": "⚠ The local engine reads English only: enable \"Use transcription model\" above, otherwise it falls back to the system voice reading the original text",
+      "toast.fallback": "TTS failed; fell back to system voice",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
@@ -421,11 +425,35 @@ window.__ModuleLoader__.load({
       if (h && h.onError) h.onError(reason);
     }
 
+    // ---------- shell.overlay toast（回退/降级提示：不打断，6s 自动消失） ----------
+    var toastState = { msg: null };
+    var toastListeners = new Set();
+    var toastTimer = null;
+    function showToast(msg) {
+      if (!msg) return;
+      toastState.msg = String(msg);
+      toastListeners.forEach((f) => f());
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastState.msg = null; toastListeners.forEach((f) => f()); }, 6000);
+    }
+    function VoiceToast() {
+      const pair = React.useState(toastState.msg);
+      const setMsg = pair[1];
+      React.useEffect(() => {
+        const refresh = () => setMsg(toastState.msg);
+        toastListeners.add(refresh);
+        return () => { toastListeners.delete(refresh); };
+      }, []);
+      if (!pair[0]) return null;
+      return React.createElement("div", { className: "dsh-voice-toast", role: "status" }, pair[0]);
+    }
+
     /** 统一播报入口：双向流流式 > 云 TTS 音频 > 浏览器 speechSynthesis；ttsError/degraded/warn 降级告警。 */
     function playResult(res, hooks) {
       stopPlaybackOnly();
-      if (res && res.ttsError) console.warn("[voice] cloud tts failed, fallback to browser speech:", res.ttsError);
-      if (res && res.degraded) console.warn("[voice]", t("read.degraded"));
+      if (res && res.notice) { console.warn("[voice]", res.notice); showToast(res.notice); }
+      if (res && res.ttsError) { console.warn("[voice] tts failed, fallback to browser speech:", res.ttsError); showToast(t("toast.fallback") + "：" + String(res.ttsError).slice(0, 140)); }
+      if (res && res.degraded) { console.warn("[voice]", t("read.degraded")); showToast(t("read.degraded")); }
       if (res && res.effortMapped) console.warn("[voice]", res.effortNote || "configured reasoning effort not applied");
       if (res && res.warn) console.warn("[voice]", res.warn);
       if (res && res.messageId) markSpoken(res.messageId, "speaking");
@@ -904,6 +932,7 @@ window.__ModuleLoader__.load({
         ttsEngine === "local" ? React.createElement(React.Fragment, null,
           React.createElement("h3", null, t("tts.section.local")),
           React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
+          (!cfg.transcribe.enabled ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.needTranscribe")) : null),
           React.createElement(Row, { label: t("row.localBaseUrl") },
             React.createElement(TextInput, { value: cfg.tts.local.baseUrl, onChange: (v) => setField("tts.local.baseUrl", v), placeholder: "http://127.0.0.1:8880/v1/audio/speech" })),
           React.createElement(Row, { label: t("row.localVoice") },
@@ -1026,6 +1055,7 @@ window.__ModuleLoader__.load({
           ".dsh-voice-warn{margin:2px 0 0 120px;font-size:12px;color:#d97706;}",
           ".dsh-voice-actions{display:flex;gap:8px;margin-top:14px;}",
           ".dsh-voice-msg{margin-top:8px;font-size:12px;}",
+          ".dsh-voice-toast{max-width:380px;padding:8px 12px;border-radius:8px;background:rgba(24,26,28,.94);color:#f3f4f6;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.3);border:1px solid rgba(127,127,127,.35);}",
         ].join("\n");
         document.head.append(tag);
         return () => tag.remove();
@@ -1092,6 +1122,11 @@ window.__ModuleLoader__.load({
       ctx.slots.inject("settings.section", () => ctx.slots.register(
         { name: "settings.section", id: "voice", order: 30, label: "语音播报" },
         VoiceSettingsSection,
+      ));
+      // overlay toast：TTS 失败回退/转写关闭直读等降级事件对用户可见（不再只写 console）
+      ctx.slots.inject("shell.overlay", () => ctx.slots.register(
+        { name: "shell.overlay", id: "voice-toast", order: 40, label: "语音提示" },
+        VoiceToast,
       ));
 
       console.log("[voice] client half applied (icons + badge + i18n + resilience)");

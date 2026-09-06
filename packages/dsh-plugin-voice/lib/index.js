@@ -1236,7 +1236,9 @@ function apply(ctx) {
           audioUrl = await synthToRoute(plain, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
         } catch (error) { ttsError = String(error && error.message || error) }
       }
-      return { ok: true, transcript: plain, degraded: false, audioUrl, ttsError, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
+      // 回退对用户可见：local 引擎 + 转写关闭 = 系统朗读中文原文，需明确提示（否则用户以为 local 没生效）
+      const notice = ttsProviderOf(cfg) === 'local' ? '本地引擎固定英文播报，需开启「需要转写模型」；已回退系统朗读（读中文原文）' : ''
+      return { ok: true, transcript: plain, degraded: false, audioUrl, ttsError, notice, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
     }
 
     // 缓存命中：同一条消息 + 同一路由 + 同一 prompt/effort → 直接复用转写稿（regen/force 跳过，重新生成）

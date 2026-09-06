@@ -994,6 +994,15 @@ llmState.failAll = false
 const pv20 = await rpc('preview')
 const pvLocalCall = fetchState.calls[fetchState.calls.length - 1]
 check('preview 走本地并播英文样例', pv20.ok === true && pv20.mode === 'audio' && pvLocalCall.local === true && String(pvLocalCall.body.input).startsWith('Hi, this is a preview'), { pv: pv20, input: pvLocalCall.body && pvLocalCall.body.input })
+// —— 转写关闭 + local：直读中文不送 local，回退系统 TTS，且 notice 对用户可见（防"以为 local 没生效"）——
+sessionEvents.push(msgEvent('m19', 31, '转写关闭直读内容'))
+await rpc('setConfig', { patch: { transcribe: { enabled: false } } })
+const calls20d = llmState.calls.length
+const r20d = await rpc('speak', { sessionId: 's1', messageId: 'm19' })
+check('转写关闭 + local：不合成音频', r20d.ok === true && r20d.audioUrl === undefined && r20d.degraded === false, r20d)
+check('转写关闭 + local：notice 提示需开启转写（客户端 toast 素材）', typeof r20d.notice === 'string' && r20d.notice.includes('需要转写模型'), r20d.notice)
+check('转写关闭 + local：零 LLM 调用（直读不烧 token）', llmState.calls.length === calls20d, llmState.calls.length - calls20d)
+await rpc('setConfig', { patch: { transcribe: { enabled: true } } })
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）
 await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })
 
