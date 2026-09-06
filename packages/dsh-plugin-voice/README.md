@@ -7,9 +7,10 @@
 - 自动播报开关：开 = 每轮结束自动"转写 + 播报"；关 = 不自动。
 - 每条助手消息的"朗读"按钮：手动转写并播报该条输出；已完整朗读过的消息旁有 **↻ 重新生成**按钮
   （`regen`：跳过转写缓存，用当前配置重新转写+合成，覆盖旧条目）。
-- TTS 可配置：默认浏览器 `speechSynthesis`；可选豆包 TTS（volcengine：双向流 WebSocket 默认 +
-  HTTP 单向兜底）。8 种方言统一走 vv + `explicit_dialect`，音色↔语种双向自适应（改音色自动纠语种、
-  改语种自动纠音色，不锁定音色下拉）。
+- TTS 可配置（三选一）：默认浏览器 `speechSynthesis`；豆包 TTS（volcengine：双向流 WebSocket 默认 +
+  HTTP 单向兜底，8 种方言统一走 vv + `explicit_dialect`，音色↔语种双向自适应——改音色自动纠语种、
+  改语种自动纠音色，不锁定音色下拉）；本地 Kokoro-82M（local：免费离线英文播报，中文回复先转写为
+  英文口语再朗读，部署见 `../../docs/local-tts.md`）。
 - 设置持久化在 `settings.yaml` 的 `voice:` 命名空间。
 
 ## 安装（开发期）

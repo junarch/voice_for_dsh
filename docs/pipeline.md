@@ -16,8 +16,9 @@
 [assistant/message 文本块]                          (每轮最终消息的 text 块拼接)
    → Host 转写：ctx.llm.prepareCall + stream（独立辅助调用，不入会话历史）
         └ 输出：口语文稿（纯文本）
-   → 语音演绎指令 + 情感 + 强度（内容驱动，LLM 三行输出）
+   → 语音演绎指令 + 情感 + 强度（内容驱动，LLM 三行输出；仅豆包）
    → TTS：browser(客户端 speechSynthesis) | volcengine(双向流 WS 默认 / HTTP 单向兜底)
+        | local(本地 HTTP 服务，OpenAI 兼容 /v1/audio/speech，英文播报)
    → 音频：/voice/audio/<id> 一次性路由 → 客户端 <audio>/Web Audio 播报
 ```
 
@@ -31,7 +32,8 @@
 ### 2.1 触发与输入
 
 - **手动**：每条消息的"朗读"按钮（`conversation.chat.assistant-actions` 槽），对当条消息转写。
-- **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；云 TTS 自动播报还需 `autoSpeakCloudTts=true`（设置页"云TTS"开关，成本门控）。
+- **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；
+  豆包（付费）自动播报还需 `autoSpeakCloudTts=true`（成本门控）；`local` 免费，不受门控。
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
 - **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).snapshotEvents()` 按 messageId 定位。
 
@@ -49,6 +51,11 @@
 保留结论/数字/文件名/时间；输出纯文本无任何标记；不准编造。
 
 附加：`voice.language` 固定语种/方言时，`resolvePrompt` 追加"必须用 X 输出"（仅豆包 TTS 生效）。
+
+**local provider 英文不变式**：`tts.provider=local` 时转写稿**固定用英文口语输出**
+（无论原文语言，`resolvePrompt` 追加"必须用 English 输出"）——local 定位为"英文播报"引擎
+（中文内容转写为地道英文口语后由 Kokoro-82M 朗读，帮助理解、缓解长文阅读疲劳）；
+`voice.language` 的音色↔语种联动仍只作用于豆包（见 §4.2），对 local 无效。
 
 ### 2.3 请求参数
 
@@ -140,7 +147,7 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
   - `context_texts`：情感/语气指令（织自 §3）。
   - `explicit_dialect`：方言（8 种，仅 vv 音色生效）。
   - `explicit_language`：仅固定英文下发（中文/方言不下发，避免与 explicit_dialect 冲突）。
-  - `cache_config`：服务端缓存（见 §4.4）。
+  - `cache_config`：服务端缓存（见 §4.5）。
   - `section_id`：跨次合成语气连续（`voice.tts.volcengine.useSectionId`）。
   - `post_process.pitch`：音调（连续半音 -12~12，经 `pitchOf` 归一；旧五档 `pitchLevel` 兼容映射）。
 - `req_params.model`：`voice.tts.volcengine.expressive=true` 时 `seed-tts-2.0-expressive`（表现力增强）。
@@ -151,7 +158,32 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
 统一经 `normalizeVoiceConfig` 归一 → UI 显示 = 实际发声；设置页交互为"后改字段胜出"双向纠错。
 （1.0 方言/多情感专属音色一律不接，本插件只适配 2.0。）
 
-### 4.3 音频回传与播放
+### 4.3 local（本地 Kokoro-82M v1.0，英文播报）
+
+> 定位：免费、离线、数据不出本机的**英文**播报引擎。中文回复的转写稿先转写为英文口语
+> （§2.2 英文不变式），再交本地服务合成。模型与协议选型依据（TTS Arena 小模型英文第一、
+> CPU 实时、Apache-2.0）见 `docs/local-tts.md`。
+
+- **接口**：OpenAI 兼容 `POST /v1/audio/speech`（JSON：`model`/`input`/`voice`/`speed`/
+  `response_format:'wav'`），响应为完整 WAV 音频字节。端点默认
+  `http://127.0.0.1:8880/v1/audio/speech`（`voice.tts.local.baseUrl` 可改；
+  允许 http——仅本机回环、无密钥，不适用豆包 custom 网关的 https 强制）。
+- **服务实现**：仓库自带 `scripts/local-tts-server.py`（Python + kokoro-onnx + FastAPI，
+  ~120 行，零第三方 TTS 适配器依赖）；同样协议的现成服务（如 remsky/Kokoro-FastAPI，
+  同端口 8880）可直接替换。部署见 `docs/local-tts.md`。
+- **音频格式**：WAV（PCM 16bit @24kHz mono，mime `audio/wav`）。Host 合成得完整 Buffer
+  后挂 `/voice/audio/<id>` 一次性路由（§4.4），客户端 `<audio>`/`decodeAudioData` 播放。
+- **不走的通道**（与豆包的差异，全部省 LLM/复杂度）：
+  - 无情感指令（context_texts 是豆包专属，§3 的 LLM 指令生成对 local 跳过）；
+  - 无服务端缓存（§4.5 是豆包语义，local 本地合成零边际成本，重播直接重合成）；
+  - 无流式（`isStreamingVolc` 仅豆包；local 走非流式整段合成，复用 busySpeak 互斥）；
+  - 不参与成本门控：`autoSpeakCloudTts` 只拦豆包（付费），local 免费，自动播报不拦。
+- **已知限制**：整段合成（长文转写稿需等待完整合成后才出声，CPU 上约实时速）；
+  单段 WAV 整体驻留内存（5 分钟语音 ≈ 30MB，受 audioStore TTL/容量上限约束）；
+  音色/语速等参数语义与豆包独立（`KOKORO_VOICES` 精选清单，不经 voice-compat 归一）。
+- **不变式**：发给 local 的 text 同样不得含 `[#`（§7.1 的净化在 provider 之前，天然满足）。
+
+### 4.4 音频回传与播放
 
 - Host 合成得音频 Buffer → `ctx.webServer` 临时路由 `/voice/audio/<id>`（一次性，取一次即删；audioStore）。
 - 双向流：客户端轮询 `streamNext` 取段；pcm 段直接 Int16→Float32 建 AudioBuffer（同步无解码延迟），
@@ -159,7 +191,7 @@ maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异
   无 AudioContext / 被挂起 → 回退顺序 `<audio>`；首次交互预热 AudioContext。
 - 缓存防膨胀：音频段只存内存、取一次即删；run 结束后 8s `disposeRun` 兜底清理未消费段。
 
-### 4.4 服务端缓存 `cache_config`
+### 4.5 服务端缓存 `cache_config`
 
 - 背景：豆包 TTS 带 1h 服务端缓存（同文本）。重播 1h 内应免重合成、不重复计费。
 - ⚠️ **只按文本、不认方言/音色/情感**（实测同文本换方言返回相同音频）→ 防串音唯一办法是"参数指纹未变才用"。
@@ -184,9 +216,10 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   失败/零音频自动降级 HTTP 整段（warn 提示）。
 - 重播（缓存命中）：转写 + 指令全用缓存（零 LLM），段落照常切分但复用缓存指令；音频重合成但 1h 内走服务端缓存免费。
 - 重新生成（↻）：转写 + 指令全部重新生成（force 跳过缓存），结果覆盖该 messageId 条目。
-- 成本门控：设置页"云TTS"复选框未勾选时引擎为 `browser`，根本不走云 TTS（全免费，含手动按钮）；
-  勾选 = 用户显式选择付费 API（引擎切 `volcengine`、`autoSpeakCloudTts` 同步写入 true）。
-  settings.yaml 直改的旧配置若 `autoSpeakCloudTts=false`，自动播报仍被拦截（防手工配置烧钱），手动按钮不受限。
+- 成本门控：设置页"播报引擎"选豆包时写入 `autoSpeakCloudTts=true`（= 用户显式选择付费 API），
+  引擎为免费引擎（browser/local）时该开关为 false 且豆包不参与自动播报（全免费，含手动按钮）；
+  settings.yaml 直改的旧配置若 `autoSpeakCloudTts=false`，豆包自动播报仍被拦截（防手工配置烧钱），
+  手动按钮与 local（免费）不受限。
 
 ## 6. `voice:` 配置 schema 定稿
 
@@ -199,7 +232,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 ```yaml
 voice:
   autoSpeak: false            # 每轮结束自动播报
-  autoSpeakCloudTts: false    # 云TTS 开关：设置页勾选时与 tts.provider=volcengine 同步写入 true（默认关 = 仅免费 Windows TTS）
+  autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）时同步写入 true；免费引擎（browser/local）为 false
   language: auto              # auto|zh|en|yue|shanghai|henan|beijing|tianjin|sichuan|shaanxi|dongbei
                               #   固定语种/方言时无论原文语言都按所选转写；8 方言统一走 vv + explicit_dialect
   provider: ""                # 转写 LLM provider（空=启动发现；配置错自动回退并自愈写回可用路由）
@@ -215,7 +248,7 @@ voice:
     contextTurns: 2           # 引用上文：固定 2 轮（最多往前读两轮）；设置页无 UI
     timeoutMs: 60000          # 单次转写超时；超时/失败降级为直读
   tts:
-    provider: browser         # browser | volcengine（存量旧值 openai-compatible 归一为 browser）
+    provider: browser         # browser | volcengine | local（存量旧值 openai-compatible 归一为 browser）
     browser: { rate: 1.0, pitch: 1.0, voice: "" }
     volcengine:
       apiKey: ""              # 火山方舟专属 API Key（settings.yaml 为明文，注意保管，别提交）
@@ -235,6 +268,11 @@ voice:
       loudness: 0             # 音量 [-50,100]
       useSectionId: true      # section_id（跨次合成语气连续）（无 UI）
       expressive: false       # req_params.model=seed-tts-2.0-expressive（表现力增强）（无 UI）
+    local:
+      baseUrl: http://127.0.0.1:8880/v1/audio/speech  # OpenAI 兼容端点（部署见 docs/local-tts.md；允许 http=仅本机回环无密钥）
+      voice: af_heart          # Kokoro v1.0 音色（KOKORO_VOICES 精选清单）
+      speed: 1.0               # 语速 [0.5, 2]
+      timeoutMs: 30000         # 单次合成超时；失败 → ttsError，客户端降级 speechSynthesis
   stopOnNewTurn: true
 ```
 
@@ -259,6 +297,9 @@ voice:
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
 9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
    付费调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
+10. **local 固定英文播报且零额外 LLM**——provider=local 时转写稿必须用英文输出（§2.2）；
+    不生成情感指令（§3 跳过）、不下发服务端缓存（§4.5 跳过）、不走流式（§5）；
+    `autoSpeakCloudTts` 门控不拦 local（免费引擎）。
 
 ## 8. 设计决策（为什么）
 
@@ -266,10 +307,13 @@ voice:
 - 默认 TTS = 浏览器兜底：零配置、免费、离线。
 - 云 TTS 走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；动态沙箱禁 fetch。
-- 云 TTS 默认关闭（设置页"云TTS"未勾选 = 引擎 browser，全免费）；勾选 = 用户显式为付费 API 买单，
-  自动播报才可能走云 TTS；settings.yaml 直改的旧配置仍由 `autoSpeakCloudTts` 门控防账单失控。
+- 云 TTS 默认关闭（默认引擎 browser，全免费）；设置页切豆包 = 用户显式为付费 API 买单，
+  自动播报才可能走豆包；settings.yaml 直改的旧配置仍由 `autoSpeakCloudTts` 门控防账单失控；
+  local 免费引擎不在门控之列。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - 自研 TTS 适配层（不引第三方库）：无现成 JS 库支持火山 v3；HTTP 单向协议极简（~150 行零依赖）；避免供应链与失维护风险。
+- local 自带 server 脚本而非引 Node 依赖：kokoro-onnx 是 Python 生态，Host 半零新增 npm 依赖；
+  仓库只存"方法"（server 脚本 + setup 脚本），模型/二进制不入库（AGENTS.md 依赖管理约定）。
 - UI 只占 additive 小槽位（assistant-actions / input.left / turnTail / settings.section / shell.overlay），不碰 `root`/`conversation.session`。
 
 ## 9. 参考（源码位置）
@@ -279,6 +323,8 @@ voice:
   TTS `synthesizeVolcengine`/`buildVolcReqParams`；双向流 `streamSpeak`；
   服务端缓存 `serverCacheAllowed`/`serverCacheMark`/`ttsFpOf`。
 - `volcengine-ws.js`：双向流协议（帧编解码 / 事件 / 连接管理器）。
+- 本地 TTS：`scripts/local-tts-server.py`（OpenAI 兼容合成服务）、`scripts/setup-local-tts.ps1`
+  （部署脚本）、`docs/local-tts.md`（部署/对接文档）。
 - `speech-clean.js`：`sanitizeForSpeech`（净化）。
 - `voice-compat.js`：`LANGUAGE_OPTIONS` / `normalizeVoiceConfig` / `correctSpeakerForLanguage` /
   `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——配置兼容/归一单一事实源；

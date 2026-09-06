@@ -72,8 +72,9 @@ RPC 读写（Host 归一后返回，UI 显示 = 实际发声）。
 - 成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - TTS 用自研适配层（不引第三方库）：无现成 JS 库支持火山 v3 接口；HTTP 单向协议极简（~150 行零依赖）；
   避免供应链与失维护风险。调研见火山《接入语音模型》官方文档（链接见 `docs/pipeline.md` §4.2）。
-- 云 TTS 默认关闭（设置页"云TTS"复选框 = 引擎总开关：未勾选 = 免费 Windows TTS，全部走 browser；
-  勾选 = 用户显式为付费 API 买单），`autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控。
+- 付费 TTS 默认关闭（设置页"播报引擎"三选一：系统/豆包/本地 Kokoro；默认 browser 全免费；
+  选豆包 = 用户显式为付费 API 买单并写入 `autoSpeakCloudTts=true`），
+  `autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控；local 免费不受门控。
 - UI 只占 additive 小槽位，不碰 `root`/`conversation.session` 等高风险整槽位。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
 - 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，

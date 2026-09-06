@@ -78,6 +78,8 @@ voice_for_dsh/
 ├── AGENTS.md                  # 本文件
 ├── docs/                      # architecture / pipeline / development / testing / release
 ├── scripts/                   # 测试与真实外呼探针（test-host.mjs 零成本；tts-*.mjs 花几分钱）
+│                              #   本地 TTS：local-tts-server.py(合成服务) / setup-local-tts.ps1(部署，
+│                              #   模型下载到 local/，不入库) / dsh-read-session.mjs(会话日志读取)
 └── packages/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
