@@ -3,16 +3,18 @@
 > 回答两个问题：**现在有哪些供应商、怎么接入新的（含本地 TTS 模型）**。
 > 架构背景见 `docs/architecture.md` §7；管线与不变式见 `docs/pipeline.md`。
 
-## 1. 现状（两个 TTS provider）
+## 1. 现状（三个 TTS provider）
 
 | provider | 引擎 | 免费/离线 | 鉴权 | 音频回传 |
 |---|---|---|---|---|
 | `browser`（默认） | 客户端 `speechSynthesis` | 免费、离线 | 无 | 浏览器直接读文本 |
 | `volcengine` | 豆包语音合成 2.0（双向流 WS 默认 + HTTP 单向兜底） | 付费、按字符 | `X-Api-Key` | Host 合成 → `/voice/audio/<id>` |
+| `local` | 本地 Kokoro-82M v1.0（英文播报，OpenAI 兼容 `/v1/audio/speech`） | 免费、离线 | 无（本机回环） | Host 合成 WAV → `/voice/audio/<id>` |
 
-**归一铁律**：只有 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）识别为 `volcengine` 才走云 TTS，
-其余任何值（含旧值 `openai-compatible`）一律归 `browser`——新供应商**必须**先在 `ttsProviderOf` 登记，
-否则永远不会被当云 TTS 调用（这是防"未知 provider 悄悄烧钱"的设计）。
+**归一铁律**：provider 语义统一由 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）归一——
+`volcengine`=付费云 TTS（受成本门控）、`local`=本地免费 TTS、其余任何值（含旧值
+`openai-compatible`）一律归 `browser`。新供应商**必须**先在 `ttsProviderOf` 登记，
+否则永远不会被调用（这是防"未知 provider 悄悄烧钱"的设计）。
 
 ### 1.1 网关（volcengine 内部，`voice.tts.volcengine.gateway`）
 
@@ -58,15 +60,15 @@
 
 ## 4. 本地 TTS 模型接入（隐私最好的一条路）
 
-本地 TTS（Piper / Edge-TTS / 本地 TTS 网关等）的特别约定：
+已落地：`local` provider（Kokoro-82M v1.0，英文播报），实现与部署见 `docs/local-tts.md`、
+`docs/pipeline.md` §4.3。接入下一个本地 TTS（其他模型 / 本地 TTS 网关）的特别约定：
 
 - **隐私卖点**：内容不出本机（可写进 README）。它通常也是一个 HTTP/WS 服务，实现方式与云 provider
-  相同（第 3 节），只是 endpoint 指向 `localhost`。
+  相同（第 3 节），只是 endpoint 指向 `localhost`（OpenAI 兼容 `/v1/audio/speech` 子集可直换 baseUrl 复用）。
 - **鉴权**：本地一般无需 key；若本地网关要 key，走 `voice.tts.<provider>.apiKey`（settings.yaml，明文，勿提交）。
-- **缓存**：本地合成往往比云慢；可复用同一套 `cache_config` 思路（按文本+参数指纹命中，防串音），
-  但豆包服务端缓存不适用——本地缓存应改为**本机音频文件缓存**（`$DSH_HOME\voice-audio-cache/`），
-  这是与云 provider 差异最大的点，接入时单独设计。
-- **延迟/流式**：本地模型若支持流式/增量，优先走 `streamSpeak` 双向流路径；不支持就单向整段。
+- **缓存**：本地合成零边际成本，v0.3.0 起 local 不做服务端缓存语义；若新模型合成慢需缓存，
+  应做**本机音频文件缓存**（`$DSH_HOME\voice-audio-cache/`），这是与云 provider 差异最大的点，接入时单独设计。
+- **延迟/流式**：本地模型若支持流式/增量，优先走 `streamSpeak` 双向流路径；不支持就单向整段（local 现状）。
 - **新增 schema 时遵循配置演进纪律**：只补默认、绝不覆盖用户配置；新字段带默认值。
 
 ## 5. 明确不做什么

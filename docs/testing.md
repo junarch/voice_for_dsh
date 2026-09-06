@@ -17,7 +17,8 @@
 ```
 [DeepSeek 输出完成] -> Host 监听 turn/end(completed|max-tokens) -> 提取最后一条含 text 的助手消息
    -> LLM 口语化转写（独立调用，prompt 由风格预设/语种拼） -> 转写稿缓存（provider/model/prompt/effort 四者一致才命中）
-   -> TTS：browser=客户端 speechSynthesis | 云=Host 合成 + 一次性音频路由 -> 浏览器播放
+   -> TTS：browser=客户端 speechSynthesis | volcengine=豆包云合成 | local=本地 Kokoro（英文稿）
+        | Host 合成 + 一次性音频路由 -> 浏览器播放
 ```
 
 每一步都有独立失败方式：事件没触发、消息提取错、转写失败/超时/撞顶、缓存没命中（重复烧钱）、TTS 报错、播放失败。

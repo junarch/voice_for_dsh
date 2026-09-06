@@ -8,6 +8,13 @@
 
 > 一句话：**让 dsh 开口说话。** 开开关 = 每轮结束自动播报；关 = 不自动，但每条助手消息上有"朗读"按钮手动播。
 
+> **项目定位**：这是一个**个人项目**，围绕作者自己的使用习惯设计，不一定适合所有人。两种"进阶"引擎的定位不同：
+> - **豆包云 TTS（付费）**：情感化朗读——方言、多音色、情绪演绎，提供有趣的声音体验；
+> - **本地英文 TTS（免费）**：把中文回复**先转写成英文口语再朗读**——用"听英文"替代"读中文"，
+>   换一种信息通道接收同样的内容，长文工作后节省认知资源、缓解困倦（这是本项目的核心动机）。
+>
+> 只想给 dsh 加个"普通朗读"的话，默认的浏览器 TTS 开箱即用、零配置；不认同上述思路也可随时切回。
+
 ---
 
 ## 功能
@@ -81,6 +88,26 @@ npx @deepseek-ai/dsh web
 > 提示：`dsh plugin add` 的相对路径锚定到**执行命令时的当前目录**；若解析失败，直接给绝对路径
 > （如 `link:C:\path\to\voice_for_dsh\packages\dsh-plugin-voice`）。
 
+### 本地英文 TTS（可选，免费）
+
+默认引擎是浏览器 TTS，装完插件就能用。想启用"英文播报"（本地 Kokoro-82M），需额外下载模型
+（约 350MB，只存本机、不入 git）：
+
+```powershell
+# 在仓库根目录执行（Windows）：自动创建虚拟环境 + 下载模型，首次约 350MB、视网络数分钟
+pwsh scripts/setup-local-tts.ps1
+
+# 启动本地合成服务（保持窗口开着；首次加载模型需数秒）
+local\venv\Scripts\python.exe scripts\local-tts-server.py
+```
+
+然后**重启 dsh 并刷新浏览器**，设置页 → 语音播报 → 播报引擎选 **本地 Kokoro（英文·免费）**。
+自检：浏览器打开 `http://127.0.0.1:8880/health` 返回 `{"ok":true}` 即就绪。
+
+注意：本地引擎**固定英文播报**（中文回复先转写成英文再朗读），需保持"需要转写模型"开启。
+Mac/Linux 不跑此脚本，可用同协议的现成服务替换（见 [`docs/local-tts.md`](docs/local-tts.md) §4）；
+换音色、模型文件说明与常见问题也都在该文档。
+
 ### 配置
 
 所有配置在 `settings.yaml` 的 `voice:` 命名空间，设置页可可视化编辑。字段说明见
@@ -120,6 +147,7 @@ node scripts/tts-cache-probe.mjs
 | 文档 | 内容 |
 |---|---|
 | [`docs/pipeline.md`](docs/pipeline.md) | 转写/TTS 管线行为 + `voice:` 配置 schema + 不变式 |
+| [`docs/local-tts.md`](docs/local-tts.md) | 本地英文 TTS 部署/对接/换音色/故障排查 |
 | [`docs/architecture.md`](docs/architecture.md) | DSH 插件机制与关键决策 |
 | [`docs/development.md`](docs/development.md) | 开发循环 / 安装卸载 / 常见坑 |
 | [`docs/testing.md`](docs/testing.md) | 测试方法（含账单防御） |

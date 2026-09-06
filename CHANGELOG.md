@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+### Docs
+
+- README 新增"项目定位"声明（个人项目 + 双引擎动机：豆包=情感化朗读体验、本地英文 TTS=英文播报中文内容以节省认知资源）与本地 TTS 安装步骤；一致性清理：providers.md（三个 provider 表/归一铁律）、ROADMAP.md（本地 TTS 移出待办）、testing.md 管线图。
+
 ## [0.3.1] - 2026-09-06
 
 ### Fixed
