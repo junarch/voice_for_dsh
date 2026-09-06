@@ -8,6 +8,40 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-06
+
+### Added
+
+- **本地英文 TTS provider `local`**（Kokoro-82M v1.0，免费、离线、数据不出本机）：
+  - 英文播报不变式：`tts.provider=local` 时转写稿固定用英文口语输出（中文回复也转写为英文朗读），
+    `voice.language` 的音色↔语种联动仍只作用于豆包；
+  - 零额外 LLM：local 无 `context_texts` 情感通道，跳过语音演绎指令生成；
+    无服务端缓存语义（本地合成零边际成本）、不走双向流；
+  - 免费引擎不受 `autoSpeakCloudTts` 成本门控（自动播报无需付费开关）；
+  - 降级直读稿（原文可能是中文）不送 local，客户端回退系统 TTS；
+  - 音频格式 WAV（PCM 16bit @24kHz mono），复用 `/voice/audio/<id>` 一次性路由。
+- 新配置 `voice.tts.local`（全带默认值，向后兼容）：`baseUrl`（默认
+  `http://127.0.0.1:8880/v1/audio/speech`）/ `voice`（默认 `af_heart`）/ `speed` / `timeoutMs`。
+- 设置页"云TTS"复选框升级为**播报引擎三选一**：系统 TTS（免费）/ 豆包云 TTS（付费）/
+  本地 Kokoro（英文·免费）；切到豆包时仍自动写入 `autoSpeakCloudTts=true`（门控语义不变）。
+- `scripts/local-tts-server.py`（OpenAI 兼容 `/v1/audio/speech` 子集，Python + kokoro-onnx）
+  与 `scripts/setup-local-tts.ps1`（建 venv + 下载模型到 `local/`，模型不入库）；
+  部署/对接文档 `docs/local-tts.md`（同协议现成服务如 remsky/Kokoro-FastAPI 可直接替换）。
+
+### Docs
+
+- `docs/pipeline.md`：新增 §4.3「local（本地 Kokoro-82M v1.0，英文播报）」，§6 schema 增补
+  `tts.local`，§7 不变式新增第 10 条（local 固定英文播报且零额外 LLM）；
+  "云TTS 复选框"表述更新为"播报引擎三选一"。
+- 测试：`scripts/test-host.mjs` 新增 18 条断言（T20，总 193 条全绿）——英文 prompt 不变式、
+  零情感指令 LLM、免费门控放行、OpenAI 兼容请求体、WAV 路由一次性、服务失败可见降级、
+  降级直读不送 local、preview 英文样例、引擎归一。
+
+### 升级说明
+
+- 无破坏性变更：默认引擎仍为 `browser`；老配置零迁移。使用本地 TTS 需先运行
+  `pwsh scripts/setup-local-tts.ps1` 部署（约 350MB 模型，仅本机）。
+
 ## [0.2.2] - 2026-09-03
 
 ### Docs
