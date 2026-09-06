@@ -14,6 +14,9 @@ settings.yaml
 .env.*
 !.env.example
 .dsh/
+# 本地 TTS 货物：venv 与下载的模型文件（ Kokoro-82M v1.0，见 docs/local-tts.md），不入库
+local/
+__pycache__/
 # 编辑器
 .vscode/
 .idea/
