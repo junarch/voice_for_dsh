@@ -1,8 +1,5 @@
 # AGENTS.md — voice_for_dsh 仓库指南
 
-本仓库开发一个 **DSH（DeepSeek Harness）Web 语音朗读插件**：每轮 DeepSeek 输出结束后，把输出内容先做
-**口语化转写**（代码/表格/Markdown 等不适合朗读的内容改写为口语），再通过 TTS 播报。
-
 ## 仓库使命（一句话）
 
 > 给 dsh web 增加"输出朗读"能力：开关开启 = 每轮结束自动"转写 + 播报"；关闭 = 不自动，
@@ -60,10 +57,18 @@
    **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
    后浏览器**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 无实际产物），dev:web watcher / HMR 仅后续
    tsdown 化后才可用（详见 `docs/development.md` §1）。
-3. **验证循环**：装包 → 重启 dsh → 浏览器操作 → 看 console/日志；动态原型可用"创造模式"preset 会话。
+3. **验证循环**：装包 → 重启 dsh → 浏览器操作 → 看 console/日志；开发试验可用 dsh 内置
+   "创造模式"preset（= 标准能力 + 动态插件实验），成品仍固化为正式 bundle 安装到 web profile。
 4. **命名空间/服务名统一用 `voice`**，避免与既有插件冲突。
 5. 转写与 TTS 的 prompt/配置细节统一维护在 `docs/pipeline.md`，改动先更新文档再改代码。
 6. 新增 API 调用前，先在 npx 检出的 `.d.ts` 里确认签名（本项目遵循"inspect first"原则）。
+7. **依赖管理**（原则：git 仓库只存"清单和方法"，不存"货物"）：
+   - npm 依赖只声明在 `packages/dsh-plugin-voice/package.json`，`node_modules/` 永不入库；
+     引入前核对许可证与必要性。
+   - 模型/二进制文件不入库：`.gitignore` 排除目录 + `scripts/` 提供下载脚本 + 文档记录版本
+     （例：本地 TTS 的 ONNX 模型、可执行文件）。
+   - 外部服务（如本地 TTS server、豆包云端）不作为仓库依赖管理，只写部署/对接文档。
+   - 引入新依赖前先说明"为什么需要它、有没有更轻的替代"。
 
 ## 目录结构
 
@@ -82,9 +87,3 @@ voice_for_dsh/
         └── src/             # 仅结构占位（host/index.ts、client/index.ts 桩，无实际逻辑；
                              #   后续 TS/tsdown 化时的家）
 ```
-
-## 相关模式（dsh 内置 preset，选择会话时可见）
-
-- `standard` **标准模式** / `code` **PTC 模式** / `minimal` **极简模式** / `cordis` **创造模式**。
-- 创造模式 = 标准能力 + Cordis 运行时检查/动态插件实验/预设创作工具，适合**开发试验**；
-  成品插件仍要固化为正式 bundle 安装到 web profile。
