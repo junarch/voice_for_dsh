@@ -10,7 +10,10 @@
 - TTS 可配置（三选一）：默认浏览器 `speechSynthesis`；豆包 TTS（volcengine：双向流 WebSocket 默认 +
   HTTP 单向兜底，8 种方言统一走 vv + `explicit_dialect`，音色↔语种双向自适应——改音色自动纠语种、
   改语种自动纠音色，不锁定音色下拉）；本地 Kokoro-82M（local：免费离线英文播报，中文回复先转写为
-  英文口语再朗读，部署见 `../../docs/local-tts.md`）。
+  英文口语再朗读；**分句流式**——按句切段逐段合成，长稿首声约 2.5 秒（`voice.tts.local.streaming`）；
+  **服务由 dsh 自动启停**——合成前探 `/health`，没跑就经 `ctx.subprocess` 拉起，dsh 退出即回收，
+  `voice.tts.local.autoStart` 可关；部署见 `../../docs/local-tts.md`）。
+- 播报失败按因提示：服务不可达 / 合成超时 / 服务报错各有 toast 文案（Host 返回 `ttsErrorKind`）。
 - 设置持久化在 `settings.yaml` 的 `voice:` 命名空间。
 
 ## 安装（开发期）

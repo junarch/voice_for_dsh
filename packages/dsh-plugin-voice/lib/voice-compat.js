@@ -54,13 +54,24 @@ export function pitchOf(v) {
 }
 
 /**
- * 归一化 TTS 引擎：'volcengine'=豆包云（付费），'local'=本地 Kokoro（免费，英文播报）；
+ * 归一化 TTS 引擎：'volcengine'=豆包云（付费），'local'=本地 Kokoro（免费，英文播报），
+ * 'local-cosyvoice'=本地 Fun-CosyVoice3（免费，中文播报 + 情绪指令）；
  * 其余（含旧值 openai-compatible）一律按 'browser' 处理——容忍存量配置里的已废弃值，
  * 避免把未知 provider 当云 TTS。
  */
 export function ttsProviderOf(cfg) {
   const p = cfg && cfg.tts && cfg.tts.provider
-  return p === 'volcengine' ? 'volcengine' : p === 'local' ? 'local' : 'browser'
+  return p === 'volcengine' ? 'volcengine' : p === 'local' ? 'local' : p === 'local-cosyvoice' ? 'local-cosyvoice' : 'browser'
+}
+
+/** 本地引擎（免费、离线、dsh 托管服务）：Kokoro（英文）与 Fun-CosyVoice3（中文）。 */
+export function isLocalProvider(cfg) {
+  const p = ttsProviderOf(cfg)
+  return p === 'local' || p === 'local-cosyvoice'
+}
+/** 本地引擎 → 其 settings 块键名（cfg.tts.local / cfg.tts.localCosyvoice）。 */
+export function localBlockKeyOf(provider) {
+  return provider === 'local-cosyvoice' ? 'localCosyvoice' : 'local'
 }
 
 export function isEnVoice(speaker) {

@@ -96,15 +96,16 @@ npx @deepseek-ai/dsh web
 ```powershell
 # 在仓库根目录执行（Windows）：自动创建虚拟环境 + 下载模型，首次约 350MB、视网络数分钟
 pwsh scripts/setup-local-tts.ps1
-
-# 启动本地合成服务（保持窗口开着；首次加载模型需数秒）
-local\venv\Scripts\python.exe scripts\local-tts-server.py
 ```
 
 然后**重启 dsh 并刷新浏览器**，设置页 → 语音播报 → 播报引擎选 **本地 Kokoro（英文·免费）**。
-自检：浏览器打开 `http://127.0.0.1:8880/health` 返回 `{"ok":true}` 即就绪。
+无需再手动启动服务：**dsh 会在首次播报前自动拉起本地服务，并在自己退出时回收它**
+（设置页「自动启动本地服务」开关，默认开）。想手动管理或排查时可用
+`local\venv\Scripts\python.exe scripts\local-tts-server.py`（或双击 `scripts/start-local-tts.bat`），
+自检：浏览器打开 `http://127.0.0.1:8880/health` 返回 `{"ok":true}` 即就绪；设置页也有「🔌 本地服务自检」按钮。
 
-注意：本地引擎**固定英文播报**（中文回复先转写成英文再朗读），需保持"需要转写模型"开启。
+注意：本地引擎**固定英文播报**（中文回复先转写成英文再朗读），需保持"需要转写模型"开启；
+播报默认走**分句流式**（按句切段逐段合成，长稿首声约 2.5 秒，设置页「分句流式播报」可关）。
 Mac/Linux 不跑此脚本，可用同协议的现成服务替换（见 [`docs/local-tts.md`](docs/local-tts.md) §4）；
 换音色、模型文件说明与常见问题也都在该文档。
 

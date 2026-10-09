@@ -32,11 +32,11 @@ window.__ModuleLoader__.load({
       "settings.saveFail": "❌ 保存失败：", "settings.loadFail": "读取配置失败",
       "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
-      "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（云 TTS）…",
+      "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（云 TTS）…", "settings.previewAudio": "▶ 试听中…",
       "sec.basic": "基本配置", "sec.transcribe": "转写（口语化）",
       "row.transcribeEnabled": "需要转写模型",
       "tts.section.browser": "播报引擎 · 系统 TTS（免费）", "tts.section.volcengine": "播报引擎 · 豆包 TTS",
-      "tts.section.local": "播报引擎 · 本地 Kokoro（英文播报）",
+      "tts.section.local": "播报引擎 · 本地 Kokoro（英文播报）", "tts.section.localCosyvoice": "播报引擎 · 本地 CosyVoice（中文播报）",
       "transcribe.hint.on": "开=LLM 口语化转写（风格/情绪/自动跳过代码与表格）",
       "transcribe.hint.off": "关=不调模型，输出什么直接读；表格和代码块自动跳过",
       "group.auth": "鉴权", "group.pronounce": "发音",
@@ -44,12 +44,34 @@ window.__ModuleLoader__.load({
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
       "temperature.hint": " 值越大，转写越有创意、越发散，但准确度越低；越小越忠实原文（默认 0.3）/ higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "engine.hint": " 系统=免费离线；豆包=付费云 TTS（自动播报受“云TTS”成本门控）；本地=Kokoro 英文播报（免费离线，需先启动本地服务） / system=free; Doubao=paid; local=Kokoro English (free, needs local server)",
-      "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（英文·免费）",
+      "engine.hint": " 系统=免费离线；豆包=付费云 TTS（自动播报受“云TTS”成本门控）；本地=Kokoro 英文或 CosyVoice 中文（免费离线，dsh 可自动启动服务） / system=free; Doubao=paid; local=Kokoro English or CosyVoice Chinese (free, dsh can auto-start the server)",
+      "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（英文·免费）", "engine.localCosyvoice": "本地 CosyVoice（中文·免费）",
       "row.localBaseUrl": "服务地址", "row.localVoice": "音色 voice", "row.localSpeed": "语速 speed",
-      "local.hint": "中文回复先转写为英文口语再朗读（数据不出本机）；需先部署并启动本地服务：pwsh scripts/setup-local-tts.ps1（自检 GET /health），详见 docs/local-tts.md",
+      "local.hint": "中文回复先转写为英文口语再朗读（数据不出本机）；首次使用需先部署：pwsh scripts/setup-local-tts.ps1；启动可交给 dsh 自动完成（见下「自动启动本地服务」），详见 docs/local-tts.md",
       "local.needTranscribe": "⚠ 本地引擎固定英文播报：需开启上方「需要转写模型」，否则回退系统 TTS 朗读中文原文",
+      "local.autoStart": "自动启动本地服务",
+      "local.autoStartHint": " 开启后无需手动运行脚本：播报前 dsh 自动拉起本地服务，dsh 退出时一并回收（关掉则需自己启动 scripts/start-local-tts.bat） / auto-managed by dsh",
+      "local.streaming": "分句流式播报",
+      "local.streamingHint": " 开=按句切段逐段合成，约 3 秒出声、长稿边算边播（推荐）；关=整段合成完才播，长稿可能要等几十秒 / on = segment-by-segment, first sound in ~3s",
+      "localCosyvoice.hint": "中文回复直接口语化转写后本地合成（数据不出本机），支持情绪指令（如“用开心的语气说”）；CPU 合成约为实时 4-7 倍，首声较慢属正常。首次使用需先部署：pwsh scripts/setup-local-tts-cosyvoice.ps1；详见 docs/local-tts-cosyvoice.md",
+      "row.cosyVoice": "音色 voice",
+      "row.cosySpeed": "语速 speed",
+      "row.cosyFlowSteps": "合成质量/速度",
+      "cosyFlow.hint": " 流匹配去噪步数：越少越快、音质越平（CPU 实测 2 步最快、4 步均衡、10 步为源码默认）",
+      "cosyFlow.2": "2 步 · 最快（音质有损）",
+      "cosyFlow.3": "3 步 · 偏快",
+      "cosyFlow.4": "4 步 · 均衡（推荐）",
+      "cosyFlow.6": "6 步 · 偏质量",
+      "cosyFlow.10": "10 步 · 源码默认（最慢）",
+      "row.cosyEmotion": "内容驱动情绪",
+      "cosyEmotion.hint": " 开=播报前用 LLM 分析内容情绪，生成自然语言情绪指令（“语气轻快活泼一点，情绪明显一些”） / on = LLM generates an emotion instruction from the content",
+      "row.cosyInstruct": "固定情绪指令",
+      "cosyInstruct.hint": " 固定情绪/风格指令（如“用温柔的语气说”），内容驱动情绪关闭或生成失败时兜底；可留空 / fixed instruction used when content-driven emotion is off or fails; may be empty",
+      "settings.localCheck": "🔌 本地服务自检", "settings.localCheckRunning": "✅ 本地服务在跑：", "settings.localCheckFail": "❌ 本地服务不可用：",
       "toast.fallback": "TTS 失败，已回退系统朗读",
+      "toast.ttsUnavailable": "本地 TTS 服务不可达（已尝试自动启动）",
+      "toast.ttsTimeout": "TTS 合成超时",
+      "toast.ttsHttp": "TTS 合成失败（服务返回错误）",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
@@ -75,11 +97,11 @@ window.__ModuleLoader__.load({
       "settings.saveFail": "❌ Save failed: ", "settings.loadFail": "Failed to load config",
       "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
-      "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (cloud TTS)…",
+      "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (cloud TTS)…", "settings.previewAudio": "▶ Previewing…",
       "sec.basic": "General", "sec.transcribe": "Transcription",
       "row.transcribeEnabled": "Use transcription model",
       "tts.section.browser": "Engine · System TTS (free)", "tts.section.volcengine": "Engine · Doubao TTS",
-      "tts.section.local": "Engine · Local Kokoro (English)",
+      "tts.section.local": "Engine · Local Kokoro (English)", "tts.section.localCosyvoice": "Engine · Local CosyVoice (Chinese)",
       "transcribe.hint.on": "On = LLM spoken-style rewrite (style/emotion, code & tables auto-skipped)",
       "transcribe.hint.off": "Off = read the text as-is; tables and code blocks are skipped",
       "group.auth": "Auth", "group.pronounce": "Pronunciation",
@@ -87,12 +109,34 @@ window.__ModuleLoader__.load({
       "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
       "temperature.hint": " Higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "engine.hint": " System = free & offline; Doubao = paid cloud TTS (auto-read cost-gated); Local = Kokoro English (free & offline, start the local server first)",
-      "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (English · free)",
+      "engine.hint": " System = free & offline; Doubao = paid cloud TTS (auto-read cost-gated); Local = Kokoro English or CosyVoice Chinese (free; dsh can auto-start the server)",
+      "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (English · free)", "engine.localCosyvoice": "Local CosyVoice (Chinese · free)",
       "row.localBaseUrl": "Server URL", "row.localVoice": "Voice", "row.localSpeed": "Speed",
-      "local.hint": "Chinese replies are transcribed into spoken English, then read locally (data never leaves this machine). Deploy & start the server first: pwsh scripts/setup-local-tts.ps1 (health check: GET /health); see docs/local-tts.md",
+      "local.hint": "Chinese replies are transcribed into spoken English, then read locally (data never leaves this machine). Deploy once with pwsh scripts/setup-local-tts.ps1; dsh can start the server for you (see \"Auto-start local server\"); see docs/local-tts.md",
       "local.needTranscribe": "⚠ The local engine reads English only: enable \"Use transcription model\" above, otherwise it falls back to the system voice reading the original text",
+      "local.autoStart": "Auto-start local server",
+      "local.autoStartHint": " When on, dsh starts the local TTS server before speaking and reclaims it on exit (off = start scripts/start-local-tts.bat yourself)",
+      "local.streaming": "Segmented streaming",
+      "local.streamingHint": " on = sentence-by-sentence synthesis, first sound in ~3s, long texts play while still synthesizing (recommended); off = wait for the whole text",
+      "localCosyvoice.hint": "Chinese replies are transcribed into spoken Chinese and synthesized locally (data never leaves this machine). Emotion instructions are supported (e.g. \"speak in a happy tone\"); CPU synthesis is about 4-7x realtime, so the first sound takes a while - that is normal. Deploy once with pwsh scripts/setup-local-tts-cosyvoice.ps1; see docs/local-tts-cosyvoice.md",
+      "row.cosyVoice": "Voice",
+      "row.cosySpeed": "Speed",
+      "row.cosyFlowSteps": "Quality / speed",
+      "cosyFlow.hint": " flow-matching denoising steps: fewer = faster but flatter (2 fastest, 4 balanced, 10 = upstream default)",
+      "cosyFlow.2": "2 steps - fastest (quality loss)",
+      "cosyFlow.3": "3 steps - faster",
+      "cosyFlow.4": "4 steps - balanced (recommended)",
+      "cosyFlow.6": "6 steps - higher quality",
+      "cosyFlow.10": "10 steps - upstream default (slowest)",
+      "row.cosyEmotion": "Content-driven emotion",
+      "cosyEmotion.hint": " on = LLM analyzes the content and generates a natural-language emotion instruction before speaking",
+      "row.cosyInstruct": "Fixed emotion instruction",
+      "cosyInstruct.hint": " Fixed emotion/style instruction (e.g. \"speak gently\"); used when content-driven emotion is off or fails; may be empty",
+      "settings.localCheck": "🔌 Check local server", "settings.localCheckRunning": "✅ Local server running: ", "settings.localCheckFail": "❌ Local server unavailable: ",
       "toast.fallback": "TTS failed; fell back to system voice",
+      "toast.ttsUnavailable": "Local TTS service unreachable (auto-start attempted)",
+      "toast.ttsTimeout": "TTS synthesis timed out",
+      "toast.ttsHttp": "TTS synthesis failed (service error)",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
@@ -158,6 +202,9 @@ window.__ModuleLoader__.load({
         { id: "am_michael", name: "Michael（美·男）" }, { id: "bf_emma", name: "Emma（英·女）" },
         { id: "bm_george", name: "George（英·男）" },
       ],
+      cosyvoiceVoices: [
+        { id: "dsh_default", name: "默认音色（中文）" },
+      ],
     };
 
     // ---------- 音色 ↔ 语种/方言 兼容矩阵（与 Host lib/voice-compat.js 同步的内联镜像，client 无 import） ----------
@@ -188,6 +235,11 @@ window.__ModuleLoader__.load({
 
     // ---------- 播放管理（全局单播）----------
     var currentAudio = null;
+    /** 播放链路诊断：把每一步推给 Host（Host 侧 /voice/api/clientDiagDump 读回）。
+     *  慢引擎首声几十秒，"没声音"到底是没算完、解码失败，还是浏览器没排上播放，必须可区分。 */
+    function diag(ev, data) {
+      try { rpc("clientDiag", { entry: Object.assign({ ev: ev }, data || {}) }).catch(function () {}); } catch (e) {}
+    }
     /** 播报状态（messageId → 'speaking' | 'done'）：turnTail 徽标读取 */
     var spokenState = {};
     function markSpoken(messageId, state) { spokenState[String(messageId)] = state; }
@@ -224,12 +276,14 @@ window.__ModuleLoader__.load({
       try {
         const audio = new Audio(url);
         currentAudio = audio;
-        audio.onended = () => { if (currentAudio === audio) currentAudio = null; if (hooks && hooks.onEnd) hooks.onEnd(); };
-        audio.onerror = () => { if (currentAudio === audio) currentAudio = null; if (hooks && hooks.onError) hooks.onError("audio playback failed"); };
+        diag("play-audio", { url: String(url).slice(0, 80) });
+        audio.onended = () => { if (currentAudio === audio) currentAudio = null; diag("audio-ended", {}); if (hooks && hooks.onEnd) hooks.onEnd(); };
+        audio.onerror = () => { if (currentAudio === audio) currentAudio = null; diag("audio-error", {}); if (hooks && hooks.onError) hooks.onError("audio playback failed"); };
         const p = audio.play();
-        if (p && p.catch) p.catch((e) => { if (hooks && hooks.onError) hooks.onError(String(e && e.message || e)); });
+        if (p && p.catch) p.catch((e) => { diag("audio-play-rejected", { msg: String(e && e.message || e).slice(0, 120) }); if (hooks && hooks.onError) hooks.onError(String(e && e.message || e)); });
         return true;
       } catch (e) {
+        diag("audio-play-throw", { msg: String(e && e.message || e).slice(0, 120) });
         if (hooks && hooks.onError) hooks.onError(String(e && e.message || e));
         return false;
       }
@@ -248,7 +302,8 @@ window.__ModuleLoader__.load({
     var streamPlaying = false;
     var streamAudio = null;
     // gapless 状态
-    var gapless = null;               // { queue, sources, inflight, scheduledEnd, fetchDone }
+    var gapless = null;               // { queue, sources, inflight, scheduledEnd, fetchDone, ended }
+    var streamFetched = 0;            // 已取回的音频段数（诊断用）
     var AC = (typeof window !== "undefined") && (window.AudioContext || window.webkitAudioContext);
     var audioCtx = null;
     function ensureAudioContext() {
@@ -285,15 +340,18 @@ window.__ModuleLoader__.load({
       streamRunId = runId;
       streamHooks = hooks;
       if (typeof sampleRate === "number" && sampleRate > 0) streamSampleRate = sampleRate;
+      streamFetched = 0;
       if (ensureAudioContext()) {
         streamMode = "gapless";
-        gapless = { ctx: audioCtx, queue: [], sources: [], inflight: 0, scheduledEnd: 0, fetchDone: false };
+        gapless = { ctx: audioCtx, queue: [], sources: [], inflight: 0, scheduledEnd: 0, fetchDone: false, ended: 0 };
+        diag("stream-start", { mode: "gapless", runId: runId, sampleRate: streamSampleRate, ctx: audioCtx.state });
         pollStreamOnce();
         streamPollTimer = setInterval(pollStreamOnce, 300);
       } else {
         // 兜底：顺序 <audio>
         streamMode = "legacy";
         streamPlaying = false;
+        diag("stream-start", { mode: "legacy", runId: runId, sampleRate: streamSampleRate });
         pollStreamOnce();
         streamPollTimer = setInterval(pollStreamOnce, 400);
       }
@@ -317,6 +375,7 @@ window.__ModuleLoader__.load({
         return;
       }
       if (res.url) {
+        diag("seg-url", { format: res.format || "pcm", segments: res.segments });
         if (streamMode === "gapless") { enqueueSegment(res.url, res.format || "pcm"); return; }
         playStreamSegment(res.url);
         return;
@@ -324,6 +383,7 @@ window.__ModuleLoader__.load({
       if (res.done) {
         if (res.warn) console.warn("[voice]", res.warn);
         if (res.effortMapped) console.warn("[voice]", res.effortNote || "configured reasoning effort not applied");
+        diag("stream-done", { error: res.error || "", warn: res.warn || "", fetched: streamFetched });
         if (res.error) { failStream(String(res.error)); return; }
         if (streamMode === "gapless") {
           if (gapless) gapless.fetchDone = true;
@@ -345,25 +405,29 @@ window.__ModuleLoader__.load({
       for (let i = 0; i < frames; i++) data[i] = int16[i] / 32768;
       return buf;
     }
-    /** 取一段音频并解码入队：pcm 裸采样直接建 AudioBuffer；mp3 兜底段走 decodeAudioData。 */
+    /** 取一段音频并解码入队：pcm 裸采样直接建 AudioBuffer；mp3/wav 容器段走 decodeAudioData
+     * （wav 是本地引擎整段兜底段的格式——按裸 PCM 解码会出静音/杂音）。 */
     function enqueueSegment(url, format) {
       if (!gapless) return;
       gapless.inflight++;
       fetch(url)
         .then(function (r) { if (!r.ok) throw new Error("fetch " + r.status); return r.arrayBuffer(); })
         .then(function (buf) {
-          if (format === "mp3") return audioCtx.decodeAudioData(buf);
+          if (format === "mp3" || format === "wav") return audioCtx.decodeAudioData(buf);
           return buildAudioBufferFromPcm(buf, streamSampleRate);
         })
         .then(function (buffer) {
           if (!gapless) return;
           gapless.inflight--;
+          streamFetched++;
+          diag("seg-decoded", { n: streamFetched, seconds: Number((buffer.duration || 0).toFixed(2)), ctx: audioCtx ? audioCtx.state : "none" });
           gapless.queue.push(buffer);
           pumpQueue();
         })
         .catch(function (e) {
           if (gapless) gapless.inflight--;
           console.warn("[voice] segment decode failed:", e && e.message || e);
+          diag("seg-decode-fail", { msg: String(e && e.message || e).slice(0, 120), format: format });
           failStream("stream segment decode failed");
         });
     }
@@ -381,6 +445,7 @@ window.__ModuleLoader__.load({
         gapless.sources.push(src);
         src.onended = function () {
           if (!gapless) return;
+          gapless.ended++;
           const idx = gapless.sources.indexOf(src);
           if (idx >= 0) gapless.sources.splice(idx, 1);
           checkStreamEnd();
@@ -398,6 +463,8 @@ window.__ModuleLoader__.load({
     }
     function endStreamNormally() {
       const h = streamHooks;
+      const played = gapless ? gapless.ended : 0;
+      diag("stream-end", { played: played, fetched: streamFetched });
       stopStream();
       if (h && h.onEnd) h.onEnd();
     }
@@ -421,6 +488,7 @@ window.__ModuleLoader__.load({
     }
     function failStream(reason) {
       const h = streamHooks;
+      diag("stream-fail", { reason: String(reason || "").slice(0, 160), fetched: streamFetched });
       stopStream();
       if (h && h.onError) h.onError(reason);
     }
@@ -448,15 +516,33 @@ window.__ModuleLoader__.load({
       return React.createElement("div", { className: "dsh-voice-toast", role: "status" }, pair[0]);
     }
 
+    /** TTS 失败原因分类（Host 的 ttsErrorKind）→ 可读标签；无 kind（旧响应）退回通用文案。 */
+    function ttsFailLabel(kind) {
+      if (kind === "unavailable") return t("toast.ttsUnavailable");
+      if (kind === "timeout") return t("toast.ttsTimeout");
+      if (kind === "http") return t("toast.ttsHttp");
+      return t("toast.fallback");
+    }
+
     /** 统一播报入口：双向流流式 > 云 TTS 音频 > 浏览器 speechSynthesis；ttsError/degraded/warn 降级告警。 */
     function playResult(res, hooks) {
       stopPlaybackOnly();
       if (res && res.notice) { console.warn("[voice]", res.notice); showToast(res.notice); }
-      if (res && res.ttsError) { console.warn("[voice] tts failed, fallback to browser speech:", res.ttsError); showToast(t("toast.fallback") + "：" + String(res.ttsError).slice(0, 140)); }
+      if (res && res.ttsError) {
+        console.warn("[voice] tts failed, fallback to browser speech:", res.ttsErrorKind || "", res.ttsError);
+        var hint = res.ttsErrorKind === "unavailable" ? "（见 docs/local-tts.md）" : "";
+        showToast(ttsFailLabel(res.ttsErrorKind) + "：" + String(res.ttsError).slice(0, 140) + hint);
+      }
       if (res && res.degraded) { console.warn("[voice]", t("read.degraded")); showToast(t("read.degraded")); }
       if (res && res.effortMapped) console.warn("[voice]", res.effortNote || "configured reasoning effort not applied");
       if (res && res.warn) console.warn("[voice]", res.warn);
       if (res && res.messageId) markSpoken(res.messageId, "speaking");
+      diag("play-result", { mode: res && res.mode || "", engine: res && res.engine || "", ttsError: (res && res.ttsError ? String(res.ttsError).slice(0, 100) : ""), degraded: !!(res && res.degraded), notice: (res && res.notice ? String(res.notice).slice(0, 100) : "") });
+      // 慢引擎提示：本地 CosyVoice 首声需等转写+指令+首段合成（CPU 上数十秒），
+      // 不给提示用户会以为点坏了（无任何声音反馈时）
+      if (res && res.mode === "stream" && res.engine === "local-cosyvoice") {
+        showToast("本地中文合成中…首次出声约需 30-90 秒，请稍候");
+      }
       const done = hooks && hooks.onEnd;
       const wrapped = {
         onEnd: () => { if (res && res.messageId) markSpoken(res.messageId, "done"); if (done) done(); },
@@ -741,6 +827,12 @@ window.__ModuleLoader__.load({
       const busyPair = React.useState(false);
       const busy = busyPair[0];
       const setBusy = busyPair[1];
+      const localMsgPair = React.useState("");
+      const localCheckMsg = localMsgPair[0];
+      const setLocalCheckMsg = localMsgPair[1];
+      const cosyMsgPair = React.useState("");
+      const cosyCheckMsg = cosyMsgPair[0];
+      const setCosyCheckMsg = cosyMsgPair[1];
 
       React.useEffect(() => {
         rpc("meta").then((m) => { if (m && m.ok) setMeta(m); }).catch(() => {});
@@ -791,8 +883,30 @@ window.__ModuleLoader__.load({
           const res = await rpc("preview");
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
           else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser")); }
-          else if (res.audioUrl) { playAudio(res.audioUrl, {}); setMsg(t("settings.previewCloud")); }
+          else if (res.audioUrl) { playAudio(res.audioUrl, {}); setMsg(ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")); }
         } catch (e) { setMsg(t("settings.previewFail") + String(e && e.message || e)); }
+        setBusy(false);
+      }
+      /** 本地服务自检：只读探测（不拉起服务），把状态与不可用原因显示在设置页。 */
+      async function onCheckLocal() {
+        setBusy(true); setLocalCheckMsg("");
+        try {
+          const res = await rpc("localStatus");
+          if (res && res.ok && res.running) setLocalCheckMsg(t("settings.localCheckRunning") + res.url);
+          else if (res && res.ok) setLocalCheckMsg(t("settings.localCheckFail") + (res.detail || res.url || ""));
+          else setLocalCheckMsg(t("settings.localCheckFail") + (res && res.error ? String(res.error) : "unknown"));
+        } catch (e) { setLocalCheckMsg(t("settings.localCheckFail") + String(e && e.message || e)); }
+        setBusy(false);
+      }
+      /** CosyVoice 本地服务自检（只读探测，不拉起服务）。 */
+      async function onCheckCosyvoice() {
+        setBusy(true); setCosyCheckMsg("");
+        try {
+          const res = await rpc("cosyvoiceStatus");
+          if (res && res.ok && res.running) setCosyCheckMsg(t("settings.localCheckRunning") + res.url);
+          else if (res && res.ok) setCosyCheckMsg(t("settings.localCheckFail") + (res.detail || res.url || ""));
+          else setCosyCheckMsg(t("settings.localCheckFail") + (res && res.error ? String(res.error) : "unknown"));
+        } catch (e) { setCosyCheckMsg(t("settings.localCheckFail") + String(e && e.message || e)); }
         setBusy(false);
       }
 
@@ -801,10 +915,14 @@ window.__ModuleLoader__.load({
       const languages = m.languages || [];
       const voices = m.voices || [];
       const kokoroVoices = m.kokoroVoices || [];
+      const cosyvoiceVoices = m.cosyvoiceVoices || [];
       const speakerKnown = voices.some((v) => v.id === cfg.tts.volcengine.speaker);
       // local 子配置（旧 Host/缓存无该对象时补默认，避免 UI 读空崩溃）
-      if (!cfg.tts.local) cfg.tts.local = { baseUrl: "http://127.0.0.1:8880/v1/audio/speech", voice: "af_heart", speed: 1, timeoutMs: 30000 };
+      if (!cfg.tts.local) cfg.tts.local = { baseUrl: "http://127.0.0.1:8880/v1/audio/speech", voice: "af_heart", speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: "", streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 };
+      // localCosyvoice 子配置（旧 Host/缓存无该对象时补默认，避免 UI 读空崩溃）
+      if (!cfg.tts.localCosyvoice) cfg.tts.localCosyvoice = { baseUrl: "http://127.0.0.1:8882/v1/audio/speech", voice: "dsh_default", speed: 1, sampleRate: 24000, timeoutMs: 120000, autoStart: true, pythonPath: "", streaming: true, segmentChars: 120, segmentTimeoutMs: 120000, emotionEnabled: true, instruct: "", flowSteps: 4 };
       const kokoroVoiceKnown = kokoroVoices.some((v) => v.id === cfg.tts.local.voice);
+      const cosyVoiceKnown = cosyvoiceVoices.some((v) => v.id === cfg.tts.localCosyvoice.voice);
       // 转写模型路由下拉数据（Host routeInfo 提供；未就绪时退化为文本输入）
       const providerList = info && Array.isArray(info.providers) && info.providers.length ? info.providers : null;
       const modelList = info && Array.isArray(info.models) && info.models.length ? info.models : null;
@@ -856,8 +974,10 @@ window.__ModuleLoader__.load({
         setMsg("");
       }
 
-      // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro；其余（含旧值 openai-compatible）按系统 TTS 处理
-      const ttsEngine = cfg.tts.provider === "volcengine" || cfg.tts.provider === "local" ? cfg.tts.provider : "browser";
+      // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro、
+      // local-cosyvoice=本地 CosyVoice；其余（含旧值 openai-compatible）按系统 TTS 处理
+      const ttsEngine = cfg.tts.provider === "volcengine" || cfg.tts.provider === "local" || cfg.tts.provider === "local-cosyvoice"
+        ? cfg.tts.provider : "browser";
 
       return React.createElement("div", { className: "dsh-voice-settings" },
         React.createElement("h2", null, t("settings.title")),
@@ -915,7 +1035,8 @@ window.__ModuleLoader__.load({
           React.createElement(SelectInput, { value: ttsEngine, onChange: onEngineChange },
             React.createElement("option", { value: "browser" }, t("engine.browser")),
             React.createElement("option", { value: "volcengine" }, t("engine.volcengine")),
-            React.createElement("option", { value: "local" }, t("engine.local"))),
+            React.createElement("option", { value: "local" }, t("engine.local")),
+            React.createElement("option", { value: "local-cosyvoice" }, t("engine.localCosyvoice"))),
           React.createElement("span", { className: "dsh-voice-dim" }, t("engine.hint"))),
 
         // —— 播报引擎 · 系统 TTS（免费）——
@@ -948,7 +1069,63 @@ window.__ModuleLoader__.load({
               placeholder: "af_heart",
             }))),
           React.createElement(Row, { label: t("row.localSpeed") },
-            React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" }))) : null,
+            React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
+          React.createElement(Row, { label: t("local.autoStart") },
+            React.createElement(CheckInput, { value: cfg.tts.local.autoStart !== false, onChange: (v) => setField("tts.local.autoStart", v) }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("local.autoStartHint"))),
+          React.createElement(Row, { label: t("local.streaming") },
+            React.createElement(CheckInput, { value: cfg.tts.local.streaming !== false, onChange: (v) => setField("tts.local.streaming", v) }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("local.streamingHint"))),
+          React.createElement(Row, { label: t("settings.localCheck") },
+            React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckLocal, disabled: busy }, t("settings.localCheck")),
+            React.createElement("span", { className: "dsh-voice-dim" }, localCheckMsg))) : null,
+
+        // —— 播报引擎 · 本地 CosyVoice（中文播报 + 情绪，免费；需先启动本地服务）——
+        ttsEngine === "local-cosyvoice" ? React.createElement(React.Fragment, null,
+          React.createElement("h3", null, t("tts.section.localCosyvoice")),
+          React.createElement("p", { className: "dsh-voice-dim" }, t("localCosyvoice.hint")),
+          React.createElement(Row, { label: t("row.localBaseUrl") },
+            React.createElement(TextInput, { value: cfg.tts.localCosyvoice.baseUrl, onChange: (v) => setField("tts.localCosyvoice.baseUrl", v), placeholder: "http://127.0.0.1:8882/v1/audio/speech" })),
+          React.createElement(Row, { label: t("row.cosyVoice") },
+            React.createElement(SelectInput, {
+              value: cosyVoiceKnown ? cfg.tts.localCosyvoice.voice : VOICE_CUSTOM,
+              onChange: (v) => { if (v !== VOICE_CUSTOM) setField("tts.localCosyvoice.voice", v); },
+            },
+              cosyvoiceVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+              React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
+            (cosyVoiceKnown ? null : React.createElement(TextInput, {
+              value: cfg.tts.localCosyvoice.voice,
+              onChange: (v) => setField("tts.localCosyvoice.voice", v),
+              placeholder: "dsh_default",
+            }))),
+          React.createElement(Row, { label: t("row.cosySpeed") },
+            React.createElement(SliderInput, { value: cfg.tts.localCosyvoice.speed, onChange: (v) => setField("tts.localCosyvoice.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
+          React.createElement(Row, { label: t("row.cosyFlowSteps") },
+            React.createElement(SelectInput, {
+              value: String(cfg.tts.localCosyvoice.flowSteps || 4),
+              onChange: (v) => setField("tts.localCosyvoice.flowSteps", Number(v)),
+            },
+              React.createElement("option", { value: "2" }, t("cosyFlow.2")),
+              React.createElement("option", { value: "3" }, t("cosyFlow.3")),
+              React.createElement("option", { value: "4" }, t("cosyFlow.4")),
+              React.createElement("option", { value: "6" }, t("cosyFlow.6")),
+              React.createElement("option", { value: "10" }, t("cosyFlow.10"))),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("cosyFlow.hint"))),
+          React.createElement(Row, { label: t("row.cosyEmotion") },
+            React.createElement(CheckInput, { value: cfg.tts.localCosyvoice.emotionEnabled !== false, onChange: (v) => setField("tts.localCosyvoice.emotionEnabled", v) }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("cosyEmotion.hint"))),
+          React.createElement(Row, { label: t("row.cosyInstruct") },
+            React.createElement(TextInput, { value: cfg.tts.localCosyvoice.instruct || "", onChange: (v) => setField("tts.localCosyvoice.instruct", v), placeholder: "用温柔的语气说" }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("cosyInstruct.hint"))),
+          React.createElement(Row, { label: t("local.autoStart") },
+            React.createElement(CheckInput, { value: cfg.tts.localCosyvoice.autoStart !== false, onChange: (v) => setField("tts.localCosyvoice.autoStart", v) }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("local.autoStartHint"))),
+          React.createElement(Row, { label: t("local.streaming") },
+            React.createElement(CheckInput, { value: cfg.tts.localCosyvoice.streaming !== false, onChange: (v) => setField("tts.localCosyvoice.streaming", v) }),
+            React.createElement("span", { className: "dsh-voice-dim" }, t("local.streamingHint"))),
+          React.createElement(Row, { label: t("settings.localCheck") },
+            React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckCosyvoice, disabled: busy }, t("settings.localCheck")),
+            React.createElement("span", { className: "dsh-voice-dim" }, cosyCheckMsg))) : null,
 
         // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音；仅选择豆包时显示）——
         ttsEngine === "volcengine" ? React.createElement(React.Fragment, null,

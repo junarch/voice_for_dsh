@@ -18,6 +18,8 @@
 [DeepSeek 输出完成] -> Host 监听 turn/end(completed|max-tokens) -> 提取最后一条含 text 的助手消息
    -> LLM 口语化转写（独立调用，prompt 由风格预设/语种拼） -> 转写稿缓存（provider/model/prompt/effort 四者一致才命中）
    -> TTS：browser=客户端 speechSynthesis | volcengine=豆包云合成 | local=本地 Kokoro（英文稿）
+        └ local：先 supervisor.ensure（探 /health → 复用或经 ctx.subprocess 拉起；dsh 退出回收）
+                  → splitForStream 分句 → 逐段 pcm16 合成 → 段队列（首段 ~2.5s 出声）
         | Host 合成 + 一次性音频路由 -> 浏览器播放
 ```
 
@@ -39,12 +41,18 @@ curl.exe -s -X POST http://127.0.0.1:3080/voice/api/ping
 curl.exe -s -X POST http://127.0.0.1:3080/voice/api/getConfig
 curl.exe -s -X POST http://127.0.0.1:3080/voice/api/meta
 curl.exe -s -X POST http://127.0.0.1:3080/voice/api/preview    # 试听（云 TTS 花几分钱）
+curl.exe -s -X POST http://127.0.0.1:3080/voice/api/clientDiagDump   # 读回浏览器播放链路事件
 ```
 看返回关键字段：`cached`（true=缓存命中没花钱）、`degraded`（true=转写失败走兜底）、`ttsError`、`audioUrl`。
+播报"没声音"时先看 `clientDiagDump`：`stream-start` 的 `ctx` 是不是 `suspended`、`stream-end` 的 `played`
+是不是 0——把"服务端还没算完"与"浏览器根本没排上播放"分开（本地 CPU 引擎首声几十秒，靠耳朵分不出来）。
 
 ### 第 3 层：几分钱——真实外呼探针 `scripts/tts-*.mjs`
 对火山 TTS 做受控实验（读 settings.yaml 里的 apiKey）。时长对比只能证明"标签被照读/数值参数生效"这类强信号；
 **语气、音色、方言这类只有人耳能判断的效果，必须听音频**。怀疑任何外部接口行为时，先跑探针再改代码。
+
+本地服务另有两个零成本探针：`scripts/local-autostart-probe.mjs --stream`（真拉起服务 + 真切分合成计时）
+与 `scripts/local-tts-cancel-probe.mjs`（中止/取消后服务端是否停下、推理锁是否被泄漏）。
 
 ### 第 4 层：手动验收（最贵，只测前三层测不到的）
 浏览器里：设置页渲染、下拉/滑块交互、朗读按钮状态机、自动播报节奏、方言试听。只在这一层测"人能感知"的东西。

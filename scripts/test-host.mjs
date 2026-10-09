@@ -58,9 +58,10 @@
 
 // import = 从 Node.js 自带的标准库里取工具。
 // mkdtempSync 建一个一次性临时文件夹；rmSync 删文件夹。
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // 【关键顺序】转写缓存写在 DSH_HOME（默认 ~/.dsh）下，插件代码在"被加载的
 // 那一瞬间"就会去读它。所以必须先把 DSH_HOME 指到一个空临时目录，再 import
@@ -69,13 +70,17 @@ const home = mkdtempSync(path.join(tmpdir(), 'voice-test-'))
 process.env.DSH_HOME = home
 
 // await import(...) = 动态加载真实的插件文件（不是复制粘贴的副本！测的就是它）。
-const { apply } = await import('../packages/dsh-plugin-voice/lib/index.js')
+const { apply, splitForStream } = await import('../packages/dsh-plugin-voice/lib/index.js')
 // 双向流帧编解码（volcengine-ws.js 导出的纯函数，字节级单测用）
 const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/dsh-plugin-voice/lib/volcengine-ws.js')
 // 口播净化（speech-clean.js 纯函数）
 const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/speech-clean.js')
 // 音色 ↔ 语种/方言 兼容矩阵 + 配置归一（voice-compat.js 纯函数：归一/纠错/纠语言/引擎归一/音调）
-const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
+const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider, localBlockKeyOf } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
+// 本地服务托管（local-supervisor.js 纯函数：路径推导 / 端点推导）
+const { resolveLaunch } = await import('../packages/dsh-plugin-voice/lib/local-supervisor.js')
+// 本仓库根（用于断言"已部署/未部署"两种分支）
+const REPO_ROOT_FOR_TEST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 // ---------- 断言工具：测试的"计分器" ----------
 // 断言（assertion）= 一句"我宣称 X 应该为真"的检查。
@@ -190,18 +195,43 @@ const webServer = { register: (r) => routes.push(r) }
 // 替身 5：事件监听。插件用 ctx.on('session/event') 订阅会话事件；
 // 我们把监听函数存起来，测试里就能"伪造"事件（turn 开始/结束等）。
 const eventListeners = new Map()
+
+// 替身 7：subprocess（进程托管）。local 引擎在播报前会 ensure 本地服务：已在跑就复用，
+// 没跑就经 ctx.subprocess.spawn 拉起。替身不真的起进程，只记录 spawn 参数，
+// 并允许测试决定"拉起后服务是否就绪"（healthOk）。
+const subprocessState = { spawns: [], healthOk: false, terminateCalls: 0 }
+function fakeHandle() {
+  const reader = (text) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
+  return {
+    stdin: undefined, stdout: undefined, stderr: undefined,
+    collected: { stdout: reader(''), stderr: reader('') },
+    done: new Promise(() => {}), // 永远不退出（模拟常驻服务）
+    terminate: () => { subprocessState.terminateCalls++ },
+    waitForExit: async () => true,
+  }
+}
+const subprocess = {
+  spawn: (spec) => {
+    subprocessState.spawns.push(spec)
+    subprocessState.healthOk = true // 拉起后服务就绪（测试可提前置 true 表示"已在跑"）
+    return fakeHandle()
+  },
+}
+
 const ctx = {
-  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : undefined),
+  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : name === 'subprocess' ? subprocess : undefined),
   settings,
   webServer,
   on: (name, fn) => { if (!eventListeners.has(name)) eventListeners.set(name, []); eventListeners.get(name).push(fn) },
+  effect: (fn) => { try { fn() } catch { /* 替身：dispose 回调不执行 */ } },
 }
 
 // 替身 6：fetch（网络电话）。插件调火山 TTS / 本地 Kokoro 用的是全局 fetch；
 // 我们把它整个换成假货--不联网、立刻返回假音频，并记下"打了什么电话、说了什么"。
 // 这就是为什么本测试零花费：外呼根本没发生，但请求体会被完整记下来供断言。
+// 健康探测（GET /health）：由 subprocessState.healthOk 决定通/不通，驱动"自动启动"分支。
 const realFetch = globalThis.fetch
-const fetchState = { calls: [], nextOk: true }
+const fetchState = { calls: [], nextOk: true, hang: false, never: false, localSegIndex: 0, localFailOnSegment: 0, localFailPcm: false, hangCount: 0, hangFail: false, hangReleasers: [] }
 const LOCAL_TTS_URL = 'http://127.0.0.1:8880/v1/audio/speech' // 与 schema 默认值一致；URL 含此串即路由到 local 假响应
 function fakeTtsResponse() {
   // 伪造"分块 JSON 行"响应：两段 base64 音频（解码后是 'ABC'/'DEF'）+ 结束帧。
@@ -227,13 +257,97 @@ function fakeLocalWavResponse() {
   // 伪造本地 Kokoro 服务响应：合法 WAV 头（'RIFF' 魔数）+ 占位数据，经 arrayBuffer() 消费。
   const bytes = new Uint8Array(64)
   bytes.set([0x52, 0x49, 0x46, 0x46], 0) // 'RIFF'
-  return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer, text: async () => 'mock wav' }
+  return {
+    ok: true, status: 200,
+    headers: { get: (n) => (String(n).toLowerCase() === 'x-sample-rate' ? '24000' : null) },
+    arrayBuffer: async () => bytes.buffer,
+    text: async () => 'mock wav',
+  }
+}
+function fakeLocalPcmResponse(segIndex) {
+  // 伪造"裸 PCM"响应（分句流式：response_format=pcm16）：16bit 小端 mono，带 X-Sample-Rate。
+  // 每个响应分两块吐字节（各 ≥0.5s 音频），用来验证 Host"边收边按 0.5s 切块入队"——
+  // 一次段请求应当产出多个音频分块，而不是等整段算完才入队（首声延迟的关键）。
+  const samples = 24000 * (segIndex + 1)
+  const bytes = new Uint8Array(samples * 2)
+  for (let i = 0; i < samples; i++) {
+    const v = Math.round(Math.sin((i / 24) * Math.PI) * 8000)
+    bytes[i * 2] = v & 0xff
+    bytes[i * 2 + 1] = (v >> 8) & 0xff
+  }
+  return {
+    ok: true, status: 200,
+    headers: { get: (n) => (String(n).toLowerCase() === 'x-sample-rate' ? '24000' : null) },
+    body: {
+      getReader: () => {
+        let sent = 0
+        // 分两次吐字节：验证"按无数据间隔计时"的实现能吃多块响应体
+        const half = Math.floor(bytes.length / 2)
+        return {
+          read: async () => {
+            if (sent === 0) { sent = 1; return { done: false, value: bytes.slice(0, half) } }
+            if (sent === 1) { sent = 2; return { done: false, value: bytes.slice(half) } }
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    },
+    text: async () => 'mock pcm',
+  }
 }
 globalThis.fetch = async (url, init) => {
-  const isLocal = String(url).includes('127.0.0.1:8880')
-  fetchState.calls.push({ url: String(url), local: isLocal, body: init && init.body ? JSON.parse(init.body) : null })
+  const target = String(url)
+  const parsedBodyEarly = init && init.body ? (() => { try { return JSON.parse(init.body) } catch { return null } })() : null
+  const isHealth = target.includes('/health')
+  if (isHealth) {
+    if (!subprocessState.healthOk) throw new Error('fetch failed') // 模拟"服务没在跑"（连接被拒）
+    return { ok: true, status: 200, text: async () => '{"ok":true}' }
+  }
+  if (fetchState.never && target.includes('127.0.0.1:8880') && parsedBodyEarly && parsedBodyEarly.response_format === 'pcm16') {
+    // 模拟"段请求永远不返回"（服务卡死）：只受超时中止，验证段级超时（T22f）
+    const signal = init && init.signal
+    fetchState.hangCount++
+    return await new Promise((_, reject) => {
+      if (!signal) return
+      if (signal.aborted) reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      else signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    })
+  }
+  if (fetchState.hang && target.includes('127.0.0.1:8880')) {
+    // 模拟"服务在跑但不响应"：挂住直到超时 abort（或以 500 落地），用于验证"段级超时"。
+    // 记下本次挂起，测试可显式 releaseHang() 让请求以 500 收尾，避免与 pipeline 抢时序。
+    const signal = init && init.signal
+    fetchState.hangCount++
+    return await new Promise((resolve, reject) => {
+      const settle = () => { if (fetchState.hangFail) resolve({ ok: false, status: 500, text: async () => 'hang released', arrayBuffer: async () => new ArrayBuffer(0) }); else reject(new Error('fetch failed')) }
+      fetchState.hangReleasers.push(settle)
+      if (!signal) return
+      if (signal.aborted) reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      else signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    })
+  }
+  const isLocal = target.includes('127.0.0.1:8880') || target.includes('127.0.0.1:8882') // Kokoro 8880 / CosyVoice 8882
+  const parsedBody = init && init.body ? JSON.parse(init.body) : null
+  fetchState.calls.push({ url: target, local: isLocal, body: parsedBody })
   if (!fetchState.nextOk) return { ok: false, status: 500, body: null, text: async () => 'mock tts boom', arrayBuffer: async () => new ArrayBuffer(0) }
-  return isLocal ? fakeLocalWavResponse() : fakeTtsResponse()
+  if (isLocal) {
+    // localFailPcm：所有流式段请求直接失败（验证"首段即失败 → 整段兜底"）
+    if (fetchState.localFailPcm && parsedBody && parsedBody.response_format === 'pcm16') {
+      fetchState.localSegIndex++
+      return { ok: false, status: 500, text: async () => 'pcm endpoint boom', arrayBuffer: async () => new ArrayBuffer(0) }
+    }
+    // localFailOnSegment = N：第 N 个流式段（1-based）起返回 500（验证"中途失败保留已播段"）
+    if (fetchState.localFailOnSegment && fetchState.localSegIndex + 1 >= fetchState.localFailOnSegment && parsedBody && parsedBody.response_format === 'pcm16') {
+      fetchState.localSegIndex++
+      return { ok: false, status: 500, text: async () => 'segment boom', arrayBuffer: async () => new ArrayBuffer(0) }
+    }
+    if (parsedBody && parsedBody.response_format === 'pcm16') {
+      const idx = fetchState.localSegIndex++
+      return fakeLocalPcmResponse(idx)
+    }
+    return fakeLocalWavResponse()
+  }
+  return fakeTtsResponse()
 }
 
 // ---------- 把真插件"装配"到替身上，并做 HTTP 请求的仿真驱动 ----------
@@ -254,7 +368,7 @@ async function rpc(method, args, headers) {
 }
 async function fetchAudio(id) {
   const req = { method: 'GET', url: '/voice/audio/' + id }
-  const res = { code: 0, body: null, writeHead(c) { this.code = c }, end(b) { this.body = b } }
+  const res = { code: 0, body: null, mime: '', writeHead(c, h) { this.code = c; if (h && h['Content-Type']) this.mime = h['Content-Type'] }, end(b) { this.body = b } }
   await audioHandler(req, res)
   return res
 }
@@ -953,7 +1067,10 @@ check('ttsProviderOf：未知值归一 browser', ttsProviderOf({ tts: { provider
 check('meta 带 kokoroVoices 精选清单', (await rpc('meta')).kokoroVoices.some((v) => v.id === 'af_heart'))
 // —— 切到 local：转写 prompt 含英文不变式；只调转写 LLM、零情感指令调用；合成走本地 WAV ——
 // （测试 mock 不套 schema 默认值，显式补 tts.local；真机由 schema 默认补齐）
-await rpc('setConfig', { patch: { language: 'auto', transcribe: { stylePreset: 'standard' }, tts: { provider: 'local', local: { baseUrl: LOCAL_TTS_URL, voice: 'af_heart', speed: 1, timeoutMs: 30000 } } } })
+// 本段只验证"整段合成"链路（streaming:false）→ 非流式契约（audioUrl/字段）；分句流式在 T22 专测。
+// 同时先置"服务已在跑"（healthOk=true）→ 不该触发自动拉起；拉起行为在 T21 专测。
+subprocessState.healthOk = true
+await rpc('setConfig', { patch: { language: 'auto', transcribe: { stylePreset: 'standard' }, tts: { provider: 'local', local: { baseUrl: LOCAL_TTS_URL, voice: 'af_heart', speed: 1, timeoutMs: 30000, streaming: false } } } })
 fetchState.calls = []
 llmState.responses = [{ text: 'Local English transcript.', finish: 'stop' }]
 const instrCount20 = llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length
@@ -1003,6 +1120,307 @@ check('转写关闭 + local：不合成音频', r20d.ok === true && r20d.audioUr
 check('转写关闭 + local：notice 提示需开启转写（客户端 toast 素材）', typeof r20d.notice === 'string' && r20d.notice.includes('需要转写模型'), r20d.notice)
 check('转写关闭 + local：零 LLM 调用（直读不烧 token）', llmState.calls.length === calls20d, llmState.calls.length - calls20d)
 await rpc('setConfig', { patch: { transcribe: { enabled: true } } })
+
+// ================= T21 本地服务托管（自动拉起 / 复用 / 失败分类） =================
+section('T21 本地服务托管（autoStart 自动拉起 / 已跑则复用 / ttsErrorKind 分类）')
+
+const spawnCount = () => subprocessState.spawns.length
+const localPatch = (extra) => ({ patch: { tts: { provider: 'local', local: Object.assign({ baseUrl: LOCAL_TTS_URL, voice: 'af_heart', speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: false }, extra || {}) } } })
+
+// —— 21a：服务没在跑 → 自动拉起一次，并等待就绪后合成成功 ——
+subprocessState.healthOk = false
+subprocessState.spawns = []
+await rpc('setConfig', localPatch())
+llmState.responses = [{ text: 'Autostart transcript.', finish: 'stop' }]
+const r21a = await rpc('speak', { sessionId: 's1', messageId: 'm4' })
+check('未跑 → spawn 恰好 1 次', spawnCount() === 1, spawnCount())
+const spec21 = subprocessState.spawns[0] || {}
+check('spawn argv = 解释器 + 服务脚本 + --port 8880', Array.isArray(spec21.argv) && spec21.argv.length === 4
+  && /python(\.exe)?$/.test(spec21.argv[0]) && /local-tts-server\.py$/.test(spec21.argv[1])
+  && spec21.argv[2] === '--port' && spec21.argv[3] === '8880', spec21.argv)
+check('spawn cwd = 仓库根（含 local/）', !!spec21.cwd && /voice_for_dsh$/.test(String(spec21.cwd)), spec21.cwd)
+check('spawn stdio 三项显式（stdin=ignore，stdout/stderr 有界收集）', spec21.stdio
+  && spec21.stdio.stdin === 'ignore' && spec21.stdio.stdout && spec21.stdio.stdout.maxBytes > 0
+  && spec21.stderr === undefined && spec21.stdio.stderr && spec21.stdio.stderr.maxBytes > 0, spec21.stdio)
+check('spawn graceMs 为正整数', Number.isInteger(spec21.graceMs) && spec21.graceMs > 0, spec21.graceMs)
+check('拉起后合成成功、返回音频路由', r21a.ok === true && typeof r21a.audioUrl === 'string' && r21a.ttsErrorKind === undefined, { a: r21a.audioUrl, k: r21a.ttsErrorKind })
+
+// —— 21b：服务已在跑 → 复用，不重复拉起 ——
+subprocessState.healthOk = true
+const spawnsBefore21b = spawnCount()
+llmState.responses = [{ text: 'Reuse transcript.', finish: 'stop' }]
+const r21b = await rpc('speak', { sessionId: 's1', messageId: 'm5' })
+check('已在跑 → 不再 spawn', spawnCount() === spawnsBefore21b, spawnCount())
+check('复用时合成正常', r21b.ok === true && typeof r21b.audioUrl === 'string', r21b.audioUrl)
+
+// —— 21c：autoStart=false 且服务没跑 → 不拉起，报 unavailable（文案给出补救路径） ——
+// 注意：播报需要"这条消息存在"，故每个用例用独立 messageId 并补一条会话事件（也避开转写缓存）
+sessionEvents.push(msgEvent('m21c', 41, 'No autostart content'))
+subprocessState.healthOk = false
+const spawnsBefore21c = spawnCount()
+await rpc('setConfig', localPatch({ autoStart: false }))
+llmState.responses = [{ text: 'No autostart transcript.', finish: 'stop' }]
+const r21c = await rpc('speak', { sessionId: 's1', messageId: 'm21c' })
+check('autoStart=false → 零 spawn', spawnCount() === spawnsBefore21c, spawnCount())
+check('autoStart=false → ttsErrorKind=unavailable（客户端走专用文案）', r21c.ttsErrorKind === 'unavailable', r21c.ttsErrorKind)
+check('autoStart=false → 文案含"自动启动"开关与兜底启动方式', /自动启动/.test(String(r21c.ttsError)) && /start-local-tts/.test(String(r21c.ttsError)), r21c.ttsError)
+
+// —— 21d：未部署（pythonPath 覆盖到非 venv 路径） → 不 spawn，报 unavailable 并指引 setup 脚本 ——
+// 覆盖后能否回落自动推导，取决于本机仓库是否已有 local/venv：没有 venv 时直接报错，
+// 已有 venv（开发机）时回落并成功拉起。两种分支分别断言，都在真机语义内。
+// 纯函数分支（找不到 local/ 的仓库根）在下方 21h 直接验证，不依赖本机部署状态。
+sessionEvents.push(msgEvent('m21d', 42, 'Missing venv content'))
+await rpc('setConfig', localPatch({ autoStart: true, pythonPath: 'Z:/no/such/venv/Scripts/python.exe' }))
+llmState.responses = [{ text: 'Missing venv transcript.', finish: 'stop' }]
+const spawnsBefore21d = spawnCount()
+const r21d = await rpc('speak', { sessionId: 's1', messageId: 'm21d' })
+const thisVenvExists = existsSync(path.join(REPO_ROOT_FOR_TEST, 'local', 'venv', 'Scripts', 'python.exe'))
+if (thisVenvExists) {
+  check('覆盖到非 venv 路径但本机已部署 → 回落自动推导并拉起', spawnCount() === spawnsBefore21d + 1, spawnCount() - spawnsBefore21d)
+  check('回落路径合成正常', r21d.ok === true && typeof r21d.audioUrl === 'string', r21d.audioUrl)
+} else {
+  check('未部署 → 零 spawn', spawnCount() === spawnsBefore21d, spawnCount())
+  check('未部署 → ttsErrorKind=unavailable', r21d.ttsErrorKind === 'unavailable', r21d.ttsErrorKind)
+  check('未部署 → 文案指向 setup-local-tts.ps1', /setup-local-tts\.ps1/.test(String(r21d.ttsError)), r21d.ttsError)
+}
+
+// —— 21e：服务在跑但返回 500 → ttsErrorKind=http（与"不可达"区分） ——
+sessionEvents.push(msgEvent('m21e', 43, 'Http error content'))
+await rpc('setConfig', localPatch())
+subprocessState.healthOk = true
+fetchState.nextOk = false
+llmState.responses = [{ text: 'Http error transcript.', finish: 'stop' }]
+const r21e = await rpc('speak', { sessionId: 's1', messageId: 'm21e' })
+check('服务 500 → ttsErrorKind=http', r21e.ttsErrorKind === 'http' && /500/.test(String(r21e.ttsError)), { k: r21e.ttsErrorKind, e: r21e.ttsError })
+fetchState.nextOk = true
+
+// —— 21f：服务在跑但不响应 → ttsErrorKind=timeout ——
+sessionEvents.push(msgEvent('m21f', 44, 'Timeout content'))
+await rpc('setConfig', localPatch({ timeoutMs: 300 }))
+fetchState.hang = true
+llmState.responses = [{ text: 'Timeout transcript.', finish: 'stop' }]
+const r21f = await rpc('speak', { sessionId: 's1', messageId: 'm21f' })
+fetchState.hang = false
+check('不响应 → ttsErrorKind=timeout', r21f.ttsErrorKind === 'timeout' && /timeout/.test(String(r21f.ttsError)), { k: r21f.ttsErrorKind, e: r21f.ttsError })
+
+// —— 21g：localStatus 只读自检（不拉起服务） ——
+await rpc('setConfig', localPatch())
+subprocessState.healthOk = true
+const st21run = await rpc('localStatus')
+check('localStatus：在跑时报 running=true 且带健康端点', st21run.ok === true && st21run.running === true && String(st21run.url).endsWith('/health'), st21run)
+subprocessState.healthOk = false
+const spawnsBefore21g = spawnCount()
+const st21down = await rpc('localStatus')
+check('localStatus：没跑时报 running=false', st21down.ok === true && st21down.running === false, st21down)
+check('localStatus：只读探测，不触发拉起', spawnCount() === spawnsBefore21g, spawnCount())
+check('localStatus：报告部署状态与开关', st21down.venvFound === true && st21down.autoStart === true && st21down.subprocessAvailable === true, st21down)
+
+// —— 21h：路径推导纯函数分支（不依赖本机是否部署） ——
+// 不存在的盘符路径 → 上溯找不到任何含 local/ 的目录，必然报"未找到运行环境"并指引 setup 脚本
+const asFileUrl = (p) => 'file:///' + String(p).replace(/\\/g, '/')
+const orphanLaunch = resolveLaunch(asFileUrl('Q:/no-such-place/lib/index.js'), '')
+check('resolveLaunch：找不到部署时给出部署指引（root 留空）', orphanLaunch.root === '' && orphanLaunch.python === '' && /setup-local-tts\.ps1/.test(orphanLaunch.error), orphanLaunch)
+// 只有 local/ 没有 scripts/（半部署）→ 认出局部根，但仍报"未找到运行环境"
+const halfDir = mkdtempSync(path.join(tmpdir(), 'voice-halfdeploy-'))
+mkdirSync(path.join(halfDir, 'local'), { recursive: true })
+mkdirSync(path.join(halfDir, 'lib'), { recursive: true })
+const halfLaunch = resolveLaunch(asFileUrl(path.join(halfDir, 'lib', 'index.js')), '')
+check('resolveLaunch：半部署（有 local/ 无 scripts/）仍报缺运行环境', /setup-local-tts\.ps1/.test(halfLaunch.error) && halfLaunch.script.indexOf('local-tts-server.py') > 0, halfLaunch)
+rmSync(halfDir, { recursive: true, force: true })
+// pythonPath 覆盖：指向真实存在的文件时优先采用（显式配置不被自动推导覆盖）
+const overrideDir = mkdtempSync(path.join(tmpdir(), 'voice-override-'))
+const fakePython = path.join(overrideDir, 'fake-python.exe')
+writeFileSync(fakePython, 'stub')
+const overrideLaunch = resolveLaunch(asFileUrl(path.join(REPO_ROOT_FOR_TEST, 'packages', 'dsh-plugin-voice', 'lib', 'index.js')), fakePython)
+check('resolveLaunch：pythonPath 覆盖优先于自动推导', overrideLaunch.python === fakePython, overrideLaunch.python)
+// 真实仓库根下的推导结果：脚本指向本仓库（junction 也能穿透）
+const realLaunch = resolveLaunch(asFileUrl(path.join(REPO_ROOT_FOR_TEST, 'packages', 'dsh-plugin-voice', 'lib', 'index.js')), '')
+check('resolveLaunch：从真实仓库根推导出脚本路径', /scripts[\\/]local-tts-server\.py$/.test(realLaunch.script), realLaunch.script)
+rmSync(overrideDir, { recursive: true, force: true })
+// 复位：验证实例释放（幂等，不抛错）
+subprocessState.healthOk = true
+
+// ================= T22 本地分句流式（首声早 / 单段超时 / 降级整段） =================
+section('T22 本地分句流式（pcm16 分段 / 单段超时 / 首段失败降级整段）')
+
+const LOCAL_STREAM_CFG = { baseUrl: LOCAL_TTS_URL, voice: 'af_heart', speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 300, segmentTimeoutMs: 30000 }
+const localStreamPatch = (extra) => ({ patch: { tts: { provider: 'local', local: Object.assign({}, LOCAL_STREAM_CFG, extra || {}) } } })
+// 长稿：8 句 × ~185 字符 ≈ 1480 字符 → segmentChars=300 时应切成 ≥4 段（且每段 ≤ 600 = 2×target）
+const LONG_SENTENCE = 'The quick brown fox jumps over the lazy dog while the local engine keeps synthesizing audio in small chunks so that playback can start almost immediately instead of waiting for the entire transcript to finish. '
+const LONG_TRANSCRIPT = [1, 2, 3, 4, 5, 6, 7, 8].map((i) => LONG_SENTENCE.trim() + ' Number ' + i + '.').join(' ')
+
+subprocessState.healthOk = true
+fetchState.localFailPcm = false
+fetchState.localFailOnSegment = 0
+fetchState.localSegIndex = 0
+await rpc('setConfig', localStreamPatch())
+
+// —— 22a：默认（streaming=true）走分句流式 ——
+sessionEvents.push(msgEvent('m22a', 51, 'Long streaming source'))
+llmState.responses = [{ text: LONG_TRANSCRIPT, finish: 'stop' }]
+const pcmCallsBefore22a = fetchState.calls.filter((c) => c.local && c.body && c.body.response_format === 'pcm16').length
+const r22a = await rpc('speak', { sessionId: 's1', messageId: 'm22a' })
+check('streaming 默认开 → mode=stream + runId', r22a.ok === true && r22a.mode === 'stream' && typeof r22a.runId === 'string', r22a)
+check('流式响应带 sampleRate（24k）', r22a.sampleRate === 24000, r22a.sampleRate)
+const sd22a = await awaitStreamDone(r22a.runId)
+check('长稿被切成 ≥3 段（分句流式生效）', sd22a.urls.length >= 3, sd22a.urls.length)
+check('每段 format=pcm（裸采样，零解码延迟）', sd22a.formats.length >= 1 && sd22a.formats.every((f) => f === 'pcm'), sd22a.formats)
+check('段请求用 response_format=pcm16（服务端契约）', fetchState.calls.filter((c) => c.local && c.body && c.body.response_format === 'pcm16').length >= 3, fetchState.calls.filter((c) => c.local).length)
+check('每段请求体互不相同（确实是分句，不是整篇重复）', new Set(fetchState.calls.filter((c) => c.local && c.body).map((c) => c.body.input)).size >= 3)
+// 边收边入队：一次段请求内出现多个音频分块 → 播放器不必等整段合成完（首声从"整段时长"降到"首个分块"）
+const pcmReqs22a = fetchState.calls.filter((c) => c.local && c.body && c.body.response_format === 'pcm16').length - pcmCallsBefore22a
+check('边收边入队：音频分块数 > 段请求数（0.5s 粒度切块）', sd22a.urls.length > pcmReqs22a, { audioChunks: sd22a.urls.length, pcmRequests: pcmReqs22a })
+check('流式结束 done=true', !!(sd22a.res && sd22a.res.done === true), sd22a.res)
+
+// —— 22b：段内容校验（字节数 = 样本数×2，偶数边界） ——
+const seg22 = await fetchAudio(sd22a.urls[0].replace('/voice/audio/', ''))
+check('首段音频可取（裸 PCM，字节数为偶数且 > 0）', seg22.code === 200 && seg22.body && seg22.body.length > 0 && seg22.body.length % 2 === 0, seg22.body && seg22.body.length)
+check('首段音频 mime=audio/pcm', seg22.mime === 'audio/pcm', seg22.mime)
+
+// —— 22c：重播命中转写缓存 → 零新增 LLM 调用 ——
+const callsBeforeReplay22 = llmState.calls.length
+fetchState.localSegIndex = 0
+const r22c = await rpc('speak', { sessionId: 's1', messageId: 'm22a' })
+const sd22c = await awaitStreamDone(r22c.runId)
+check('重播仍产出音频段', sd22c.urls.length >= 3, sd22c.urls.length)
+check('重播零 LLM（转写缓存命中）', llmState.calls.length === callsBeforeReplay22, llmState.calls.length - callsBeforeReplay22)
+
+// —— 22d：中途某段失败 → 保留已播段 + warn，不整条报错 ——
+sessionEvents.push(msgEvent('m22d', 52, 'Mid-stream failure source'))
+fetchState.localSegIndex = 0
+fetchState.localFailOnSegment = 3
+llmState.responses = [{ text: LONG_TRANSCRIPT, finish: 'stop' }]
+const r22d = await rpc('speak', { sessionId: 's1', messageId: 'm22d' })
+const sd22d = await awaitStreamDone(r22d.runId)
+check('中途失败：已播段保留（≥2 段）', sd22d.urls.length >= 2, sd22d.urls.length)
+check('中途失败：warn 说明后续未播报', !!(sd22d.res && sd22d.res.warn && sd22d.res.warn.includes('合成失败')), sd22d.res && sd22d.res.warn)
+check('中途失败：不当作整条错误（error 为空）', !(sd22d.res && sd22d.res.error), sd22d.res && sd22d.res.error)
+fetchState.localFailOnSegment = 0
+
+// —— 22e：首段即失败 → 降级整段合成（wav 单段），用户仍能听到 ——
+sessionEvents.push(msgEvent('m22e', 53, 'First segment fails source'))
+fetchState.localSegIndex = 0
+fetchState.localFailPcm = true
+llmState.responses = [{ text: LONG_TRANSCRIPT, finish: 'stop' }]
+const r22e = await rpc('speak', { sessionId: 's1', messageId: 'm22e' })
+const sd22e = await awaitStreamDone(r22e.runId)
+check('首段失败 → 降级出 1 段音频', sd22e.urls.length === 1, sd22e.urls.length)
+check('降级段 format=wav（整段 WAV 兜底）', sd22e.formats[0] === 'wav', sd22e.formats)
+check('降级 warn 说明"回退为整段合成"', !!(sd22e.res && sd22e.res.warn && sd22e.res.warn.includes('回退')), sd22e.res && sd22e.res.warn)
+check('降级后不算失败（error 为空）', !(sd22e.res && sd22e.res.error), sd22e.res && sd22e.res.error)
+fetchState.localFailPcm = false
+
+// —— 22f：整条流式全失败（每段都超时） → errorKind=timeout + 降级整段仍出声 ——
+// never：PCM 段请求永不返回；segmentTimeoutMs=200 → 每段都以 timeout 收尾 → 零段 → 触发整段兜底。
+// 用变体文本确保走"真转写 + 真合成"而不是命中 22a 的转写缓存
+sessionEvents.push(msgEvent('m22f', 54, 'Segment timeout source'))
+fetchState.localSegIndex = 0
+fetchState.hangCount = 0
+fetchState.never = true
+await rpc('setConfig', localStreamPatch({ segmentTimeoutMs: 200 }))
+llmState.responses = [{ text: LONG_TRANSCRIPT + ' Extra tail sentence for the timeout case.', finish: 'stop' }]
+const t22f0 = Date.now()
+const r22f = await rpc('speak', { sessionId: 's1', messageId: 'm22f' })
+check('speak 立即返回（不等合成完成）', Date.now() - t22f0 < 1000, Date.now() - t22f0)
+// 等段请求真的挂上（最多 3s），证明超时计时确实作用在挂住的请求上
+for (let i = 0; i < 120 && fetchState.hangCount === 0; i++) await new Promise((r) => setTimeout(r, 25))
+check('段请求已挂住（模拟服务卡死）', fetchState.hangCount >= 1, fetchState.hangCount)
+const sd22f = await awaitStreamDone(r22f.runId)
+fetchState.never = false
+check('段级超时 → errorKind=timeout（客户端选专用文案）', !!(sd22f.res && sd22f.res.errorKind === 'timeout'), { kind: sd22f.res && sd22f.res.errorKind, error: sd22f.res && sd22f.res.error })
+check('超时文案是"段级"而非整段死线（含 segment timeout）', !!(sd22f.res && /segment timeout/.test(String(sd22f.res.error))), sd22f.res && sd22f.res.error)
+check('整条流式全失败 → 仍降级整段兜底（用户仍能听到）', sd22f.urls.length >= 1 && sd22f.formats.includes('wav'), { urls: sd22f.urls.length, formats: sd22f.formats })
+
+// —— 22f2：部分段失败且已播出内容 → 保留 errorKind（不谎报"全部成功"） ——
+sessionEvents.push(msgEvent('m22f2', 56, 'Partial failure source'))
+fetchState.localSegIndex = 0
+fetchState.localFailOnSegment = 3
+fetchState.never = false
+await rpc('setConfig', localStreamPatch({ segmentTimeoutMs: 30000 }))
+llmState.responses = [{ text: LONG_TRANSCRIPT + ' Partial variant tail.', finish: 'stop' }]
+const r22f2 = await rpc('speak', { sessionId: 's1', messageId: 'm22f2' })
+const sd22f2 = await awaitStreamDone(r22f2.runId)
+check('部分失败：已播段 + errorKind=http 都保留', sd22f2.urls.length >= 2 && sd22f2.res && sd22f2.res.errorKind === 'http', { urls: sd22f2.urls.length, kind: sd22f2.res && sd22f2.res.errorKind })
+check('部分失败：warn 说明从第几段起未播报', !!(sd22f2.res && /段起合成失败/.test(String(sd22f2.res.warn))), sd22f2.res && sd22f2.res.warn)
+fetchState.localFailOnSegment = 0
+
+// —— 22g：streaming=false → 回整段合成（无 stream 模式） ——
+sessionEvents.push(msgEvent('m22g', 55, 'Non-streaming source'))
+await rpc('setConfig', localStreamPatch({ streaming: false, timeoutMs: 30000 }))
+llmState.responses = [{ text: 'Short non-streaming transcript.', finish: 'stop' }]
+const r22g = await rpc('speak', { sessionId: 's1', messageId: 'm22g' })
+check('streaming=false → 非流式（直接给 audioUrl）', r22g.ok === true && r22g.mode === undefined && typeof r22g.audioUrl === 'string', r22g)
+check('streaming=false → 请求 response_format=wav（整段路径）', fetchState.calls[fetchState.calls.length - 1].body.response_format === 'wav', fetchState.calls[fetchState.calls.length - 1].body)
+
+// —— 22h：splitForStream 纯函数（切分不丢字、段长受控） ——
+const segs22h = splitForStream(LONG_TRANSCRIPT, 300)
+check('splitForStream：长稿切成 ≥3 段', segs22h.length >= 3, segs22h.length)
+check('splitForStream：每段 ≤ 2×target（600）', segs22h.every((s) => s.length <= 600), segs22h.map((s) => s.length))
+check('splitForStream：拼接后与原文一致（去空白比对）', segs22h.join(' ').replace(/\s+/g, '') === LONG_TRANSCRIPT.replace(/\s+/g, ''))
+check('splitForStream：短稿整段返回（不硬切）', splitForStream('One short sentence.', 300).length === 1)
+check('splitForStream：优先切在句末（首段以标点结尾）', /[.!?。！？]$/.test(segs22h[0]), segs22h[0].slice(-20))
+await rpc('setConfig', { patch: { tts: { provider: 'browser', local: { streaming: true, segmentChars: 300, segmentTimeoutMs: 30000 } } } })
+
+// =====================================================================
+// T23 本地 CosyVoice（local-cosyvoice：中文播报 / 情绪指令 / 免费 / 直读可合成）
+// =====================================================================
+section('T23 本地 CosyVoice（local-cosyvoice：中文播报 + 情绪指令 + 免费 + 直读可合成）')
+check('ttsProviderOf：local-cosyvoice 识别为 local-cosyvoice', ttsProviderOf({ tts: { provider: 'local-cosyvoice' } }) === 'local-cosyvoice')
+check('isLocalProvider：两个本地引擎都算本地（免费，不受云门控）', isLocalProvider({ tts: { provider: 'local' } }) && isLocalProvider({ tts: { provider: 'local-cosyvoice' } }) && !isLocalProvider({ tts: { provider: 'volcengine' } }))
+check('localBlockKeyOf：local-cosyvoice → localCosyvoice 配置块', localBlockKeyOf('local-cosyvoice') === 'localCosyvoice' && localBlockKeyOf('local') === 'local')
+const meta23 = await rpc('meta')
+check('meta 带 cosyvoiceVoices 精选清单', Array.isArray(meta23.cosyvoiceVoices) && meta23.cosyvoiceVoices.some((v) => v.id === 'dsh_default'))
+const cosyLaunch = resolveLaunch(asFileUrl(path.join(REPO_ROOT_FOR_TEST, 'packages', 'dsh-plugin-voice', 'lib', 'index.js')), '', 'local-cosyvoice')
+check('resolveLaunch(cosyvoice)：脚本为 local-tts-server-cosyvoice.py', /local-tts-server-cosyvoice\.py$/.test(cosyLaunch.script), cosyLaunch.script)
+check('resolveLaunch(cosyvoice)：venv 指向 venv-cosyvoice', /venv-cosyvoice$/.test(cosyLaunch.venvDir), cosyLaunch.venvDir)
+
+const COSY_TTS_URL = 'http://127.0.0.1:8882/v1/audio/speech'
+const cosyPatch = (extra) => ({ patch: { language: 'auto', transcribe: { stylePreset: 'companion', enabled: true }, tts: { provider: 'local-cosyvoice', localCosyvoice: Object.assign({ baseUrl: COSY_TTS_URL, voice: 'dsh_default', speed: 1, sampleRate: 24000, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: false, segmentChars: 120, segmentTimeoutMs: 30000, emotionEnabled: true, instruct: '' }, extra || {}) } } })
+subprocessState.healthOk = true
+sessionEvents.push(msgEvent('m23a', 60, 'CosyVoice source'))
+await rpc('setConfig', cosyPatch())
+llmState.responses = [{ text: '中文口语转写结果，保留中文。', finish: 'stop' }]
+const instr23a = llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length
+const r23a = await rpc('speak', { sessionId: 's1', messageId: 'm23a' })
+check('cosyvoice：ok 且挂音频路由', r23a.ok === true && typeof r23a.audioUrl === 'string', r23a)
+check('cosyvoice：转写稿保持中文（无英文不变式）', r23a.transcript === '中文口语转写结果，保留中文。', r23a.transcript)
+const cosyCall = fetchState.calls.filter((c) => c.local && c.body && c.body.model === 'fun-cosyvoice3').pop()
+check('cosyvoice：请求 model=fun-cosyvoice3 / voice=dsh_default / wav', !!cosyCall && cosyCall.body.voice === 'dsh_default' && cosyCall.body.response_format === 'wav', cosyCall && cosyCall.body)
+check('cosyvoice：情绪指令 LLM 已调用（emotionEnabled 默认开）', llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length === instr23a + 1)
+check('cosyvoice：instruct 通道携带生成的指令', !!cosyCall && typeof cosyCall.body.instruct === 'string' && cosyCall.body.instruct.length > 0, cosyCall && cosyCall.body.instruct)
+
+// —— 转写关闭 + cosyvoice：中文直读仍合成（区别于 Kokoro 回退系统 TTS） ——
+sessionEvents.push(msgEvent('m23d', 61, '原始回复内容'))
+await rpc('setConfig', cosyPatch({ emotionEnabled: false }))
+await rpc('setConfig', { patch: { transcribe: { enabled: false } } })
+const calls23d = llmState.calls.length
+const r23d = await rpc('speak', { sessionId: 's1', messageId: 'm23d' })
+check('转写关闭 + cosyvoice：仍合成音频（中文直读可读）', r23d.ok === true && typeof r23d.audioUrl === 'string', r23d)
+check('转写关闭 + cosyvoice：零 LLM 调用（不烧 token）', llmState.calls.length === calls23d, llmState.calls.length)
+const cosyCallD = fetchState.calls.filter((c) => c.local && c.body && c.body.model === 'fun-cosyvoice3').pop()
+check('转写关闭 + cosyvoice：直读中文原文送合成', cosyCallD && String(cosyCallD.body.input).includes('原始回复内容'), cosyCallD && cosyCallD.body.input)
+
+// —— preview：中文样例 ——
+await rpc('setConfig', cosyPatch())
+const pv23 = await rpc('preview')
+const cosyPvCall = fetchState.calls.filter((c) => c.local && c.body && c.body.model === 'fun-cosyvoice3').pop()
+check('preview：中文样例（非 Kokoro 的英文样例）', pv23.ok === true && cosyPvCall && String(cosyPvCall.body.input).startsWith('你好'), cosyPvCall && cosyPvCall.body.input)
+
+// —— 流式：分句 pcm16 + 每段带 instruct ——
+sessionEvents.push(msgEvent('m23s', 62, 'CosyVoice streaming source'))
+await rpc('setConfig', cosyPatch({ streaming: true }))
+await rpc('setConfig', { patch: { transcribe: { enabled: true } } })
+llmState.responses = [{ text: '今天天气不错，我们一起去公园散步吧。然后回家吃饭，路上顺便买了水果。明天还要早起开会，准备一下材料。'.repeat(6), finish: 'stop' }]
+const r23s = await rpc('speak', { sessionId: 's1', messageId: 'm23s' })
+check('cosyvoice 流式：mode=stream + runId', r23s.ok === true && r23s.mode === 'stream' && !!r23s.runId, r23s)
+const sd23s = await awaitStreamDone(r23s.runId)
+const cosyPcmCalls = fetchState.calls.filter((c) => c.local && c.body && c.body.model === 'fun-cosyvoice3' && c.body.response_format === 'pcm16')
+check('cosyvoice 流式：段请求 response_format=pcm16 且 ≥2 段', cosyPcmCalls.length >= 2, cosyPcmCalls.length)
+check('cosyvoice 流式：每段带 instruct（情绪指令透传）', cosyPcmCalls.filter((c) => typeof c.body.instruct === 'string' && c.body.instruct.length > 0).length >= 2, cosyPcmCalls.map((c) => c.body.instruct))
+check('cosyvoice 流式：透传 flow_steps（质量/速度档，越小越快）', cosyPcmCalls.every((c) => c.body.flow_steps === 4), cosyPcmCalls.map((c) => c.body.flow_steps))
+check('cosyvoice 流式：边收边入队（分块数 > 段请求数）且无错误', sd23s.urls.length > cosyPcmCalls.length && !sd23s.res.error, { urls: sd23s.urls.length, reqs: cosyPcmCalls.length, err: sd23s.res && sd23s.res.error })
+await rpc('setConfig', cosyPatch())
+
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）
 await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })
 

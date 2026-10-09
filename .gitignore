@@ -4,8 +4,11 @@ dist/
 *.tsbuildinfo
 .DS_Store
 *.log
-# 探针实验的音频产物（scripts/tts-probe.mjs 输出），不入库
+# 探针实验的音频产物（scripts/tts-probe.mjs 输出）与临时目录，不入库
 tmp/
+tmp*/
+# 从 DSH 桌面版 app.asar 只读导出的参考源（inspect 用，不入库）
+.tmp-dsh-ref/
 # 本地配置与密钥——绝不上传
 settings.yaml
 *.key
