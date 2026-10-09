@@ -5,16 +5,21 @@
 
 ## 1. 版本与环境（本机）
 
-- `@deepseek-ai/dsh@0.1.2-rc.1`（全局安装包，作为当前最低兼容基线；仅作只读参考）
-- `DSH_HOME`（默认 `~/.dsh`）；web profile：`$DSH_HOME\profiles\web`
-- 用户设置：`$DSH_HOME\settings.yaml`；web 界面 `http://127.0.0.1:3080`
+- 目标运行环境：**DSH 桌面版 0.2.0-rc.2**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
+  需要 inspect 上游实现时用 `node scripts/_tmp-asar-extract.mjs <输出目录> <包名…>` 只读导出
+  `dsh/node_modules/@deepseek-ai/*`（不要改安装目录、不要直接读 asar 路径）。
+- `DSH_HOME`（默认 `~/.dsh`）；桌面 profile：`$DSH_HOME\profiles\desktop`；Web 界面
+  `http://127.0.0.1:19387`。桌面端自带的 CLI：`<安装目录>\resources\runtime\cli\bin\dsh.cmd`
+  （跑同一份 0.2.0-rc.2，profile 参数用 `--profile desktop`）。
+- 用户设置：profile 的 `cordis.patch.yml`（用户 patch 层，含插件 config）；旧的
+  `$DSH_HOME\settings.yaml` 在 0.2.0 首次启动被改名成 `settings.yaml.imported`，不再被读取。
 
 ## 2. 组合包（bundle）机制
 
 - `dsh.profile.bundles` 数组按顺序叠加 patch；每个 bundle 是一个 npm 包，`package.json` 声明 `dsh.bundle.patch`。
 - patch 文件为 YAML 列表：`- insert: [...]` 插入新行；`- id: xxx` 覆盖既有行的 `config`（整体替换，不合并）。
-- 解析顺序：dsh 安装目录 → profile 自身 `node_modules`。
-- `dsh plugin --profile web <pnpm args>` 在 profile 目录转发 pnpm 命令，成功退出后按已装依赖的
+- 解析顺序：dsh 安装目录 → 共享 `profiles\node_modules` → profile 自身 `node_modules`。
+- `dsh plugin --profile desktop <pnpm args>` 在 profile 目录转发 pnpm 命令，成功退出后按已装依赖的
   `dsh.bundle` 声明 reconcile bundles 列表。
 
 ## 3. 双半插件
@@ -22,15 +27,18 @@
 - 包导出 `./client`（浏览器半）+ `.`（Host 半）；`dsh.client` 声明 `{ platform: 'web', inject: [...] }`。
 - client-modules 扫描声明 `dsh.client` 的包，把 `client.js` 经 `/plugins/<id>/client.js` 注入
   `window.__DSH_BOOT__`，浏览器端用 `window.__ModuleLoader__.load({ id, factory })` 注册。
-- 两半通信：Host `harness.handle(method, fn)` / Client `host.call(method, args)`（JSON only）。
+- 两半通信：本插件走 HTTP（`/voice/api/*` JSON 接口 + `/voice/audio/<id>` 音频一次性路由，Host 侧由
+  `ctx.webServer` 提供）；`harness.handle`/`host.call` 是创造模式动态插件的包内 RPC，正式 bundle 用不到。
 
-### Client 半闭包（`CLIENT_BUILTIN_INSPECTION`）
-`ctx`（get/on/provide/effect）、`React`、`host`（host.call）、`styles`、`console`。
-禁止 `import`/`require`/`JSX`/`TS`；React 用 `React.createElement`。
+### Client 半（正式静态 bundle）
+factory 只拿到 `require`（可解析 `react` 等少数共享模块），`ctx` 由 `apply(ctx)` 传入；**没有** `host`/`styles`
+（`CLIENT_BUILTIN_INSPECTION` 里那套 `ctx`/`React`/`host`/`styles`/`console` 是**创造模式动态沙箱半**专有的）。
+因此：与 Host 通信走 HTTP `fetch('/voice/api/…')`，样式自己插 `<style data-plugin-css>` +
+`ctx.effect` 清理。禁止 `import`/`JSX`/`TS`；React 用 `React.createElement`。
 
-### Host 半闭包（`HOST_BUILTIN_INSPECTION`）
-`ctx`、`harness`（handle/defineTool/registerTool）、`console`、`btoa`/`atob`/`TextEncoder`/`TextDecoder`。
-Node API（fetch/fs 等）在正式 bundle 里可直接用（普通 Node 模块），无需经 `ctx.web`。
+### Host 半
+`export { apply, inject, Config }`；`apply(ctx, config)` 拿解析后的插件配置。正式 bundle 是普通 Node ESM
+模块，Node API（fetch/fs/子进程）直用；`HOST_BUILTIN_INSPECTION` 的闭包限制只作用于动态沙箱半。
 
 ## 4. Host 关键服务
 
@@ -39,29 +47,32 @@ Node API（fetch/fs 等）在正式 bundle 里可直接用（普通 Node 模块�
   已加载会话的历史须用 `session.snapshotEvents()` 读取；`session.events` 已在 0.1.2 移除。
 - `ctx.llm`（`LlmRuntime`）：`prepareCall(config, signal?)` → `PreparedLlmCall`；`stream(options)` → AsyncIterable<StreamChunk>。
   StreamChunk：`text-delta`、`reasoning-delta`、`block-end`、`usage`、`finish` 等。
-- `ctx.settings`（`SettingsProvider`）：`register(ns, schema, opts)` → `SettingsScope`（`get/watch/update/replace`）；
-  `dsh-settings-file` 持久化到 `$DSH_HOME/settings.yaml`，热重载。
+- `ctx.settings`（`SettingsProvider`）：插件配置由插件自己导出 `Config` schema 声明，条目 config 存在
+  profile 的 `cordis.patch.yml`；`update(ns, patch)` 深合并写入（`ns` = profile patch 条目 id，本插件是 `voice`），
+  标了 `.volatile()` 的字段热生效、不重挂载插件。`register(ns, schema)` 在 0.2.0 已移除。
 - `ctx.webServer`：`register({kind:'exact'|'prefix', path, handler})` 等（TTS 音频一次性路由用）。
 
-## 5. Client 关键槽位（`dsh-client-ui-conversation/.../slots.d.ts`）
+## 5. Client 关键槽位
 
 | 槽位 | kind | scope | owner props | 用途 |
 |---|---|---|---|---|
 | `conversation.chat.assistant-actions` | list | session | `{ messageId }` | 每条最终助手消息操作行 → "朗读"按钮 + ↻ 重新生成 |
-| `conversation.chat.turnTail` | chain | session | `{ turn, seq, openFile }` | 收尾尾巴 → 播报状态 |
-| `conversation.input.left` / `.right` | list | session | `{ session, input }` | 输入框工具行 → 自动播报开关 |
-| `conversation.session.header.actions` | list | session | （框架 kit） | 会话头按钮 → 开关备选 |
-| `settings.section` | list | root | `{ close }` | 语音设置页（id=voice） |
-| `settings.general.item` | list | root | （空） | General 单行偏好 |
-| `shell.overlay` | list | root | — | toast/浮层 |
+| `conversation.chat.turnTail` | list | session | `{ turn, seq, openFile }` | 收尾尾巴 → 播报状态徽标（本轮没读过就返回 null 不占位） |
+| `conversation.input.left` | list | session | 会话标准 kit | 输入框工具行 → 自动播报开关 |
+| `settings.section` | list | root | `{ close }` | 语音设置页（id=voice；`id`=导航键、`order`=导航位次、`label`=导航文案） |
+| `shell.overlay` | list | root | 根标准 kit | toast/浮层（该层默认点击穿透，浮层自己要 `pointer-events:auto`） |
 
-Client 注册方式：`ctx.slots.inject('<slot>', () => ctx.slots.register({ name, id, order, locale, inject }, Component))`。
+Client 注册方式：`ctx.slots.inject('<slot>', () => ctx.slots.register({ name, id, order }, Component))`。
+**list 槽位必须有 `id`**（同名+同 priority 重复注册会抛错）；`select` 是 chain 槽位专有的（list 传了不生效，
+"要不要渲染"由组件自己返回 null 决定）。
 
-## 6. 设置命名空间
+## 6. 插件配置（Config）与设置页
 
-Host 用 `ctx.settings.register('voice', VoiceSettingsSchema)` 注册 `voice:` 命名空间（schema 定义在
-`packages/dsh-plugin-voice/lib/index.js`）。Client 设置页经 `/voice/api` 的 `getConfig`/`setConfig`
-RPC 读写（Host 归一后返回，UI 显示 = 实际发声）。
+Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-voice/lib/index.js`），插件体
+`apply(ctx, config)` 读配置；可热改字段标 `.volatile()`，边界见 `docs/pipeline.md` §6.0。条目 id 是 `voice`
+（bundle 补丁插入的行），config 落在 profile 的 `cordis.patch.yml`。Client 设置页经 `/voice/api` 的
+`getConfig`/`setConfig` RPC 读写（Host 归一后返回，UI 显示 = 实际发声）；`setConfig` 只提交改动过的字段
+（部分 patch），因为秘密字段（`tts.volcengine.apiKey`）不进浏览器，整块回写会把它抹掉。
 
 ## 7. 设计决策（为什么这么搭）
 

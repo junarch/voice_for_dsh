@@ -10,10 +10,10 @@
 ## 1. 开发循环
 
 ### 改 Host 半（`lib/index.js`）
-改 → 重启 dsh（Ctrl+C 停旧的，`npx @deepseek-ai/dsh web`）才生效。
+改 → 重启桌面端 dsh 才生效。
 
 ### 改 Client 半（`lib/client.js`）
-改 → 重启 dsh（client-modules 重新扫描、rev 变化）→ 浏览器**手动刷新** `http://127.0.0.1:3080`。
+改 → 重启 dsh（client-modules 重新扫描、rev 变化）→ 界面**手动刷新** `http://127.0.0.1:19387`。
 v1 无 dev watcher / HMR（后续 tsdown 化后才有 `pnpm run dev:web` 无刷新更新）。
 
 ### 改完跑集成测试（mock 零成本 + 探针花几分钱）
@@ -25,20 +25,25 @@ node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针
 ```
 方法论见 `docs/testing.md`。
 
-## 2. 安装 / 卸载插件（web profile）
+## 2. 安装 / 卸载插件（desktop profile）
 
 ```powershell
-# 在仓库根目录执行（相对路径锚定到调用时的 cwd；未全局安装 dsh 时走 npx）
-npx @deepseek-ai/dsh plugin --profile web add packages/dsh-plugin-voice
+# 桌面端自带 CLI（跑同一份 0.2.0-rc.2）
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+
+# 在仓库根目录执行（相对路径锚定到调用时的 cwd）
+& $dsh plugin --profile desktop add packages/dsh-plugin-voice
 # 链接式（开发时改代码即生效；注意：link 不会代装插件自身依赖，见 §4）
-npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
+& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
 
 # 卸载
-npx @deepseek-ai/dsh plugin --profile web remove dsh-plugin-voice
+& $dsh plugin --profile desktop remove dsh-plugin-voice
 ```
 
-- pnpm 构建脚本被阻止时，在 `profiles\web\pnpm-workspace.yaml` 的 `allowBuilds` 加包名。
+- pnpm 构建脚本被阻止时，在 `profiles\desktop\pnpm-workspace.yaml` 的 `allowBuilds` 加包名。
 - 卸载后 bundles 列表自动 reconcile；必要时手动清理 `cordis.patch.yml` 残留补丁行。
+- 本插件运行需要 `@deepseek-ai/schemastery ≥ 3.18.4`（`.volatile()` 从该版本才有）；桌面版 profile 共享的
+  `profiles\node_modules` 里就是 3.18.4，插件自身 `dependencies` 也要跟上，否则 `npm run` 侧的自检会用到旧版。
 
 ## 3. 创造模式（cordis preset）试验手册
 

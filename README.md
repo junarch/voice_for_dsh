@@ -56,34 +56,35 @@
 
 ## 安装
 
-> 插件是 dsh 的 **bundle**（`packages/dsh-plugin-voice`），通过 `dsh plugin --profile web add` 装进
-> `web` profile。以下命令假设你已经装好 dsh（未全局安装时用 `npx @deepseek-ai/dsh` 前缀）。
+> 插件是 dsh 的 **bundle**（`packages/dsh-plugin-voice`），通过 `dsh plugin --profile desktop add` 装进
+> `desktop` profile（DSH 桌面版）。
 
 ### 前置要求
 
 - Node.js 22+（双向流播报依赖 Node 22 的全局 `WebSocket`；仅用浏览器 TTS 时可低至 18+）
-- dsh（`@deepseek-ai/dsh@0.1.2-rc.1` 或更高兼容版本）
+- DSH 桌面版 `0.2.0-rc.2` 或更高兼容版本（插件按 0.2.0 的插件 Config 模型实现）
 - （可选）火山引擎语音合成 API Key（新版控制台「API 管理」页获取，见
   [快速入门](https://www.volcengine.com/docs/6561/2119699?lang=zh)），用于豆包 TTS；不配则用浏览器语音兜底
 
 ### 从 clone 安装
 
-```bash
+```powershell
 git clone https://github.com/junarch/voice_for_dsh.git
 cd voice_for_dsh
 
 # 1) 安装插件自身依赖
-cd packages/dsh-plugin-voice && npm install && cd ../..
-#    （若提示 peer 依赖 ERESOLVE，改用 npm install --legacy-peer-deps）
+cd packages/dsh-plugin-voice; npm install; cd ../..
 
-# 2) 把插件装进 web profile（<path> 换成仓库绝对路径或相对路径）
-npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
+# 2) 把插件装进 desktop profile（<path> 换成仓库绝对路径或相对路径）
+#    桌面端自带 CLI（跑同一份 0.2.0-rc.2）：
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
 
-# 3) 启动 dsh web
-npx @deepseek-ai/dsh web
+# 3) 从旧版（settings.yaml）升级的用户：把 voice 配置搬进 profile patch（先预览，确认后加 --write）
+node scripts/migrate-voice-config.mjs
 ```
 
-浏览器打开 `http://127.0.0.1:3080`，在设置页找到"语音播报"即可配置。
+重启桌面端，在设置页找到"语音播报"即可配置。
 
 > 提示：`dsh plugin add` 的相对路径锚定到**执行命令时的当前目录**；若解析失败，直接给绝对路径
 > （如 `link:C:\path\to\voice_for_dsh\packages\dsh-plugin-voice`）。
@@ -111,14 +112,14 @@ Mac/Linux 不跑此脚本，可用同协议的现成服务替换（见 [`docs/lo
 
 ### 配置
 
-所有配置在 `settings.yaml` 的 `voice:` 命名空间，设置页可可视化编辑。字段说明见
-[`docs/pipeline.md` §6](docs/pipeline.md)。
+所有配置在目标 profile 的 `cordis.patch.yml` 里 `voice` 条目的 `config:`（设置页可可视化编辑，保存即写回该文件）。
+字段说明见 [`docs/pipeline.md` §6](docs/pipeline.md)。豆包 API Key 也在这里（明文，本机私有，勿提交）。
 
 ---
 
 ## 成本与隐私（请先读）
 
-- **转写**：每次"首次朗读"会调用一次你配置的 LLM（settings.yaml 里的 provider），**花 token**。
+- **转写**：每次"首次朗读"会调用一次你配置的 LLM（配置里的 provider），**花 token**。
   - 同一消息重复朗读不花（转写缓存命中）；重新生成（↻）会重新转写（花）。
 - **TTS**：浏览器语音免费；**本地 Kokoro 免费且内容不出本机**（仅转写仍走 LLM）；
   豆包 TTS 按字符/时长计费，同一消息 **1h 内重播** → 服务端缓存命中，**不重复计费**。

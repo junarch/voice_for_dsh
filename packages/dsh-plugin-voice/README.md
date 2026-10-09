@@ -14,20 +14,20 @@
   **服务由 dsh 自动启停**——合成前探 `/health`，没跑就经 `ctx.subprocess` 拉起，dsh 退出即回收，
   `voice.tts.local.autoStart` 可关；部署见 `../../docs/local-tts.md`）。
 - 播报失败按因提示：服务不可达 / 合成超时 / 服务报错各有 toast 文案（Host 返回 `ttsErrorKind`）。
-- 设置持久化在 `settings.yaml` 的 `voice:` 命名空间。
+- 设置持久化在目标 profile 的 `cordis.patch.yml`（`voice` 条目的 `config`）。
 
 ## 安装（开发期）
 ```powershell
-# 在仓库根目录执行（相对路径锚定到 cwd；未全局安装 dsh 时走 npx）
-npx @deepseek-ai/dsh plugin --profile web add link:packages/dsh-plugin-voice
+# 在仓库根目录执行（相对路径锚定到 cwd）；桌面端自带 CLI：
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
 # 首次或改动依赖后，在插件目录安装一次依赖（link 不会代装插件自身依赖）：
 cd packages/dsh-plugin-voice; npm install
-# 重启 dsh
-npx @deepseek-ai/dsh web
+# 然后重启桌面端
 ```
 
 ## 配置
-见 `../docs/pipeline.md` §6（`voice:` 命名空间字段说明）。
+见 `../docs/pipeline.md` §6（配置字段说明；DSH 0.2.0 起为插件 `Config` schema + profile patch）。
 
 ## 开发
 见 `../docs/development.md`（开发循环、创造模式试验、常见坑）。

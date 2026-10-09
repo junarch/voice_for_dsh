@@ -29,26 +29,27 @@
 ## 2. 四层测试手段（从便宜到贵）
 
 ### 第 1 层：零成本——mock 集成测试 `scripts/test-host.mjs`
-不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路。
-已固化大量断言，每条对应一个历史坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
+不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路；
+插件配置按**真实导出的 `Config` schema**解析（含默认值 + volatile 引用），所以"插件能不能被 0.2.0 正常加载并解析出配置"
+这件事本身就有断言兜着（旧缺陷正是加载即 `TypeError`）。已固化大量断言，每条对应一个历史坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
 撞顶 4 倍额度重试、失败降级、自动播报门控、context_texts 指令组装、音色↔语种归一、重播零 LLM、regen 重新生成、
 cache_config 初次/重播下发而 regen/换音色重播不下发等。
 每次改完 Host 半必跑。
 
 ### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
 ```powershell
-curl.exe -s -X POST http://127.0.0.1:3080/voice/api/ping
-curl.exe -s -X POST http://127.0.0.1:3080/voice/api/getConfig
-curl.exe -s -X POST http://127.0.0.1:3080/voice/api/meta
-curl.exe -s -X POST http://127.0.0.1:3080/voice/api/preview    # 试听（云 TTS 花几分钱）
-curl.exe -s -X POST http://127.0.0.1:3080/voice/api/clientDiagDump   # 读回浏览器播放链路事件
+curl.exe -s -X POST http://127.0.0.1:19387/voice/api/ping
+curl.exe -s -X POST http://127.0.0.1:19387/voice/api/getConfig
+curl.exe -s -X POST http://127.0.0.1:19387/voice/api/meta
+curl.exe -s -X POST http://127.0.0.1:19387/voice/api/preview    # 试听（云 TTS 花几分钱）
+curl.exe -s -X POST http://127.0.0.1:19387/voice/api/clientDiagDump   # 读回浏览器播放链路事件
 ```
 看返回关键字段：`cached`（true=缓存命中没花钱）、`degraded`（true=转写失败走兜底）、`ttsError`、`audioUrl`。
 播报"没声音"时先看 `clientDiagDump`：`stream-start` 的 `ctx` 是不是 `suspended`、`stream-end` 的 `played`
 是不是 0——把"服务端还没算完"与"浏览器根本没排上播放"分开（本地 CPU 引擎首声几十秒，靠耳朵分不出来）。
 
 ### 第 3 层：几分钱——真实外呼探针 `scripts/tts-*.mjs`
-对火山 TTS 做受控实验（读 settings.yaml 里的 apiKey）。时长对比只能证明"标签被照读/数值参数生效"这类强信号；
+对火山 TTS 做受控实验（读目标 profile `cordis.patch.yml` 里 `voice.tts.volcengine.apiKey`）。时长对比只能证明"标签被照读/数值参数生效"这类强信号；
 **语气、音色、方言这类只有人耳能判断的效果，必须听音频**。怀疑任何外部接口行为时，先跑探针再改代码。
 
 本地服务另有两个零成本探针：`scripts/local-autostart-probe.mjs --stream`（真拉起服务 + 真切分合成计时）

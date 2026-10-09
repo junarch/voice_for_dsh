@@ -58,7 +58,7 @@
 - [x] 根目录 `README.md`（已替换 clone 占位为 `junarch` + 已补两张截图；发布前核对图注）。
 - [x] `LICENSE`（MIT 全文，署名 `junarch`；`packages/dsh-plugin-voice/package.json` 已标 `"license": "MIT"`）。
 - [x] `CODE_OF_CONDUCT.md` / `CONTRIBUTING.md` / `SECURITY.md`（已创建，发布前复查内容）。
-- [x] `.gitignore` 覆盖：`node_modules/`、`tmp/`、本地密钥/配置（`settings.yaml`、`*.key`、`.env`）、日志。
+- [x] `.gitignore` 覆盖：`node_modules/`、`tmp*/`、`.tmp-*/`、本地密钥/配置（`settings.yaml`、`*.key`、`.env`）、日志。
 - [x] **仓库无真实 API key / 私人邮箱 / 本机用户名**：已跑 `git grep` 自查（无 `sk-`/长密钥/本机用户名/邮箱），
       git 历史亦无密钥字符串。
 - [x] README 写明**成本与隐私**：哪些操作花 token/钱、内容发往哪些第三方（火山 TTS、DeepSeek/阿里云 LLM）。
@@ -87,7 +87,7 @@
 | 修 bug | **z 小版本**（v0.1.0→v0.1.1） | 无 |
 
 **配置演进铁律**（详见 `docs/pipeline.md` §6"配置演进约定"）：
-1. 用户本地 `settings.yaml` 是私有数据——只补默认，绝不覆盖；
+1. 用户本地的 profile patch（`voice` 条目的 config）是私有数据——只补默认，绝不覆盖；
 2. 新配置永远带默认值（缺了就按默认走，零冲突）；
 3. 字段淘汰优先"UI 隐藏 + schema 保留"（零风险），确需真删才写迁移；
 4. 改字段语义必须走兼容层（如 `pitchLevel`→`pitch` 用 `pitchOf` 映射）。

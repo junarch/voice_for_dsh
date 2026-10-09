@@ -65,7 +65,8 @@
 
 - **隐私卖点**：内容不出本机（可写进 README）。它通常也是一个 HTTP/WS 服务，实现方式与云 provider
   相同（第 3 节），只是 endpoint 指向 `localhost`（OpenAI 兼容 `/v1/audio/speech` 子集可直换 baseUrl 复用）。
-- **鉴权**：本地一般无需 key；若本地网关要 key，走 `voice.tts.<provider>.apiKey`（settings.yaml，明文，勿提交）。
+- **鉴权**：本地一般无需 key；若本地网关要 key，走 `voice.tts.<provider>.apiKey`（存在目标 profile 的
+  `cordis.patch.yml`，明文，勿提交）。
 - **缓存**：本地合成零边际成本，v0.3.0 起 local 不做服务端缓存语义；若新模型合成慢需缓存，
   应做**本机音频文件缓存**（`$DSH_HOME\voice-audio-cache/`），这是与云 provider 差异最大的点，接入时单独设计。
 - **延迟/流式**：本地模型若支持流式/增量，优先走 `streamSpeak` 双向流路径；不支持就单向整段（local 现状）。

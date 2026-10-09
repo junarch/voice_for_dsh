@@ -290,13 +290,20 @@ function resolveEffort(info, configured) {
   return { effort: undefined, mapped: true, note: '模型不支持思考档位 "' + configured + '"，已忽略该设置' }
 }
 
-/** settings.yaml 的 voice: 命名空间（字段一次定稿，避免迁移；docs/pipeline.md §6） */
-const VoiceSettingsSchema = z.object({
-  autoSpeak: z.boolean().default(false),
-  autoSpeakCloudTts: z.boolean().default(false), // 云TTS 开关（设置页"云TTS"复选框）：与 tts.provider 联动（勾选→volcengine 并写入 true）；false=Host 成本门控（自动播报不碰云 TTS）
-  language: z.string().default('auto'), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
-  provider: z.string().default(''), // 转写 LLM provider（空 = 启动时发现并自愈写回可用路由）
-  model: z.string().default('deepseek-v4-flash'),
+/** voice 插件的 Config：导出的 Config 声明字段，插件体收第二参 config（= 解析后的引用）。
+ *  字段一次定稿，避免迁移（docs/pipeline.md §6）。
+ *  volatile = 该字段经 ctx.settings.update 写入时直接提交进运行中的引用（不重挂插件），
+ *  因此设置页可编辑的字段都必须是 volatile 边界：顶层标量各自 volatile，tts / transcribe 整块 volatile
+ *  （volatile 内层字段才可编辑）；读取一律走引用 .get()。
+ *  tts.volcengine.apiKey 有意**不标** role('secret')：dsh-settings 的写入路径会把非 volatile 的 secret 字段
+ *  从落盘补丁里剥掉，而设置页每次保存都整块重写该条目 config——标了 secret，用户第一次点保存就会把
+ *  profile patch 里的 apiKey 删掉（docs/pipeline.md §6.0）。 */
+const Config = z.object({
+  autoSpeak: z.boolean().default(false).volatile(),
+  autoSpeakCloudTts: z.boolean().default(false).volatile(), // 云TTS 开关（设置页"云TTS"复选框）：与 tts.provider 联动（勾选→volcengine 并写入 true）；false=Host 成本门控（自动播报不碰云 TTS）
+  language: z.string().default('auto').volatile(), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
+  provider: z.string().default('').volatile(), // 转写 LLM provider（空 = 启动时发现并自愈写回可用路由）
+  model: z.string().default('deepseek-v4-flash').volatile(),
   transcribe: z.object({
     enabled: z.boolean().default(true), // 主开关：关=不调转写模型，直接读原文（去 Markdown）
     maxTokens: z.number().default(8192),
@@ -306,7 +313,7 @@ const VoiceSettingsSchema = z.object({
     stylePreset: z.string().default('standard'), // standard|companion|playful|custom（旧值 ambiguous/default/energetic 回退 standard）
     contextTurns: z.number().default(2), // 引用上文：转写时携带的最近轮数（0=关闭）
     timeoutMs: z.number().default(60000), // 单次转写超时；超时/失败降级为直读
-  }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }),
+  }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }).volatile(),
   tts: z.object({
     provider: z.string().default('browser'), // TTS 引擎：browser（免费系统）| volcengine（豆包付费）| local（本地 Kokoro 英文，免费）；其余旧值归一为 browser
     browser: z.object({
@@ -368,13 +375,13 @@ const VoiceSettingsSchema = z.object({
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
     local: { baseUrl: 'http://127.0.0.1:8880/v1/audio/speech', voice: 'af_heart', speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
     localCosyvoice: { baseUrl: 'http://127.0.0.1:8882/v1/audio/speech', voice: 'dsh_default', speed: 1, sampleRate: 24000, timeoutMs: 600000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 120, segmentTimeoutMs: 120000, emotionEnabled: true, instruct: '', flowSteps: 4 },
-  }),
-  stopOnNewTurn: z.boolean().default(true),
+  }).volatile(),
+  stopOnNewTurn: z.boolean().default(true).volatile(),
 })
 
 const inject = ['settings', 'webServer']
 
-function apply(ctx) {
+function apply(ctx, config) {
   const llm = ctx.get('llm')
   const sessions = ctx.get('sessions')
   if (llm === undefined || sessions === undefined) {
@@ -382,13 +389,26 @@ function apply(ctx) {
     return
   }
 
-  const scope = ctx.settings.register('voice', VoiceSettingsSchema)
+  // 读当前配置：每次现取引用值（用户改设置时 dsh-settings 直接提交进这些引用，不重挂插件），
+  // 返回与旧设置作用域同形的普通快照，调用方（cfg.tts.volcengine.speaker 等）无需改动。
+  function readConfig() {
+    return {
+      autoSpeak: config.autoSpeak.get(),
+      autoSpeakCloudTts: config.autoSpeakCloudTts.get(),
+      language: config.language.get(),
+      provider: config.provider.get(),
+      model: config.model.get(),
+      transcribe: config.transcribe.get(),
+      tts: config.tts.get(),
+      stopOnNewTurn: config.stopOnNewTurn.get(),
+    }
+  }
 
   // 本地 TTS 服务托管（docs/pipeline.md §4.3）：播报前确保服务在跑，由 dsh 拉起并回收。
   // 软依赖 ctx.subprocess：缺失时只报"子进程服务不可用"，手动启动仍是兜底路径。
   // 两个本地引擎各一个 supervisor（Kokoro 英文 8880 / Fun-CosyVoice3 中文 8882）。
-  const localSupervisor = createLocalSupervisor({ ctx, getConfig: () => scope.get(), pluginUrl: import.meta.url, engine: 'local' })
-  const cosyvoiceSupervisor = createLocalSupervisor({ ctx, getConfig: () => scope.get(), pluginUrl: import.meta.url, engine: 'local-cosyvoice' })
+  const localSupervisor = createLocalSupervisor({ ctx, getConfig: () => readConfig(), pluginUrl: import.meta.url, engine: 'local' })
+  const cosyvoiceSupervisor = createLocalSupervisor({ ctx, getConfig: () => readConfig(), pluginUrl: import.meta.url, engine: 'local-cosyvoice' })
   ctx.effect(() => () => { localSupervisor.terminate(); cosyvoiceSupervisor.terminate() }, 'voice: local tts supervisor')
 
   // ---- session/event：信封结构，payload 在 event.data ------------------------
@@ -498,7 +518,7 @@ function apply(ctx) {
       const kind = d && d.reason && d.reason.kind
       const turn = d && d.turn
       let cfg
-      try { cfg = scope.get() } catch { return }
+      try { cfg = readConfig() } catch { return }
       if (!cfg.autoSpeak) return
       if (kind !== 'completed' && kind !== 'max-tokens') return
       // 云 TTS 成本门控：未显式允许时自动播报不碰豆包（付费）；local 本地合成免费，不受限
@@ -1540,7 +1560,7 @@ function apply(ctx) {
   async function transcribe(sessionId, messageId, opts = {}) {
     const found = extractText(sessionId, messageId)
     if (found.error) return { ok: false, error: found.error }
-    const cfg = normalizeVoiceConfig(scope.get()) // 归一化视图（UI 与实际发声一致）
+    const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（UI 与实际发声一致）
     const configured = cfg.provider && cfg.model ? { provider: cfg.provider, model: cfg.model } : null
     const promptUsed = resolvePrompt(cfg)
     const effortUsed = cfg.transcribe.reasoningEffort || ''
@@ -1823,17 +1843,17 @@ function apply(ctx) {
       }
     },
     getState: async () => {
-      const cfg = scope.get()
+      const cfg = readConfig()
       return { ok: true, autoSpeak: cfg.autoSpeak, pending: !!pendingSpeak, tts: cfg.tts }
     },
-    getConfig: async () => ({ ok: true, config: normalizeVoiceConfig(scope.get()) }),
+    getConfig: async () => ({ ok: true, config: normalizeVoiceConfig(readConfig()) }),
     setConfig: async (args) => {
       const patch = args && args.patch
       if (!patch || typeof patch !== 'object') return { ok: false, error: 'missing patch' }
       await ctx.settings.update('voice', patch)
       // 音色↔语种归一（normalizeVoiceConfig：方言→vv / English→英文音色 / 英文音色→English），
       // 让保存后的配置自洽、UI 显示与发声一致；单次读取避免竞态
-      const cur = scope.get()
+      const cur = readConfig()
       const norm = normalizeVoiceConfig(cur)
       const curSpeaker = cur.tts && cur.tts.volcengine && cur.tts.volcengine.speaker
       const normSpeaker = norm.tts && norm.tts.volcengine && norm.tts.volcengine.speaker
@@ -1842,7 +1862,7 @@ function apply(ctx) {
         if (normSpeaker) write.tts = { volcengine: { speaker: normSpeaker } }
         await ctx.settings.update('voice', write)
       }
-      return { ok: true, config: normalizeVoiceConfig(scope.get()) }
+      return { ok: true, config: normalizeVoiceConfig(readConfig()) }
     },
     routeInfo: async (args) => {
       const a = args || {}
@@ -1868,17 +1888,17 @@ function apply(ctx) {
     setAuto: async (args) => {
       await ctx.settings.update('voice', { autoSpeak: !!(args && args.enabled) })
       if (pendingSpeak && !(args && args.enabled)) pendingSpeak = null
-      return { ok: true, autoSpeak: scope.get().autoSpeak }
+      return { ok: true, autoSpeak: readConfig().autoSpeak }
     },
     pollSpeak: async () => {
       const p = pendingSpeak
       pendingSpeak = null
       let stopOnNewTurn = true
-      try { stopOnNewTurn = scope.get().stopOnNewTurn !== false } catch { /* 按默认 true */ }
+      try { stopOnNewTurn = readConfig().stopOnNewTurn !== false } catch { /* 按默认 true */ }
       return { ok: true, pending: p, gen: turnGeneration, stopOnNewTurn }
     },
     preview: async () => {
-      const cfg = normalizeVoiceConfig(scope.get()) // 归一化视图（试听与实际发声一致）
+      const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（试听与实际发声一致）
       if (ttsProviderOf(cfg) === 'browser') {
         return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
       }
@@ -1920,7 +1940,7 @@ function apply(ctx) {
       const mid = String(a.messageId)
       const found = extractText(sid, mid)
       if (found.error) return { ok: false, error: found.error }
-      const cfg = normalizeVoiceConfig(scope.get()) // 归一化视图（UI 显示与实际发声一致）
+      const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（UI 显示与实际发声一致）
       const regen = !!(a.regen) // 重新生成：跳过转写缓存，重新转写+合成，覆盖旧缓存条目
       if (isStreamingVolc(cfg) || isStreamingLocal(cfg)) {
         // 流式（豆包双向流 / 本地分句流式）：立即返回 runId，管线后台跑；客户端经 streamNext 取音频段
@@ -2022,5 +2042,5 @@ function apply(ctx) {
   console.log('[voice] host half applied: /voice/api/* + /voice/audio/* ready, voice settings namespace registered')
 }
 
-export { apply, inject, splitForStream }
+export { apply, inject, Config, splitForStream }
 //#endregion

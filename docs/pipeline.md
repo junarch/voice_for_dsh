@@ -292,16 +292,38 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 - 重新生成（↻）：转写 + 指令全部重新生成（force 跳过缓存），结果覆盖该 messageId 条目。
 - 成本门控：设置页"播报引擎"选豆包时写入 `autoSpeakCloudTts=true`（= 用户显式选择付费 API），
   引擎为免费引擎（browser/local）时该开关为 false 且豆包不参与自动播报（全免费，含手动按钮）；
-  settings.yaml 直改的旧配置若 `autoSpeakCloudTts=false`，豆包自动播报仍被拦截（防手工配置烧钱），
+  profile patch 里直改的配置若 `autoSpeakCloudTts=false`，豆包自动播报仍被拦截（防手工配置烧钱），
   手动按钮与 local（免费）不受限。
 
 ## 6. `voice:` 配置 schema 定稿
 
-> 字段见 `$DSH_HOME\settings.yaml` 的 `voice:` 块；
-> schema 定义在 `index.js` `VoiceSettingsSchema`。所有字段带默认值 → 全新安装不带 voice 块也能跑
-> （默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）只暴露常用项，
-> 以下标注"（无 UI）"的字段**已从设置页隐藏**：schema 保留（向后兼容，老 settings 里的值仍生效）、
-> 走固定默认值，仅需高级/内部逻辑时在 settings.yaml 直改。
+> **配置存放位置（DSH 0.2.0 起）**：字段写在目标 profile 的 `cordis.patch.yml` 里 `id: voice` 条目的
+> `config:` 下。0.1.x 时代的 `$DSH_HOME\settings.yaml` 已不再被读取（0.2.0 首次启动把它改名为
+> `settings.yaml.imported`）——迁移用 `node scripts/migrate-voice-config.mjs --write`（先不加 `--write`
+> 预览；幂等，已迁移会拒绝重写，写前自动备份 patch）。
+> schema 定义在 `index.js` 的 `Config`（插件 Config，见 §6.0）。所有字段带默认值 → 全新安装不带 voice 块
+> 也能跑（默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）只暴露常用项，
+> 以下标注"（无 UI）"的字段**已从设置页隐藏**：schema 保留（向后兼容，老配置里的值仍生效）、
+> 走固定默认值，仅需高级/内部逻辑时在 profile patch 直改。
+
+### 6.0 配置模型与热改边界（0.2.0 起）
+
+- 插件通过导出 `Config`（schemastery schema）声明可配置字段，插件体 `apply(ctx, config)` 拿到解析后的配置；
+  `ctx.settings.register(...)` 在 0.2.0 已移除，**不要再使用**。
+- 需要"改了立刻生效、不重启"的字段在 schema 里标 `.volatile()`，读取时是**引用对象**（`.get()` 取当前值）；
+  未标 volatile 的字段改动会触发插件重挂载。
+- **volatile 只能落在固定对象路径上，不能嵌套**：`tts` / `transcribe` 两个整块各是一个 volatile 单位
+  （`.get()` 返回普通对象），`autoSpeak` / `autoSpeakCloudTts` / `language` / `provider` / `model` /
+  `stopOnNewTurn` 各自单独标 volatile。改 schema 时若把 volatile 标到 `tts.xxx` 之下，解析会直接报
+  "volatile fields require a fixed object path"。
+- 写入仍走 `ctx.settings.update('voice', patch)`（深合并；patch 只需带改动的字段）。
+- 老配置里只有 `pitchLevel`、没有 `pitch` 时（0.1.x 时代 settings.yaml 的写法）：`pitchOf` 里 `pitch` 的 schema
+  默认值 0 恒存在且优先，所以**搬过来的 `pitchLevel` 不影响发声**（存储上不丢，听感按 0 处理）。
+  要让老五档音调重新生效，把 `tts.volcengine.pitch` 写成对应半音值（五档映射常数见 `lib/voice-compat.js` 的 `pitchOf`）。
+- `tts.volcengine.apiKey` **不标 `role('secret')`**（有意）：dsh-settings 的写入路径会把非 volatile 的秘密字段
+  从落盘补丁里剥掉（`strip(raw, form)`），而设置页每次保存都会整块重写该条目的 config——一旦标 secret，
+  用户第一次在设置页点保存就会**把 patch 里的 apiKey 删掉**，云 TTS 从此失效。所以 key 保持在 profile patch 里
+  明文（与旧 settings.yaml 同一安全等级），设置页可读可改。
 
 ```yaml
 voice:
@@ -325,7 +347,8 @@ voice:
     provider: browser         # browser | volcengine | local | local-cosyvoice（存量旧值 openai-compatible 归一为 browser）
     browser: { rate: 1.0, pitch: 1.0, voice: "" }
     volcengine:
-      apiKey: ""              # 火山方舟专属 API Key（settings.yaml 为明文，注意保管，别提交）
+      apiKey: ""              # 火山方舟专属 API Key（明文存在目标 profile 的 cordis.patch.yml，注意保管，别提交）
+                              #   不标 role('secret') 的原因见 §6.0 末条（标了会被设置页保存删除）
       resourceId: seed-tts-2.0
       speaker: zh_female_vv_uranus_bigtts  # Vivi 2.0；下拉另含 中文4男4女 + 英文3 + 自定义
       sampleRate: 24000       # 采样率（设置页无 UI：固定默认 24000，客户端/管线自适应；老值仍生效）
@@ -370,7 +393,7 @@ voice:
 
 ### 6.1 配置演进约定（升级纪律）
 
-用户本地 `settings.yaml` 是私有数据，**只补默认、绝不覆盖**。升级时按此纪律处理，防止"用户配置静默丢失 / 悄悄烧 token"：
+用户本地的 profile patch（`voice` 条目的 config）是私有数据，**只补默认、绝不覆盖**。升级时按此纪律处理，防止"用户配置静默丢失 / 悄悄烧 token"：
 
 1. **新字段必须带默认值**（老用户缺了就按默认走，零冲突、零报错）；
 2. **改字段语义 / 删字段** → 必须加兼容层（读新名、读不到读旧名，如 `pitchOf` 的 `pitch`→`pitchLevel`）+ **升大版本** + CHANGELOG 顶部写"升级指引"；
@@ -417,7 +440,7 @@ voice:
 - 云 TTS 走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；动态沙箱禁 fetch。
 - 云 TTS 默认关闭（默认引擎 browser，全免费）；设置页切豆包 = 用户显式为付费 API 买单，
-  自动播报才可能走豆包；settings.yaml 直改的旧配置仍由 `autoSpeakCloudTts` 门控防账单失控；
+  自动播报才可能走豆包；profile patch 里直改的配置仍由 `autoSpeakCloudTts` 门控防账单失控；
   local 免费引擎不在门控之列。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - 自研 TTS 适配层（不引第三方库）：无现成 JS 库支持火山 v3；HTTP 单向协议极简（~150 行零依赖）；避免供应链与失维护风险。

@@ -731,11 +731,16 @@ window.__ModuleLoader__.load({
     }
 
     // ---------- turnTail 徽标（只 claim 读过的轮次，不抢 deliverables 产物链） ----------
+    // list 槽位没有 select：自己在渲染时读本轮的 voice 数据，读不到/没读过就返回 null（不占位）。
     function VoiceTurnBadge(props) {
-      const m = props.matched || {};
+      const turn = props.turn;
+      const v = turn && turn.data && turn.data.get ? turn.data.get("voice") : undefined;
+      const messageId = v && v.messageId ? String(v.messageId) : "";
+      const state = messageId ? spokenState[messageId] : undefined;
+      if (!messageId || !state) return null;
       async function onReplay() {
         try {
-          const res = await rpc("speak", { sessionId: String(props.sessionId), messageId: String(m.messageId) });
+          const res = await rpc("speak", { sessionId: String(props.sessionId), messageId: messageId });
           if (res && res.ok) playResult(res, {});
         } catch (e) {}
       }
@@ -743,7 +748,7 @@ window.__ModuleLoader__.load({
         className: "dsh-voice-badge",
         onClick: onReplay,
         title: t("badge.replay"),
-      }, m.state === "speaking" ? t("badge.speaking") : t("badge.done"));
+      }, state === "speaking" ? t("badge.speaking") : t("badge.done"));
     }
 
     /** conversation Definition：把每轮最后一条含 text 的助手消息 id 写进 turn 数据（key 'voice'）。 */
@@ -1232,7 +1237,8 @@ window.__ModuleLoader__.load({
           ".dsh-voice-warn{margin:2px 0 0 120px;font-size:12px;color:#d97706;}",
           ".dsh-voice-actions{display:flex;gap:8px;margin-top:14px;}",
           ".dsh-voice-msg{margin-top:8px;font-size:12px;}",
-          ".dsh-voice-toast{max-width:380px;padding:8px 12px;border-radius:8px;background:rgba(24,26,28,.94);color:#f3f4f6;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.3);border:1px solid rgba(127,127,127,.35);}",
+          // shell.overlay 层默认点击穿透（click-through），toast 自己收回指针事件
+          ".dsh-voice-toast{pointer-events:auto;max-width:380px;padding:8px 12px;border-radius:8px;background:rgba(24,26,28,.94);color:#f3f4f6;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.3);border:1px solid rgba(127,127,127,.35);}",
         ].join("\n");
         document.head.append(tag);
         return () => tag.remove();
@@ -1284,16 +1290,9 @@ window.__ModuleLoader__.load({
         AutoToggle,
       ));
       ctx.slots.inject("conversation.chat.turnTail", () => ctx.slots.register(
-        {
-          name: "conversation.chat.turnTail",
-          select: (owner) => {
-            const v = owner.turn && owner.turn.data && owner.turn.data.get ? owner.turn.data.get("voice") : undefined;
-            if (!v || !v.messageId) return null;
-            const st = spokenState[v.messageId];
-            if (!st) return null; // 只 claim 读过的轮次
-            return { messageId: v.messageId, state: st };
-          },
-        },
+        // list 槽位：按 id/order 排序渲染，没有 select（那是 chain 槽位的机制）。
+        // "只 claim 读过的轮次"的判断放在 VoiceTurnBadge 里（返回 null 即不渲染）。
+        { name: "conversation.chat.turnTail", id: "voice-badge", order: 20, label: "朗读状态" },
         VoiceTurnBadge,
       ));
       ctx.slots.inject("settings.section", () => ctx.slots.register(

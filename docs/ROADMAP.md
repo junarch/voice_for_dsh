@@ -40,8 +40,8 @@
 ### 5. 安全加固收尾（低危）
 - **状态**：规划中。
 - **为什么**：当前同源校验已挡跨站 CSRF；以下属于纵深防御，非阻塞项。
-- **待办**：`getConfig` 对 apiKey 脱敏回传（只回传掩码，避免设置页/日志明文）；
-  考虑把 apiKey 改存 dsh 的 credential 域而非 settings.yaml 明文。
+- **待办**：考虑把 apiKey 改存 dsh 的 credential 域而非 profile patch 明文
+  （apiKey 现已标 `role('secret')`：不进浏览器、不回传，纵深防御只剩"落盘位置"这一项）。
 
 ## 已完成（近几轮）
 

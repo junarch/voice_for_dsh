@@ -10,6 +10,38 @@
 
 （随下一次发版归档到版本号下；当前 `packages/dsh-plugin-voice` 版本 0.4.0。）
 
+### 升级指引（DSH 0.1.x → 0.2.0）
+
+- **必须做**：把旧的 `voice` 配置搬进目标 profile。0.2.0 起插件配置不再来自 `$DSH_HOME\settings.yaml`
+  （首次启动已被改名成 `settings.yaml.imported`），而是来自 profile 的 `cordis.patch.yml`：
+  ```powershell
+  node scripts/migrate-voice-config.mjs          # 预览
+  node scripts/migrate-voice-config.mjs --write  # 落盘（写前自动备份 patch，幂等）
+  ```
+  不迁移的后果：转写路由、音色/语速、云 TTS 开关与 apiKey 全部掉回默认值（默认引擎 = 浏览器 TTS）。
+- **若插件装在旧的 `web` profile**：桌面端只读 `desktop` profile，需要重新装到 desktop
+  （`& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice`），否则插件页里根本看不到它。
+
+### Changed
+
+- **适配 DSH 0.2.0-rc.2 的插件配置模型**：`ctx.settings.register(ns, schema)` 已被上游移除，插件改为导出
+  `Config`（schemastery schema，可热改字段标 `.volatile()`），插件体 `apply(ctx, config)` 读配置；
+  写入仍走 `ctx.settings.update('voice', patch)`（深合并写回 profile patch，volatile 字段热生效不重挂插件）。
+  迁移前插件一加载就 `TypeError`，整条朗读链不可用。
+- 依赖与基线对齐：`@deepseek-ai/schemastery` 升到 `^3.18.4`（`.volatile()` 从该版本才有）、
+  peer 依赖升到 `^0.2.0-rc.2`、`@deepseek-ai/cordis` 到 `~4.0.4`；删掉 0.2.0 里已不存在的
+  `@deepseek-ai/dsh-client-runtime`（`dsh.client.inject` 与 peer 列表）；peer 全部标 optional
+  （运行时由桌面版提供，本地 `npm install` 不再 ERESOLVE）。
+- 文档/脚本按 desktop profile 与新配置位置重写（`README`、`AGENTS.md`、`docs/*`），并修正两处与上游不符的
+  描述：正式 bundle 的 Client 半**没有** `host`/`styles`（那是动态沙箱专有），`turnTail` 是 list 槽位。
+- CHANGELOG 记录：`voice.tts.volcengine.apiKey` 现在明文存在 profile patch（与旧 settings.yaml 同级）。
+
+### Fixed
+
+- **turnTail 播报徽标从未真正生效**：注册用了 chain 槽位专有的 `select` 且漏了 list 槽位必需的 `id`，
+  注册直接抛错（徽标不渲染）。改为带 `id` 的 list 注册，"只 claim 读过的轮次"移到组件内自己判断。
+- `shell.overlay` 浮层补 `pointer-events:auto`（该层默认点击穿透）。
+
 ### Performance
 
 - **本地 CosyVoice3 CPU 推理提速 1.6-2.1x（RTF 4.56-6.6 → 2.2-3.0），流式首声 21.4s → 5-12s**。

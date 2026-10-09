@@ -70,7 +70,8 @@ const home = mkdtempSync(path.join(tmpdir(), 'voice-test-'))
 process.env.DSH_HOME = home
 
 // await import(...) = 动态加载真实的插件文件（不是复制粘贴的副本！测的就是它）。
-const { apply, splitForStream } = await import('../packages/dsh-plugin-voice/lib/index.js')
+// Config = 插件导出的配置 schema（0.2.0 加载路径：插件用它在加载时解析原始配置，包括默认值与 volatile 引用）。
+const { apply, Config, splitForStream } = await import('../packages/dsh-plugin-voice/lib/index.js')
 // 双向流帧编解码（volcengine-ws.js 导出的纯函数，字节级单测用）
 const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/dsh-plugin-voice/lib/volcengine-ws.js')
 // 口播净化（speech-clean.js 纯函数）
@@ -168,8 +169,11 @@ const llm = {
 const sessionsState = { sessions: {} }
 const sessions = { get: (id) => sessionsState.sessions[id] }
 
-// 替身 3：设置。scope.get() 返回"当前配置"--测试里想改配置就直接改这个对象，
-// 模拟用户在设置页点了什么。
+// 替身 3：设置（配置）。插件不再自注册命名空间：字段由导出的 Config schema 声明，
+// 加载时按 profile 条目的原始 config 解析成"volatile 引用"（作为 apply 的第二参交给插件）。
+// 用户改设置走 ctx.settings.update('voice', patch)：深合并进原始 config，dsh-settings 校验后
+// 把新快照直接提交进运行中的引用（不重挂插件）。替身按同一模型实现：
+// 没有 register（旧 API 已移除）--若插件代码还调它，apply 就会抛 TypeError（这正是原缺陷）。
 function deepMerge(target, patch) {
   const out = Object.assign({}, target)
   for (const [k, v] of Object.entries(patch || {})) {
@@ -178,12 +182,34 @@ function deepMerge(target, patch) {
   }
   return out
 }
-const settingsState = { config: null, updates: [] }
+// volatile 引用用 Symbol.for('cosmokit.volatile.write') 作写入口（跨 ESM/CJS 副本共享的协议），
+// 所以替身不需要引入 cosmokit 就能像 loader 那样提交新值。
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write')
+function configRefs(value, path = []) {
+  // 同 loader 的 volatileEntries：只收集引用，不深入引用内部的快照
+  if (value !== null && typeof value === 'object' && VOLATILE_WRITE in value) return [{ path, ref: value }]
+  if (!value || typeof value !== 'object') return []
+  return Object.entries(value).flatMap(([k, v]) => configRefs(v, [...path, k]))
+}
+function resolveConfig(raw) {
+  // 与 cordis resolveConfig 同一条路径：真 Config schema 补默认值 + 把 volatile 字段包成引用
+  const result = Config['~standard'].validate(raw)
+  if (result.issues) throw new Error('invalid voice config: ' + JSON.stringify(result.issues))
+  return result.value
+}
+const settingsState = { raw: null, updates: [], resolveErrors: [] }
+let liveConfig = null
 const settings = {
-  register: (_ns, schema) => { settingsState.schema = schema; return { get: () => settingsState.config } },
   update: async (_ns, patch) => {
     settingsState.updates.push(patch)
-    settingsState.config = deepMerge(settingsState.config, patch)
+    settingsState.raw = deepMerge(settingsState.raw, patch)
+    try {
+      const next = resolveConfig(settingsState.raw)
+      for (const { path, ref } of configRefs(liveConfig)) {
+        const source = path.reduce((v, k) => Reflect.get(v, k), next)
+        ref[VOLATILE_WRITE](source.get()) // 与 loader._commitVolatile 一致：把候选快照提交进引用
+      }
+    } catch (error) { settingsState.resolveErrors.push(String((error && error.message) || error)) }
   },
 }
 
@@ -351,9 +377,9 @@ globalThis.fetch = async (url, init) => {
 }
 
 // ---------- 把真插件"装配"到替身上，并做 HTTP 请求的仿真驱动 ----------
-apply(ctx) // 跑插件的安装函数（对真实代码的第一次冒烟：不抛错就是通过）
-const apiHandler = routes.find((r) => r.path === '/voice/api').handler
-const audioHandler = routes.find((r) => r.path === '/voice/audio').handler
+// 装配（apply(ctx, config)）在下方"测试数据"段里、初始配置解析之后调用；路由处理器随后再取。
+let apiHandler
+let audioHandler
 
 // rpc = 模拟"浏览器向插件发 HTTP 请求"。和 curl 的区别：不用起服务器，直接调处理函数。
 async function rpc(method, args, headers) {
@@ -378,8 +404,10 @@ function fire(event) {
 }
 const msgEvent = (id, turn, text) => ({ type: 'assistant/message', data: { turn, message: { id, content: [{ type: 'text', text }] } } })
 
-// ---------- 测试数据：一份"用户配置"和几条"历史消息" ----------
-settingsState.config = {
+// ---------- 测试数据：一份"用户配置"（原始 config）和几条"历史消息" ----------
+// 这份原始 config 等价于 profile 条目 voice 的 config：加载时由真 Config schema 解析
+// （补默认值 + 把 volatile 字段包成引用），解析结果才是 apply 的第二参。
+settingsState.raw = {
   autoSpeak: false,
   autoSpeakCloudTts: false,
   language: 'auto',
@@ -394,6 +422,16 @@ settingsState.config = {
   },
   stopOnNewTurn: true,
 }
+
+// 加载路径：原始 config → 真 Config schema（默认值 + volatile 引用）→ apply(ctx, config)。
+// apply 若抛错（例如代码还去调已移除的 ctx.settings.register），先记下来，由 T0 断言并终止。
+liveConfig = resolveConfig(settingsState.raw)
+let applyError = null
+try { apply(ctx, liveConfig) } catch (error) { applyError = error }
+// apply 抛错时路由不存在（下面 T0 会先断言并给出可读报告，而不是在这里崩栈）
+apiHandler = (routes.find((r) => r.path === '/voice/api') || {}).handler
+audioHandler = (routes.find((r) => r.path === '/voice/audio') || {}).handler
+
 const sessionEvents = [
     msgEvent('m1', 1, '原始回复内容'),
     msgEvent('m2', 2, '撞顶测试内容'),
@@ -424,6 +462,39 @@ sessionsState.sessions.s1 = {
  * A 类·不变量：我们代码自身必须永远成立的行为
  * （以下断言与外部接口无关，放心长期维护）
  * ===================================================================== */
+
+section('T0 配置加载路径（导出的 Config schema → volatile 引用 → apply 第二参）')
+// 这一节覆盖的是"插件能不能被装起来"：配置不再由插件自注册命名空间（旧 ctx.settings.register
+// 已移除），而是由导出的 Config 声明、由运行时解析后作为 apply 的第二参传入。
+// 替身故意不提供 settings.register —— 若实现退回旧写法，apply 立刻抛 TypeError。
+check('替身不提供 settings.register（旧 API 已移除）', settings.register === undefined)
+check('apply(ctx, resolvedConfig) 不抛错（对真实加载路径的冒烟）', applyError === null, applyError && String(applyError.stack || applyError))
+if (applyError) {
+  globalThis.fetch = realFetch
+  rmSync(home, { recursive: true, force: true })
+  console.log('\n结果: ' + passed + ' passed, ' + failed + ' failed（配置加载路径断了，后续断言无意义）')
+  process.exit(1)
+}
+const defaultCfg = resolveConfig({})
+check('空配置解析出全部默认值（tts 音色 / 转写上下文轮数 / 自动播报开关）',
+  defaultCfg.tts.get().volcengine.speaker === 'zh_female_vv_uranus_bigtts' && defaultCfg.transcribe.get().contextTurns === 2 && defaultCfg.autoSpeak.get() === false,
+  { speaker: defaultCfg.tts.get().volcengine.speaker, contextTurns: defaultCfg.transcribe.get().contextTurns, autoSpeak: defaultCfg.autoSpeak.get() })
+check('volatile 引用 .get() 返回普通对象（cfg.tts.volcengine.speaker 同形可读）',
+  typeof defaultCfg.tts.get() === 'object' && defaultCfg.tts.get().volcengine.speaker === 'zh_female_vv_uranus_bigtts' && defaultCfg.stopOnNewTurn.get() === true)
+check('volatile 边界齐全（8 个顶层字段，缺一个设置页就写不进去）', configRefs(liveConfig).length === 8, configRefs(liveConfig).map((r) => r.path.join('.')))
+// apiKey 有意不标 role=secret：dsh-settings 写入时会把非 volatile 的 secret 字段从落盘补丁里剥掉，
+// 而设置页每次保存都整块重写该条目 config —— 标了 secret，用户第一次点保存就把 patch 里的 apiKey 删掉
+// （docs/pipeline.md §6.0）。这条断言就是防止有人"顺手加回来"。
+check('apiKey 不标 role=secret（标了会被设置页保存从落盘补丁里剥掉）',
+  Config.dict.tts.dict.volcengine.dict.apiKey.meta.role === undefined,
+  Config.dict.tts.dict.volcengine.dict.apiKey.meta.role)
+check('当前配置（原始 config + 真 schema）读出用户自定义值', liveConfig.tts.get().volcengine.speaker === 'spk-1' && liveConfig.transcribe.get().stylePreset === 'companion')
+// 设置写入 = 深合并进原始 config + 提交进运行引用（不重挂插件）；改完恢复原值，不留副作用
+await settings.update('voice', { tts: { browser: { rate: 1.5 } } })
+check('settings.update 直接提交进运行中的引用（无需重挂插件）', liveConfig.tts.get().browser.rate === 1.5, liveConfig.tts.get().browser.rate)
+await settings.update('voice', { tts: { browser: { rate: 1 } } })
+check('再次 update 恢复原值', liveConfig.tts.get().browser.rate === 1, liveConfig.tts.get().browser.rate)
+check('替身没有解析失败残留（配置补丁全部合法）', settingsState.resolveErrors.length === 0, settingsState.resolveErrors)
 
 section('T1 apply/路由注册')
 check('注册了 /voice/api 与 /voice/audio 两条路由', routes.length === 2 && !!apiHandler && !!audioHandler)
@@ -744,7 +815,7 @@ section('T6 火山 TTS 请求组装【快照：text 无标签 + 指令走 contex
 // - 内嵌 [#...] 会被逐字照读（D 实验：时长 2.37 倍）=> text 必须干净
 // - 数值 speech_rate 可靠生效（-50 -> 时长 2.2 倍）=> 语速/音调走数值参数
 // - context_texts 是官方指令通道（不计费、仅第一个值有效），效果依赖音色/措辞
-await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { apiKey: 'k-test', resourceId: 'seed-tts-2.0', speaker: 'spk-1', sampleRate: 24000, rateLevel: 3, pitchLevel: 1, interface: 'http' } } } })
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { apiKey: 'k-test', resourceId: 'seed-tts-2.0', speaker: 'spk-1', sampleRate: 24000, rateLevel: 3, pitch: -3, pitchLevel: 1, interface: 'http' } } } })
 const fetchCallsBefore = fetchState.calls.length // 记住调用数基线（T10 预览已产生过 1 次）
 llmState.responses = [{ text: '火山转写结果', finish: 'stop' }]
 const r4 = await rpc('speak', { sessionId: 's1', messageId: 'm4' })
@@ -754,8 +825,10 @@ const body = fetchState.calls[fetchState.calls.length - 1].body
 check('请求 text 无 [# 标签且为转写稿', body.req_params.text === '火山转写结果', body.req_params.text)
 check('speaker 下发正确', body.req_params.speaker === 'spk-1')
 check('语速档 3 -> speech_rate=30（数值参数）', body.req_params.audio_params.speech_rate === 30, body.req_params.audio_params)
+// 音调：真 Config schema 已给 pitch 默认值 0，所以线上永远是"pitch 优先"（旧 pitchLevel 只在
+// 纯函数层留兼容，见 T6e 的 pitchOf 断言）；这里给 -3 半音，验证它按数值参数下发。
 const additions6 = body.req_params.additions ? JSON.parse(body.req_params.additions) : {}
-check('音调档 1 -> additions.pitch=-3（半音）', additions6.post_process && additions6.post_process.pitch === -3, additions6)
+check('音调 -3 半音 -> additions.pitch=-3（pitch 优先于旧 pitchLevel）', additions6.post_process && additions6.post_process.pitch === -3, additions6)
 // 指令由第二段 LLM 按文稿内容撰写（mock 默认回"用自然平稳的语气说"），
 // 取代预设写死的机械指令——内容驱动的优先级 > 预设回退。
 check('内容驱动指令 -> context_texts=[用自然平稳的语气说]', Array.isArray(additions6.context_texts) && additions6.context_texts[0] === '用自然平稳的语气说', additions6)
@@ -1066,7 +1139,7 @@ check('ttsProviderOf：未知值归一 browser', ttsProviderOf({ tts: { provider
 // meta 暴露 Kokoro 音色清单（设置页下拉数据源）
 check('meta 带 kokoroVoices 精选清单', (await rpc('meta')).kokoroVoices.some((v) => v.id === 'af_heart'))
 // —— 切到 local：转写 prompt 含英文不变式；只调转写 LLM、零情感指令调用；合成走本地 WAV ——
-// （测试 mock 不套 schema 默认值，显式补 tts.local；真机由 schema 默认补齐）
+// （测试配置同样经真 Config schema 解析（默认值已补齐）；这里仍显式写全 tts.local，让断言不依赖默认值从哪来）
 // 本段只验证"整段合成"链路（streaming:false）→ 非流式契约（audioUrl/字段）；分句流式在 T22 专测。
 // 同时先置"服务已在跑"（healthOk=true）→ 不该触发自动拉起；拉起行为在 T21 专测。
 subprocessState.healthOk = true
