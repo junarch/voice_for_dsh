@@ -45,6 +45,28 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 - 卸载后 bundles 列表自动 reconcile；必要时手动清理 `cordis.patch.yml` 残留补丁行。
 - 本插件运行需要 `@deepseek-ai/schemastery ≥ 3.18.4`（`.volatile()` 从该版本才有）；桌面版 profile 共享的
   `profiles\node_modules` 里就是 3.18.4，插件自身 `dependencies` 也要跟上，否则 `npm run` 侧的自检会用到旧版。
+- **`link:` 的相对路径锚定 profile 目录，不是执行命令时的 cwd**：写成 `link:packages/dsh-plugin-voice`
+  会被解析到 `profiles\desktop\packages\...`（不存在），装的时候报
+  `cannot resolve profile bundle "dsh-plugin-voice"`。用绝对路径。
+- **装完（或升级依赖后）要重启桌面端**：Host 半会随 Loader 热加载进来，但 **Client 半不会**——
+  实测在运行中的应用里刚装好的插件，`/plugins/<id>/client.js?rev=…` 一直 404（rev 按上游
+  `artifactRevision` 算法复算过、与冷启动后的 rev 一致），只有整个应用重启后才进 boot 图。
+  所以"刷新页面"不够，得先重启应用。
+
+### 冷启动/端到端自验（不碰 desktop profile 的做法）
+桌面 profile 被 Electron 独占（CLI 会拒绝 `--dump-config` 等操作），但可以用桌面端自带的 CLI
+**另开一个临时 profile** 做真实验证：
+
+```powershell
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+& $dsh --profile voiceprobe --from-default-profile web --dump-config   # 建 profile + 看组合树
+& $dsh plugin --profile voiceprobe add "link:<仓库绝对路径>/packages/dsh-plugin-voice"
+& $dsh --profile voiceprobe --port 0 --no-open                          # 随机端口起一份，日志给带 token 的 URL
+```
+
+带 token 打开首页就能在注入的 boot 图里看到 `dsh-plugin-voice/client.js&rev=…`，
+并可取回 `/plugins/??dsh-plugin-voice/client.js&rev=…`（combo 路由）自验 Client 半确实被服务；
+`/voice/api/*` 也能直接打。验证完记得删掉 `~/.dsh/profiles/voiceprobe`。
 
 ## 3. 创造模式（cordis preset）试验手册
 

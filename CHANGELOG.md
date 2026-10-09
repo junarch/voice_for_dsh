@@ -34,6 +34,8 @@
   （运行时由桌面版提供，本地 `npm install` 不再 ERESOLVE）。
 - 文档/脚本按 desktop profile 与新配置位置重写（`README`、`AGENTS.md`、`docs/*`），并修正两处与上游不符的
   描述：正式 bundle 的 Client 半**没有** `host`/`styles`（那是动态沙箱专有），`turnTail` 是 list 槽位。
+- 记下两条实操事实（`docs/development.md` §2）：`link:` 的相对路径锚定 profile 目录而不是 cwd；
+  装完/升依赖后**必须重启桌面端**——Host 半会热加载，Client 半只有重启才进 boot 图。
 - CHANGELOG 记录：`voice.tts.volcengine.apiKey` 现在明文存在 profile patch（与旧 settings.yaml 同级）。
 
 ### Fixed
