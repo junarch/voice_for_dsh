@@ -60,10 +60,10 @@
 
 1. **不要修改 DSH 安装/缓存/ shipped preset**（`agent-presets` 目录、app.asar 内代码、`$DSH_HOME` 下 shipped 文件）。
    用户可写的只有：本仓库、`$DSH_HOME\profiles\desktop\cordis.patch.yml`（用户的 patch 层，含插件配置）。
-2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 需要重启桌面端 dsh 才能生效。
-   **改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）→ 重启 dsh（client-modules 重新扫描、rev 变化）
-   后界面**手动刷新**；v1 为手写纯 JS、**无构建步骤**（`build` 无实际产物），dev:web watcher / HMR 仅后续
-   tsdown 化后才可用（详见 `docs/development.md` §1）。
+2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 重启桌面端 dsh（Host 半会随 Loader 热加载，
+   但"装/升级依赖"这类组合变更仍以重启为准）。**改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）
+   → **必须重启桌面端**：Client 半只有整个应用重启才进 boot 图，光刷新页面不够（`docs/development.md` §2）。
+   v1 为手写纯 JS、**无构建步骤**（`build` 无实际产物），dev:web watcher / HMR 仅后续 tsdown 化后才可用。
 3. **验证循环**：装包 → 重启 dsh → 界面操作 → 看 console/日志；开发试验可用 dsh 内置
    "创造模式"preset（= 标准能力 + 动态插件实验），成品仍固化为正式 bundle 安装到 desktop profile。
 4. **命名空间/服务名统一用 `voice`**，避免与既有插件冲突。
@@ -89,7 +89,8 @@ voice_for_dsh/
 │                              #   本地 TTS：local-tts-server.py(合成服务) / setup-local-tts.ps1(部署，
 │                              #   模型下载到 local/，不入库) / dsh-read-session.mjs(会话日志读取)
 │                              #   工具：dsh-inspect-extract.mjs(只读导出 app.asar 里的上游源码) /
-│                              #        migrate-voice-config.mjs(settings.yaml → profile patch 迁移)
+│                              #        migrate-voice-config.mjs(settings.yaml → profile patch 迁移) /
+│                              #        verify-installed.mjs(重启后自检：Client 半进没进 boot 图)
 └── packages/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：

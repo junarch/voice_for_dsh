@@ -68,6 +68,21 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 并可取回 `/plugins/??dsh-plugin-voice/client.js&rev=…`（combo 路由）自验 Client 半确实被服务；
 `/voice/api/*` 也能直接打。验证完记得删掉 `~/.dsh/profiles/voiceprobe`。
 
+**重启桌面端后的一键自检**（零成本，逐条打印证据）：
+
+```powershell
+# 从应用启动日志里拿带 token 的地址（形如 http://127.0.0.1:19387/?token=xxxx）
+node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=xxxx"
+# 想连真实合成一起验：加 --speak-paid（豆包花几分钱；本地引擎免费）
+```
+
+它检查：Host 半路由活着 → **Client 半在 boot 图里且能取回字节** → 配置可读且关键字段在 →
+两个本地引擎的环境能推导。退出码 0/1，可以直接接进发版检查。
+
+两个坑（脚本里已处理，手工验时要知道）：带 token 访问首页会**先 303 并下发 `dsh-auth-*` cookie**，
+要手动跟一次跳转并把 cookie 带上（`fetch` 默认自动跟随会丢 cookie，落到 401/400）；
+boot 图里的组合包地址是**相对路径**、且 `&` 在 HTML 属性里被转义成 `&amp;`。
+
 ## 3. 创造模式（cordis preset）试验手册
 
 > "创造模式" = dsh 内置 `cordis` agent preset，适合**动态插件原型**，不适合承载长期功能（重启即丢）。

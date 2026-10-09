@@ -43,6 +43,12 @@ cache_config 初次/重播下发而 regen/换音色重播不下发等。
 会话 Definition 注册与 zh/en i18n 键对齐。每次改完 Client 半必跑。
 
 ### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
+一键自检（推荐先跑这个，逐条打印证据、退出码 0/1）：
+```powershell
+# token 从应用启动日志给的地址里取
+node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=xxxx"
+```
+单项手工打（`curl.exe` 在本机 PowerShell 里可能不可用，改用 `Invoke-WebRequest`）：
 ```powershell
 curl.exe -s -X POST http://127.0.0.1:19387/voice/api/ping
 curl.exe -s -X POST http://127.0.0.1:19387/voice/api/getConfig
