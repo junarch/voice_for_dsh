@@ -36,6 +36,12 @@
 cache_config 初次/重播下发而 regen/换音色重播不下发等。
 每次改完 Host 半必跑。
 
+### 第 1.5 层：零成本——Client 半合约测试 `scripts/test-client.mjs`
+不启动浏览器，用最小替身加载真实 `lib/client.js`，**真的执行**槽位注册回调：
+按上游 `SlotRegistry.register` 的规则校验（list 槽位必须有 `id`、`select` 只有 chain 槽位认），
+并驱动 turnTail 徽标的 claim 逻辑（本轮没有可朗读消息 / 该消息没读过 → 必须返回 null 不占位）、
+会话 Definition 注册与 zh/en i18n 键对齐。每次改完 Client 半必跑。
+
 ### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
 ```powershell
 curl.exe -s -X POST http://127.0.0.1:19387/voice/api/ping
@@ -72,7 +78,7 @@ curl.exe -s -X POST http://127.0.0.1:19387/voice/api/clientDiagDump   # 读回�
 ## 4. 怎么和 AI 协作做这些
 
 - **让 AI 先写测试再改代码**："先读 docs/testing.md 和 scripts/test-host.mjs，为要改的行为加断言，跑通后再改实现，改完再跑给我看两轮结果"。
-- **要 AI 报告"调用次数"而不是"我测过了"**：让它贴出 `node scripts/test-host.mjs` 的完整输出。
+- **要 AI 报告"调用次数"而不是"我测过了"**：让它贴出 `node scripts/test-host.mjs` 与 `node scripts/test-client.mjs` 的完整输出。
 - **外部接口假设必须给证据**：问一句"这是实测还是推测？"——探针脚本就是为此存在的。
 - **每个 bug 修复后问一句**："这个坑怎么变成一条断言？"
 - **git 是时光机**：改坏了一键回退。修复前 `git status` 确认干净，修复后 `git diff` 逐行看改动范围。

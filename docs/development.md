@@ -19,6 +19,7 @@ v1 无 dev watcher / HMR（后续 tsdown 化后才有 `pnpm run dev:web` 无刷�
 ### 改完跑集成测试（mock 零成本 + 探针花几分钱）
 ```powershell
 node scripts/test-host.mjs   # mock 驱动 Host 全链路（转写/缓存/TTS/防串音/重播零 LLM 等断言）
+node scripts/test-client.mjs # Client 半合约（槽位注册形状 / turnTail claim / i18n 键对齐）
 node scripts/tts-probe.mjs       # 真实外呼（花几分钱）：HTTP 单向接口行为
 node scripts/tts-ws-probe.mjs --all   # 真实外呼（花几分钱）：双向流参数用例
 node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针

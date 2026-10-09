@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
-// DSH Client 半的最小合约测试：不启动浏览器，只验证 ModuleLoader 导出的依赖与会话 Definition 注册。
+// DSH Client 半的最小合约测试：不启动浏览器，只验证 ModuleLoader 导出的依赖、槽位注册形状、
+// turnTail 徽标的"claim 逻辑"、会话 Definition 与 i18n 键对齐。
+//
+// 关键点：槽位注册形状按上游 SlotRegistry.register 的校验规则复刻（list 槽位必须有 id；
+// select 只有 chain 槽位才认），并且真的**执行** slots.inject 的回调——上一版只把槽位名塞进数组，
+// register 从未被调用，于是"turnTail 用 select 又漏 id"这个会让注册直接抛错的缺陷被漏掉了。
 import { readFileSync } from 'node:fs'
+
 const loaded = []
 const originalWindow = globalThis.window
 
@@ -15,15 +21,51 @@ try {
   await import(new URL('../packages/dsh-plugin-voice/lib/client.js?client-contract', import.meta.url))
 
   if (loaded.length !== 1) throw new Error('expected one ModuleLoader entry, got ' + loaded.length)
+
+  // React 替身：createElement 返回可断言的普通节点描述；hooks 只返回固定值（不跑真实渲染）
+  const reactStub = {
+    createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
+    Fragment: 'Fragment',
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useEffect: () => {},
+    useRef: (initial) => ({ current: initial === undefined ? null : initial }),
+    useMemo: (factory) => factory(),
+    useCallback: (fn) => fn,
+  }
   const client = loaded[0].factory((id) => {
-    if (id === 'react') return {}
+    if (id === 'react') return reactStub
     throw new Error('unexpected client dependency: ' + id)
   })
+
+  // 槽位替身：inject 立即执行回调（真跑注册），register 复刻上游 list 槽位的必需字段校验
+  const registrations = []
+  const slots = {
+    inject: (name, callback) => {
+      currentInject = name
+      callback()
+      currentInject = null
+    },
+    register: (options, component) => {
+      const slotName = options.name
+      if (!slotName) throw new Error('slot registration without name')
+      if (options.select !== undefined) {
+        throw new Error(`slot "${slotName}" 用了 chain 槽位专有的 select（list 槽位应把 claim 判断放进组件）`)
+      }
+      if (!options.id) throw new Error(`list slot "${slotName}" requires options.id`)
+      if (currentInject !== null && currentInject !== slotName) {
+        throw new Error(`slots.inject("${currentInject}") 里注册了别的槽位 "${slotName}"`)
+      }
+      registrations.push({ options, component })
+    },
+  }
+  let currentInject = null
+
   const definitions = []
-  const slots = []
+  const effects = []
   client.apply({
-    effect: () => {},
-    slots: { inject: (name) => slots.push(name) },
+    effect: (callback) => { effects.push(callback) },
+    slots,
+    locale: undefined,
     uiConversation: { events: { register: (definition) => definitions.push(definition) } },
   })
 
@@ -34,14 +76,36 @@ try {
     'settings.section',
     'shell.overlay',
   ]
-  const hasExactSlots = expectedSlots.length === slots.length && expectedSlots.every((name, index) => slots[index] === name)
+  const names = registrations.map((r) => r.options.name)
+  const hasExactSlots = expectedSlots.length === names.length && expectedSlots.every((n, i) => names[i] === n)
+  if (!hasExactSlots) throw new Error('unexpected registered slots: ' + JSON.stringify(names))
+  const noId = registrations.filter((r) => !r.options.id)
+  if (noId.length) throw new Error('registered without id: ' + JSON.stringify(noId.map((r) => r.options.name)))
+  const notComponent = registrations.filter((r) => typeof r.component !== 'function')
+  if (notComponent.length) throw new Error('slot without a component: ' + JSON.stringify(notComponent.map((r) => r.options.name)))
+
   if (!client.inject.includes('uiConversation') || client.inject.includes('conversationEvents')) {
     throw new Error('client inject must require uiConversation and not conversationEvents: ' + JSON.stringify(client.inject))
   }
   if (definitions.length !== 1 || definitions[0].kind !== 'voice') {
     throw new Error('voice Definition was not registered through uiConversation.events')
   }
-  if (!hasExactSlots) throw new Error('unexpected injected slots: ' + JSON.stringify(slots))
+
+  // turnTail 徽标：读本轮 turn 数据里的 voice.messageId；读不到 / 该消息从未被朗读 → 返回 null（不占位）
+  const badge = registrations.find((r) => r.options.name === 'conversation.chat.turnTail')
+  const turnData = (value) => ({ data: { get: (key) => (key === 'voice' ? value : undefined) } })
+  const claimCases = [
+    ['本轮没有可朗读消息', undefined],
+    ['本轮消息字段为空', {}],
+    ['该消息从未被朗读', { messageId: 'm-1' }],
+    ['turn.data 缺失', null],
+  ]
+  for (const [label, value] of claimCases) {
+    const rendered = badge.component({ sessionId: 's1', turn: value === null ? {} : turnData(value) })
+    if (rendered !== null) {
+      throw new Error(`badge 在"${label}"时应返回 null（不许占位），实际: ${JSON.stringify(rendered)}`)
+    }
+  }
 
   // i18n 键对齐：zh / en 两套文案的 key 集合必须一致（漏配一边会显示成 key 本身）
   const source = readFileSync(new URL('../packages/dsh-plugin-voice/lib/client.js', import.meta.url), 'utf8')
@@ -66,7 +130,8 @@ try {
     if (!zhKeys.includes(k)) throw new Error('missing toast key: ' + k)
   }
 
-  console.log('client contract: uiConversation.events + voice Definition + slots + i18n(' + zhKeys.length + ' keys) OK')
+  console.log('client contract: uiConversation.events + voice Definition + ' + registrations.length +
+    ' slots(带 id、无 select) + turnTail claim 逻辑 + i18n(' + zhKeys.length + ' keys) OK')
 } finally {
   if (originalWindow === undefined) delete globalThis.window
   else globalThis.window = originalWindow

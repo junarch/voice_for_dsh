@@ -40,6 +40,8 @@
 
 - **turnTail 播报徽标从未真正生效**：注册用了 chain 槽位专有的 `select` 且漏了 list 槽位必需的 `id`，
   注册直接抛错（徽标不渲染）。改为带 `id` 的 list 注册，"只 claim 读过的轮次"移到组件内自己判断。
+  顺带把 `scripts/test-client.mjs` 从"只记槽位名"改成**真的执行注册回调并按上游规则校验形状**——
+  原测试从不调用 `register`，所以这个缺陷一路溜过；已做反向验证（把旧写法放回去，测试立刻失败）。
 - `shell.overlay` 浮层补 `pointer-events:auto`（该层默认点击穿透）。
 
 ### Performance
