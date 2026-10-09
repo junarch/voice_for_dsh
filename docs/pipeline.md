@@ -320,6 +320,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 - 老配置里只有 `pitchLevel`、没有 `pitch` 时（0.1.x 时代 settings.yaml 的写法）：`pitchOf` 里 `pitch` 的 schema
   默认值 0 恒存在且优先，所以**搬过来的 `pitchLevel` 不影响发声**（存储上不丢，听感按 0 处理）。
   要让老五档音调重新生效，把 `tts.volcengine.pitch` 写成对应半音值（五档映射常数见 `lib/voice-compat.js` 的 `pitchOf`）。
+  `RATE_STOPS`/`PITCH_STOPS` 仍在 schema 里（设置页的语速/音调档位用），只是 `pitchLevel` 不再影响发声。
 - `tts.volcengine.apiKey` **不标 `role('secret')`**（有意）：dsh-settings 的写入路径会把非 volatile 的秘密字段
   从落盘补丁里剥掉（`strip(raw, form)`），而设置页每次保存都会整块重写该条目的 config——一旦标 secret，
   用户第一次在设置页点保存就会**把 patch 里的 apiKey 删掉**，云 TTS 从此失效。所以 key 保持在 profile patch 里

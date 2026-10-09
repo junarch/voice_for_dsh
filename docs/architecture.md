@@ -6,7 +6,7 @@
 ## 1. 版本与环境（本机）
 
 - 目标运行环境：**DSH 桌面版 0.2.0-rc.2**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
-  需要 inspect 上游实现时用 `node scripts/_tmp-asar-extract.mjs <输出目录> <包名…>` 只读导出
+  需要 inspect 上游实现时用 `node scripts/dsh-inspect-extract.mjs <输出目录> <包名…>` 只读导出
   `dsh/node_modules/@deepseek-ai/*`（不要改安装目录、不要直接读 asar 路径）。
 - `DSH_HOME`（默认 `~/.dsh`）；桌面 profile：`$DSH_HOME\profiles\desktop`；Web 界面
   `http://127.0.0.1:19387`。桌面端自带的 CLI：`<安装目录>\resources\runtime\cli\bin\dsh.cmd`
