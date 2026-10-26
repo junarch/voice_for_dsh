@@ -196,6 +196,11 @@ const STREAM = {
   maxSessionTimeout: 60000,   // 单个 session 等待结束上限
 }
 
+/** 段落粒度情感指令的 LLM 调用上限（成本闸门）。
+ * 每两句话就查一次 LLM 会给长回复叠出几十次辅助调用（每次都要带完整指令 system prompt），
+ * 是转写之外最容易被忽视的 token 开销；超过上限后沿用最后一次指令，听感基本一致、成本有界。 */
+const MAX_PARAGRAPH_INSTRUCTIONS = 12
+
 /**
  * 豆包 2.0 语速/音调：五档定性档位 → 数值参数。
  * speech_rate ∈ [-50,100]（100=2.0x、-50=0.5x；探针实测生效）；
@@ -1088,6 +1093,7 @@ function apply(ctx, config) {
     let firstDynamicIntensity = 4
     let transcriptionDone = false     // 转写完整跑完才写缓存（WS 中途失败不污染缓存）
     let cachedHit = null              // 缓存命中（重播）标记：供 try 外缓存写入判断
+    let instructionCalls = 0          // 已发出的段落指令 LLM 调用数（成本闸门，见 MAX_PARAGRAPH_INSTRUCTIONS）
     let useServerCache = false        // 服务端缓存（cache_config）：初次写/重播命中才下发；regen 与试听绝不
     const paraTexts = []              // 初次合成的各段文本（记录到缓存，重播逐段复现 → 服务端缓存键一致 → 命中免费）
     let lastParagraphText = '' // 最近一段完整文本（生成下一段指令用）
@@ -1099,6 +1105,13 @@ function apply(ctx, config) {
     let paraSentences = 0
     let firstPara = true
     let inCodeFence = false // 跨句跟踪代码块开关（``` 可能横跨多个 delta）
+    // 转写流的生产者/消费者解耦：生产者按模型速度把 delta 收进 buffer，消费者（TTS 发送）
+    // 慢也不会反压转写。这样用户中途停止时，只要模型已经吐完，转写稿仍是完整的、可缓存的。
+    let sourcePump = null
+    let sourceDone = false
+    let sourceError = null
+    let sourceBuf = []
+    const sourceWaiters = []
     /** 发送前净化：先按代码块开关剥离围栏内容，再剥 Markdown/装饰符号。 */
     function cleanForTts(text) {
       let out = ''
@@ -1119,10 +1132,19 @@ function apply(ctx, config) {
       paragraphs++
     }
     async function cutParagraph() {
+      // 先登记结束等待者、再发 FinishSession：两步之间还有指令生成的 await，
+      // 若先发后等，服务端可能在等待者登记前就把 SessionFinished 送达并被丢弃，
+      // 然后每段白等 60s（表现：音频早播完了，界面仍"朗读中"，整条管线拖十几分钟）。
+      const finishP = conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
+      finishP.catch(() => {}) // finishSession 若先抛错，别留下未处理的超时 rejection
       await conn.finishSession(session)
-      // 初次生成：段 N 动态写情感指令；重播（缓存命中）：复用缓存指令，不再调 LLM
-      const giP = (genInstr && !useCachedInstr) ? generateParagraphInstruction(route, cfg, lastParagraphText) : Promise.resolve(null)
-      await conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
+      // 初次生成：段 N 动态写情感指令；重播（缓存命中）：复用缓存指令，不再调 LLM。
+      // 成本闸门：越过上限或已停止/已放弃的 run 不再发新调用，沿用最后一次指令。
+      const canInstruct = genInstr && !useCachedInstr && !run.stopped && instructionCalls < MAX_PARAGRAPH_INSTRUCTIONS
+        && !!String(lastParagraphText || '').trim()
+      if (canInstruct) instructionCalls++
+      const giP = canInstruct ? generateParagraphInstruction(route, cfg, lastParagraphText) : Promise.resolve(null)
+      await finishP
       flushSegment(run)
       const gi = await giP
       if (gi) {
@@ -1188,10 +1210,28 @@ function apply(ctx, config) {
       }
       // 重播按 segments 逐段复现（已在上面循环完会话）→ 不再走通用 for-await；其余路径走 tstream
       if (tstream) {
-        for await (const delta of tstream) {
+        const source = tstream
+        sourcePump = (async () => {
+          try {
+            for await (const delta of source) {
+              if (!delta) continue
+              sourceBuf.push(String(delta))
+              const wake = sourceWaiters.shift()
+              if (wake) wake()
+            }
+          } catch (error) {
+            sourceError = error
+          } finally {
+            sourceDone = true
+            for (const wake of sourceWaiters.splice(0)) wake()
+          }
+        })()
+        for (;;) {
+          while (!sourceBuf.length && !sourceDone) await new Promise((resolve) => sourceWaiters.push(resolve))
+          if (!sourceBuf.length) break
+          const delta = sourceBuf.shift()
+          transcriptParts.push(delta) // 先记账再判停：停止时已取到的 delta 也是完整稿的一部分
           if (run.stopped) break
-          if (!delta) continue
-          transcriptParts.push(delta)
           if (dynamic && !firstPara) {
             // 段 N（N≥1）：成句缓冲 + 精确切段
             pending += delta
@@ -1232,15 +1272,16 @@ function apply(ctx, config) {
         }
         pending = ''
       }
-      transcriptionDone = !run.stopped // 转写完整跑完（未中途抛错）；WS 音频阶段失败不影响缓存完整性
       if (session) {
         if (!useCachedInstr && lastParagraphText) {
           // 末段文本同样记录（初次合成；供重播逐段复现 → 服务端缓存命中）
           paraTexts.push(lastParagraphText)
           if (useServerCache) serverCacheMark(lastParagraphText, ttsFpOf(cfg, v))
         }
+        const finalFinish = conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
+        finalFinish.catch(() => {}) // 同上：finishSession 抛错时不留下未处理 rejection
         await conn.finishSession(session)
-        await conn.waitSessionFinished(session, STREAM.maxSessionTimeout)
+        await finalFinish
         flushSegment(run)
       }
     } catch (err) {
@@ -1251,10 +1292,19 @@ function apply(ctx, config) {
       try { await conn.close() } catch {}
     }
 
-    const rawTranscript = transcriptParts.join('')
+    // 等生产者收尾：即使 TTS 侧已失败/被用户停止，只要模型已经吐完，转写稿仍然完整可缓存。
+    if (sourcePump) { try { await sourcePump } catch { /* 错误已记在 sourceError */ } }
+    transcriptionDone = sourceDone && !sourceError
+    // 消费者没来得及处理的尾部 delta 也是转写稿的一部分（用户停止时 TTS 可能落后于模型）
+    const rawTranscript = transcriptParts.join('') + sourceBuf.join('')
     const { clean: cleanTranscript } = extractVoiceTags(rawTranscript)
     const spokenTranscript = sanitizeForSpeech(cleanTranscript)
-    if (!run.stopped && transcriptionDone && !cachedHit && spokenTranscript) {
+    // 转写完整就写缓存：**用户中途停止播报不影响转写成果**。旧实现用 !run.stopped 兜底，
+    // 结果"点到出声后马上点停止"会让整条转写成果丢弃，下次再点又从头转写（每次都是一份
+    // 完整输入 token 的重复开销）。这里只在转写没跑完（transcriptionDone=false）时放弃缓存；
+    // 同时避免被更晚的 run（如 regen）覆盖。
+    const priorEntry = transcriptCache.get(String(run.messageId))
+    if (transcriptionDone && !cachedHit && spokenTranscript && (!priorEntry || (priorEntry.at || 0) <= run.at)) {
       // 与 HTTP 路径同形状（净化稿 + 指令/情感/强度），保证流式/HTTP 可互读；
       // 只在转写完整时写缓存（WS 中途失败不污染），重播不重写
       transcriptCache.set(String(run.messageId), {
@@ -1266,7 +1316,9 @@ function apply(ctx, config) {
         emotion: firstDynamicEmotion || currentEmotion || undefined,
         intensity: firstDynamicIntensity || currentIntensity || 4,
         ttsFp: ttsFpOf(cfg, v), // 服务端缓存命中判据：重播时参数指纹未变才可命中（防串音）
-        segments: paraTexts.length ? paraTexts.slice() : undefined, // 各段完整文本：重播逐段复现 → 服务端缓存键一致
+        // 各段完整文本：重播逐段复现 → 服务端缓存键一致。只在播报完整跑完时记录；
+        // 中途停止时 segments 只是前几段，重播会漏读后文——宁可整段重播。
+        segments: !run.stopped && paraTexts.length ? paraTexts.slice() : undefined,
       })
       saveTranscriptCache(transcriptCache)
       const hist = transcriptsBySession.get(run.sessionId) || []

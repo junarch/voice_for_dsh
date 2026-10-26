@@ -240,13 +240,35 @@ window.__ModuleLoader__.load({
     function diag(ev, data) {
       try { rpc("clientDiag", { entry: Object.assign({ ev: ev }, data || {}) }).catch(function () {}); } catch (e) {}
     }
-    /** 播报状态（messageId → 'speaking' | 'done'）：turnTail 徽标读取 */
+    /** 播报状态（messageId → 'speaking' | 'done'）：turnTail 徽标读取。
+     *  变更必须通知订阅者：徽标/按钮靠订阅重渲染，否则"已朗读/已停止"永远显示不出来。 */
     var spokenState = {};
-    function markSpoken(messageId, state) { spokenState[String(messageId)] = state; }
-    function stopPlaybackOnly() {
+    var spokenListeners = new Set();
+    var playingMessageId = null;
+    function markSpoken(messageId, state) {
+      var id = String(messageId);
+      if (state) spokenState[id] = state; else delete spokenState[id];
+      spokenListeners.forEach(function (f) { f(); });
+    }
+    function beginPlayback(messageId) {
+      playingMessageId = messageId ? String(messageId) : null;
+      if (playingMessageId) markSpoken(playingMessageId, "speaking");
+    }
+    function finishPlayback(messageId, state) {
+      var id = messageId ? String(messageId) : playingMessageId;
+      if (playingMessageId === id) playingMessageId = null;
+      if (id) markSpoken(id, state || null);
+    }
+    /** 停止播放：必须同时清掉"朗读中"状态。播放被中断时浏览器不会回调 onend/onended，
+     *  只停音频不清状态 → 徽标永远停在"朗读中"（且会诱导用户重复点播、重复烧 token）。 */
+    function stopPlaybackOnly(opts) {
+      var wasPlaying = !!(playingMessageId || currentAudio || streamRunId);
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
       if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
       stopStream();
+      if (playingMessageId) finishPlayback(playingMessageId, null);
+      // 只有确实有播报在跑时才通知 Host 中止：避免"新 turn 开始"无脑打断别的会话正在跑的管线。
+      if (wasPlaying && opts && opts.notifyHost) { try { rpc("stop").catch(function () {}); } catch (e) {} }
     }
     function stopAll() {
       stopPlaybackOnly();
@@ -536,7 +558,7 @@ window.__ModuleLoader__.load({
       if (res && res.degraded) { console.warn("[voice]", t("read.degraded")); showToast(t("read.degraded")); }
       if (res && res.effortMapped) console.warn("[voice]", res.effortNote || "configured reasoning effort not applied");
       if (res && res.warn) console.warn("[voice]", res.warn);
-      if (res && res.messageId) markSpoken(res.messageId, "speaking");
+      if (res && res.messageId) beginPlayback(res.messageId);
       diag("play-result", { mode: res && res.mode || "", engine: res && res.engine || "", ttsError: (res && res.ttsError ? String(res.ttsError).slice(0, 100) : ""), degraded: !!(res && res.degraded), notice: (res && res.notice ? String(res.notice).slice(0, 100) : "") });
       // 慢引擎提示：本地 CosyVoice 首声需等转写+指令+首段合成（CPU 上数十秒），
       // 不给提示用户会以为点坏了（无任何声音反馈时）
@@ -545,12 +567,17 @@ window.__ModuleLoader__.load({
       }
       const done = hooks && hooks.onEnd;
       const wrapped = {
-        onEnd: () => { if (res && res.messageId) markSpoken(res.messageId, "done"); if (done) done(); },
-        onError: hooks && hooks.onError,
+        onEnd: () => { if (res && res.messageId) finishPlayback(res.messageId, "done"); if (done) done(); },
+        onError: (reason) => {
+          // 出错/被打断时同样要收尾状态：否则徽标会停在"朗读中"
+          if (res && res.messageId) finishPlayback(res.messageId, null);
+          if (hooks && hooks.onError) hooks.onError(reason);
+        },
       };
       if (res && res.mode === "stream" && res.runId) { startStreamPlayer(res.runId, wrapped, res.sampleRate); return true; }
-      if (res && res.audioUrl) return playAudio(res.audioUrl, wrapped);
-      return speakText(res && res.transcript, res && res.speech, wrapped);
+      var started = res && res.audioUrl ? playAudio(res.audioUrl, wrapped) : speakText(res && res.transcript, res && res.speech, wrapped);
+      if (!started && res && res.messageId) finishPlayback(res.messageId, null);
+      return started;
     }
 
     // ---------- 共享开关状态 ----------
@@ -637,7 +664,20 @@ window.__ModuleLoader__.load({
       const lastError = errorPair[0];
       const setLastError = errorPair[1];
 
-      React.useEffect(() => () => stopPlaybackOnly(), []);
+      // 不在这里做"卸载即停播"：消息行在滚动/重渲染时可能被卸载，会把正在播的音频
+      // 静默掐掉并留下错误的"朗读中"状态；停播统一交给显式停止、换 turn、插件卸载三条路径。
+      React.useEffect(() => {
+        const sync = () => {
+          const s = spokenState[String(props.messageId)];
+          setStatus((prev) => {
+            if (s === "speaking") return "speaking";
+            return prev === "speaking" ? "idle" : prev;
+          });
+        };
+        spokenListeners.add(sync);
+        sync();
+        return () => { spokenListeners.delete(sync); };
+      }, [props.messageId]);
 
       async function runSpeak(regen) {
         if (status === "busy") return;
@@ -733,12 +773,23 @@ window.__ModuleLoader__.load({
     // ---------- turnTail 徽标（只 claim 读过的轮次，不抢 deliverables 产物链） ----------
     // list 槽位没有 select：自己在渲染时读本轮的 voice 数据，读不到/没读过就返回 null（不占位）。
     function VoiceTurnBadge(props) {
+      // 订阅播报状态变更：没有订阅时 React 不会因 spokenState 变化重渲染，
+      // 徽标会永远停在上一次渲染的"朗读中…"（已结束、已停止都看不见）。
+      const tickPair = React.useState(0);
+      const setTick = tickPair[1];
+      React.useEffect(() => {
+        const refresh = () => setTick((n) => n + 1);
+        spokenListeners.add(refresh);
+        return () => { spokenListeners.delete(refresh); };
+      }, []);
       const turn = props.turn;
       const v = turn && turn.data && turn.data.get ? turn.data.get("voice") : undefined;
       const messageId = v && v.messageId ? String(v.messageId) : "";
       const state = messageId ? spokenState[messageId] : undefined;
       if (!messageId || !state) return null;
       async function onReplay() {
+        // "朗读中…"时点击 = 停止，而不是再起一条全新播报（每起一条都要重新转写 = 再烧一次 token）
+        if (state === "speaking") { stopAll(); return; }
         try {
           const res = await rpc("speak", { sessionId: String(props.sessionId), messageId: messageId });
           if (res && res.ok) playResult(res, {});
@@ -747,7 +798,7 @@ window.__ModuleLoader__.load({
       return React.createElement("button", {
         className: "dsh-voice-badge",
         onClick: onReplay,
-        title: t("badge.replay"),
+        title: state === "speaking" ? t("read.stopTitle") : t("badge.replay"),
       }, state === "speaking" ? t("badge.speaking") : t("badge.done"));
     }
 
@@ -1244,6 +1295,10 @@ window.__ModuleLoader__.load({
         return () => tag.remove();
       }, "voice: styles");
 
+      // 插件卸载/应用关闭时统一停播（替代原先挂在每个消息按钮上的卸载即停）：
+      // 只在这一个全局入口停音频并通知 Host 收尾，消息行重渲染/滚动不会误杀播放。
+      ctx.effect(() => () => { try { stopAll(); } catch (e) {} }, "voice: stop playback on dispose");
+
       // 设置页导航图标：把语音行的齿轮换成喇叭（面板挂载/React 重渲染后由 observer 补丁）
       ctx.effect(() => {
         startNavIconPatching();
@@ -1260,7 +1315,9 @@ window.__ModuleLoader__.load({
           const res = await rpc("pollSpeak");
           if (res && res.ok) {
             if (lastGen !== null && typeof res.gen === "number" && res.gen !== lastGen && res.stopOnNewTurn !== false) {
-              stopPlaybackOnly(); // 新 turn 开始，停旧播报
+              // 新 turn 开始：停旧播报，并让 Host 中止后台管线（否则被放弃的播报还会继续跑
+              // 段落指令 LLM / 合成，白烧 token 与 TTS）
+              stopPlaybackOnly({ notifyHost: true });
             }
             if (typeof res.gen === "number") lastGen = res.gen;
             if (res.pending) {

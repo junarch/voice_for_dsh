@@ -449,6 +449,9 @@ const sessionEvents = [
     msgEvent('m15', 19, '流式缓存重播内容'),
     msgEvent('m16', 20, '重新生成测试内容'),
     msgEvent('m17', 21, '兜底完整性测试内容'),
+    msgEvent('mstop', 24, '停止播报后仍应保留完整转写，下次再点不再烧 token'),
+    msgEvent('mcost', 25, '成本闸门测试内容'),
+    msgEvent('msync', 26, 'FinishSession 同步返回测试内容'),
     msgEvent('m6e', 22, '音调细粒度测试内容'),
     msgEvent('m6e0', 23, '音调正常测试内容'),
 ]
@@ -629,7 +632,7 @@ check('StartConnection 帧无 sessionId 段', decodeFrame(connFrame).event === E
 check('StartSession 帧带 event=100 与 sessionId', decodeFrame(encodeFrame({ type: MSG.FullClientRequest, event: EV.StartSession, sessionId: 's', payload: Buffer.from('{}') })).event === 100)
 
 // ---- WebSocket 替身（模拟豆包双向流服务端；记录上/下行帧供断言） ----
-const wsState = { connections: 0, sessions: [], taskRequests: [], lastReqParams: null }
+const wsState = { connections: 0, sessions: [], taskRequests: [], lastReqParams: null, suppressFinish: false }
 class MockVolcWS {
   constructor(url, opts) {
     this.binaryType = 'blob'
@@ -656,13 +659,14 @@ class MockVolcWS {
       wsState.lastReqParams = payload.req_params
       wsState.sessions.push(payload.req_params)
       emit({ type: MSG.FullServerResponse, event: EV.SessionStarted })
-      emit({ type: MSG.AudioOnlyServer, event: EV.TTSResponse, sessionId: msg.sessionId, payload: Buffer.alloc(3000, 0x11) })
+      // suppressFinish 场景（"长稿还在播、用户先停"）：给一大块音频，确保首段在等待 SessionFinished 前就入队
+      emit({ type: MSG.AudioOnlyServer, event: EV.TTSResponse, sessionId: msg.sessionId, payload: Buffer.alloc(wsState.suppressFinish ? 20000 : 3000, 0x11) })
     } else if (msg.event === EV.TaskRequest) {
       wsState.taskRequests.push(JSON.parse(msg.payload.toString()))
       emit({ type: MSG.AudioOnlyServer, event: EV.TTSResponse, sessionId: msg.sessionId, payload: Buffer.alloc(2500, 0x22) })
     } else if (msg.event === EV.FinishSession) {
       emit({ type: MSG.AudioOnlyServer, event: EV.TTSResponse, sessionId: msg.sessionId, payload: Buffer.alloc(2000, 0x33) })
-      emit({ type: MSG.FullServerResponse, event: EV.SessionFinished })
+      if (!wsState.suppressFinish) emit({ type: MSG.FullServerResponse, event: EV.SessionFinished })
     } else if (msg.event === EV.FinishConnection) {
       emit({ type: MSG.FullServerResponse, event: EV.ConnectionFinished })
       this.close()
@@ -796,6 +800,35 @@ const addvv1 = pvv1.additions ? JSON.parse(pvv1.additions) : {}
 check('普通 vv 音色：动态情感经 context_texts 下发（含悲伤+强度措辞）', Array.isArray(addvv1.context_texts) && addvv1.context_texts[0].includes('悲伤') && addvv1.context_texts[0].includes('语气'), addvv1.context_texts)
 check('普通 vv 音色：不发送 emotion/emotion_scale 数值参数', !(pvv1.audio_params || {}).emotion && !(pvv1.audio_params || {}).emotion_scale, pvv1.audio_params)
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { speaker: 'zh_female_vv_uranus_bigtts', interface: 'bidirection' } } } })
+
+section('T11e FinishSession 立即返回也能收尾（先登记等待者，不白等 60s）')
+// 真机上服务端可能在 FinishSession 之后立刻回 SessionFinished；旧代码先发后登记等待者，
+// 事件会在 await 间隙被丢弃 → 每段白等 60s（音频早播完，界面仍"朗读中"）。
+class SyncFinishVolcWS extends MockVolcWS {
+  _serve(msg) {
+    if (msg.event === EV.FinishSession) {
+      const emitSync = (frame) => {
+        const b = encodeFrame(frame)
+        const ab = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
+        if (this.onmessage) this.onmessage({ data: ab })
+      }
+      emitSync({ type: MSG.AudioOnlyServer, event: EV.TTSResponse, sessionId: msg.sessionId, payload: Buffer.alloc(6000, 0x55) })
+      emitSync({ type: MSG.FullServerResponse, event: EV.SessionFinished })
+      return
+    }
+    super._serve(msg)
+  }
+}
+globalThis.WebSocket = SyncFinishVolcWS
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream' } }, language: 'auto', transcribe: { enabled: true } } })
+llmState.responses = [{ text: '同步结束测试。', finish: 'stop' }]
+const s11e = await rpc('speak', { sessionId: 's1', messageId: 'msync' })
+const sd11e = await awaitStreamDone(s11e.runId, 3000)
+check('同步 SessionFinished：3s 内收尾（不白等 60s）', !sd11e.timeout && !!sd11e.res, sd11e.timeout || sd11e.res)
+check('同步结束：音频段仍正常产出', sd11e.urls.length >= 1, sd11e.urls.length)
+globalThis.WebSocket = MockVolcWS
+await rpc('setConfig', { patch: { language: 'auto' } })
+
 
 section('T2 meta：预设清单【快照：预设 prompt 不含内嵌标签】')
 const meta = await rpc('meta')
@@ -1130,6 +1163,46 @@ llmState.responses = []
 const r19 = await rpc('speak', { sessionId: 's1', messageId: 'm17' })
 check('兜底后缓存为完整转写（cached=true 且内容完整）', r19.ok === true && r19.cached === true && r19.transcript === '兜底完整转写内容。', { ok: r19.ok, cached: r19.cached, t: r19.transcript })
 globalThis.WebSocket = MockVolcWS
+
+section('T19b 停止播报不丢转写缓存（下次再点零 LLM，不重复烧 token）')
+// 真实场景：用户听到第一段后点"停止"；旧实现把整条转写成果一起丢弃，下次再点从头转写。
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream', emotionGranularity: 'paragraph' } }, language: 'auto', transcribe: { stylePreset: 'standard', enabled: true } } })
+wsState.suppressFinish = true // 让最后一段 session 不返回 SessionFinished，模拟"长稿还在播、用户先点停止"
+llmState.responses = [{ text: '停止前已经完整转写的内容。第二句。', finish: 'stop' }]
+const callsBeforeStop = llmState.calls.length
+const s19b = await rpc('speak', { sessionId: 's1', messageId: 'mstop' })
+let heard = false
+for (let i = 0; i < 100 && !heard; i++) {
+  const n = await rpc('streamNext', { runId: s19b.runId })
+  if (n.url) heard = true
+  else if (n.done) break
+  await new Promise((r) => setTimeout(r, 10))
+}
+check('停止前已收到音频段（用户已听到）', heard === true)
+await new Promise((r) => setTimeout(r, 200))
+await rpc('stop')
+await awaitStreamDone(s19b.runId)
+wsState.suppressFinish = false
+const callsAfterStopRun = llmState.calls.length
+// 切 HTTP 路径（缓存可跨流式/HTTP 互读），对同一条消息重读：应命中缓存、零新增 LLM
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'http' } } } })
+llmState.responses = []
+const r19b = await rpc('speak', { sessionId: 's1', messageId: 'mstop' })
+check('停止后重读：转写缓存命中（cached=true）', r19b.ok === true && r19b.cached === true, r19b)
+check('停止后重读：零新增 LLM（转写成果没被丢）', llmState.calls.length === callsAfterStopRun, llmState.calls.length - callsAfterStopRun)
+check('停止后重读：文稿完整（不是半截）', r19b.transcript === '停止前已经完整转写的内容。第二句。', r19b.transcript)
+
+section('T19c 段落情感指令有成本上限（长稿不再每两句话烧一次 LLM）')
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-stream', emotionGranularity: 'paragraph' } }, language: 'auto', transcribe: { stylePreset: 'standard', enabled: true } } })
+const longLines = Array.from({ length: 60 }, (_, i) => '第' + i + '句测试内容。').join('\n')
+llmState.responses = [{ text: longLines, finish: 'stop' }]
+const instrBefore = llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length
+const s19c = await rpc('speak', { sessionId: 's1', messageId: 'mcost' })
+const sd19c = await awaitStreamDone(s19c.runId)
+const instrUsed = llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length - instrBefore
+check('长稿仍产出音频段', sd19c.res && sd19c.urls.length >= 1, sd19c.urls.length)
+check('段落指令调用有上限（≤12 次）', instrUsed > 0 && instrUsed <= 12, instrUsed)
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'http' } } } })
 
 section('T20 本地 TTS provider（local：英文不变式 / 零额外 LLM / 免费门控 / WAV / 失败降级）')
 // —— 引擎归一（voice-compat 单测）——
