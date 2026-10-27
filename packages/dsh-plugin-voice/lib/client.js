@@ -328,9 +328,24 @@ window.__ModuleLoader__.load({
     var streamFetched = 0;            // 已取回的音频段数（诊断用）
     var AC = (typeof window !== "undefined") && (window.AudioContext || window.webkitAudioContext);
     var audioCtx = null;
-    function ensureAudioContext() {
+    var audioCtxRate = 0;
+    /** 采样率必须跟音频段一致：AudioBufferSourceNode 对每个 buffer 单独做采样率转换，
+     *  24k 的段在 48k 上下文里会在 12k 以上留下约 -28dB 的镜像（持续“滋滋”声的来源）。
+     *  固定成段采样率后 buffer 不转换，整条输出由 Chromium 的输出重采样器一次性完成。 */
+    function ensureAudioContext(rate) {
       if (!AC) return null;
-      if (!audioCtx) { try { audioCtx = new AC(); } catch (e) { return null; } }
+      var want = (typeof rate === "number" && rate > 0) ? rate : 24000;
+      if (audioCtx && audioCtxRate && Math.abs(audioCtxRate - want) > 1) {
+        try { audioCtx.close(); } catch (e) {}
+        audioCtx = null;
+      }
+      if (!audioCtx) {
+        try { audioCtx = new AC({ sampleRate: want }); audioCtxRate = audioCtx.sampleRate; }
+        catch (e) {
+          // 老浏览器不支持 sampleRate 选项：退回默认（有镜像也比没声音强）
+          try { audioCtx = new AC(); audioCtxRate = audioCtx.sampleRate; } catch (e2) { return null; }
+        }
+      }
       if (audioCtx.state === "suspended") { try { var p = audioCtx.resume(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
       return audioCtx;
     }
@@ -363,10 +378,10 @@ window.__ModuleLoader__.load({
       streamHooks = hooks;
       if (typeof sampleRate === "number" && sampleRate > 0) streamSampleRate = sampleRate;
       streamFetched = 0;
-      if (ensureAudioContext()) {
+      if (ensureAudioContext(streamSampleRate)) {
         streamMode = "gapless";
         gapless = { ctx: audioCtx, queue: [], sources: [], inflight: 0, scheduledEnd: 0, fetchDone: false, ended: 0 };
-        diag("stream-start", { mode: "gapless", runId: runId, sampleRate: streamSampleRate, ctx: audioCtx.state });
+        diag("stream-start", { mode: "gapless", runId: runId, sampleRate: streamSampleRate, ctxRate: audioCtxRate, ctx: audioCtx.state });
         pollStreamOnce();
         streamPollTimer = setInterval(pollStreamOnce, 300);
       } else {
