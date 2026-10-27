@@ -40,6 +40,10 @@
 
 ### Fixed
 
+- **播放队列收紧**：`pumpQueue` 只预排未来 5 秒（原来会把整条音频一口气排到几十秒后）；
+  抓取回调绑定发起时的播放轮次，停止后立刻重播不会再把上一轮的残段漏进新一轮；
+  解码结果按请求序号放行，两个请求完成顺序颠倒也不跳段；PCM 段加内容校验
+  （长度、ID3/RIFF/OggS/MP3 同步字），非音频内容按解码失败降级。`seg-decoded` 诊断补 `seq` 与 `ahead`。
 - **播报时的「滋滋」电流声**：播放器原来按硬件采样率（48 kHz）建 `AudioContext`，却把 24 kHz 的音频段
   直接塞进去——`AudioBufferSourceNode` 会对每个 buffer 单独做采样率转换，在 12 kHz 以上留下约 -28 dB 的
   频谱镜像（回环录音实测；系统播放器播同一段 WAV 为 -47 dB）。现在 `ensureAudioContext(rate)` 把上下文

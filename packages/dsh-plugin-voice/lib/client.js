@@ -320,6 +320,7 @@ window.__ModuleLoader__.load({
     var streamBusy = false;
     var streamMode = "legacy";        // legacy=顺序 <audio>（兜底）| gapless=Web Audio
     var streamSampleRate = 24000;     // pcm 段建 AudioBuffer 用（来自 speak 响应）
+    var LOOKAHEAD_SEC = 5;            // 预排上限：只把未来 5 秒内的段排进 AudioContext，其余留在队列
     // legacy 状态（兜底路径）
     var streamPlaying = false;
     var streamAudio = null;
@@ -362,12 +363,14 @@ window.__ModuleLoader__.load({
       // 停掉 legacy 正在播的段
       if (streamAudio) { try { streamAudio.pause(); } catch (e) {} streamAudio = null; }
       streamPlaying = false;
-      // 停掉 gapless 已调度源
-      if (gapless) {
-        for (var i = 0; i < gapless.sources.length; i++) { try { gapless.sources[i].stop(); } catch (e) {} }
-        gapless.sources.length = 0;
-        gapless.queue.length = 0;
-        gapless = null;
+      // 停掉 gapless 已调度源：先摘掉引用再 stop，避免 stop() 触发的 onended 重入
+      var g = gapless;
+      gapless = null;
+      if (g) {
+        for (var i = 0; i < g.sources.length; i++) { try { g.sources[i].stop(); } catch (e) {} }
+        g.sources.length = 0;
+        g.queue.length = 0;
+        if (g.ready) g.ready.clear();
       }
       streamHooks = null;
       streamMode = "legacy";
@@ -380,7 +383,8 @@ window.__ModuleLoader__.load({
       streamFetched = 0;
       if (ensureAudioContext(streamSampleRate)) {
         streamMode = "gapless";
-        gapless = { ctx: audioCtx, queue: [], sources: [], inflight: 0, scheduledEnd: 0, fetchDone: false, ended: 0 };
+        gapless = { ctx: audioCtx, queue: [], sources: [], inflight: 0, scheduledEnd: 0, fetchDone: false, ended: 0,
+          fetchSeq: 0, playSeq: 0, ready: new Map() };
         diag("stream-start", { mode: "gapless", runId: runId, sampleRate: streamSampleRate, ctxRate: audioCtxRate, ctx: audioCtx.state });
         pollStreamOnce();
         streamPollTimer = setInterval(pollStreamOnce, 300);
@@ -396,8 +400,9 @@ window.__ModuleLoader__.load({
     async function pollStreamOnce() {
       if (!streamRunId || streamBusy) return;
       if (streamMode === "gapless") {
-        if (gapless && gapless.fetchDone) { pumpQueue(); return; }
-        if (gapless && gapless.queue.length >= 3) return; // 预取够 3 段即可，避免堆积
+        pumpQueue();                                // 先补上未来 5 秒内空出来的位置
+        if (!gapless || gapless.fetchDone) return;
+        if (gapless.queue.length + gapless.ready.size >= 3) return; // 预取够 3 段即可，避免堆积
       } else {
         if (streamPlaying) return; // 播放中不拉新段（防多音轨叠加）
       }
@@ -413,7 +418,7 @@ window.__ModuleLoader__.load({
       }
       if (res.url) {
         diag("seg-url", { format: res.format || "pcm", segments: res.segments });
-        if (streamMode === "gapless") { enqueueSegment(res.url, res.format || "pcm"); return; }
+        if (streamMode === "gapless") { enqueueSegment(res.url, res.format || "pcm", gapless ? gapless.fetchSeq++ : 0); return; }
         playStreamSegment(res.url);
         return;
       }
@@ -433,8 +438,19 @@ window.__ModuleLoader__.load({
       }
       // pending：等下一拍
     }
-    /** 裸 PCM（16bit 小端）→ AudioBuffer：无解码延迟，切在哪都无缝（主路径）。 */
+    /** 裸 PCM（16bit 小端）→ AudioBuffer：无解码延迟，切在哪都无缝（主路径）。
+     *  先做内容校验：长度必须为正偶数（16bit），且不能是容器/编码器头——
+     *  非音频内容被当 PCM 播就是一片噪声，宁可走失败降级。 */
     function buildAudioBufferFromPcm(arrayBuffer, sampleRate) {
+      const bytes = new Uint8Array(arrayBuffer);
+      if (!bytes.length || (bytes.length & 1)) throw new Error("bad pcm length " + bytes.length);
+      if (bytes.length >= 4) {
+        const id3 = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33;             // ID3
+        const riff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46; // RIFF
+        const ogg = bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53;  // OggS
+        const mp3 = bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0;                          // MP3 帧同步
+        if (id3 || riff || ogg || mp3) throw new Error("segment is not raw pcm");
+      }
       const int16 = new Int16Array(arrayBuffer);
       const frames = int16.length;
       const buf = audioCtx.createBuffer(1, frames, sampleRate || streamSampleRate || 24000);
@@ -442,38 +458,57 @@ window.__ModuleLoader__.load({
       for (let i = 0; i < frames; i++) data[i] = int16[i] / 32768;
       return buf;
     }
-    /** 取一段音频并解码入队：pcm 裸采样直接建 AudioBuffer；mp3/wav 容器段走 decodeAudioData
-     * （wav 是本地引擎整段兜底段的格式——按裸 PCM 解码会出静音/杂音）。 */
-    function enqueueSegment(url, format) {
-      if (!gapless) return;
-      gapless.inflight++;
+    /** 取一段音频并按序入队：pcm 裸采样直接建 AudioBuffer；mp3/wav 容器段走 decodeAudioData
+     * （wav 是本地引擎整段兜底段的格式——按裸 PCM 解码会出静音/杂音）。
+     * 回调绑定发起时的播放轮次（g）：停止后立刻重播时，上一轮在飞的段不会漏进新一轮；
+     * 解码结果按请求顺序放行（ready → queue），两个请求完成顺序颠倒也不会跳段。 */
+    function enqueueSegment(url, format, seq) {
+      var g = gapless;
+      if (!g) return;
+      g.inflight++;
       fetch(url)
         .then(function (r) { if (!r.ok) throw new Error("fetch " + r.status); return r.arrayBuffer(); })
         .then(function (buf) {
-          if (format === "mp3" || format === "wav") return audioCtx.decodeAudioData(buf);
+          if (format === "mp3" || format === "wav") return g.ctx.decodeAudioData(buf);
           return buildAudioBufferFromPcm(buf, streamSampleRate);
         })
         .then(function (buffer) {
-          if (!gapless) return;
-          gapless.inflight--;
+          if (gapless !== g) return; // 已换轮次：丢弃，不动新一轮的计数
+          g.inflight--;
           streamFetched++;
-          diag("seg-decoded", { n: streamFetched, seconds: Number((buffer.duration || 0).toFixed(2)), ctx: audioCtx ? audioCtx.state : "none" });
-          gapless.queue.push(buffer);
+          g.ready.set(seq, buffer);
+          drainReady(g);
+          diag("seg-decoded", {
+            n: streamFetched, seq: seq,
+            seconds: Number((buffer.duration || 0).toFixed(2)),
+            ahead: Number((g.scheduledEnd - g.ctx.currentTime).toFixed(2)),
+            ctx: g.ctx.state,
+          });
           pumpQueue();
         })
         .catch(function (e) {
-          if (gapless) gapless.inflight--;
+          if (gapless === g) g.inflight--;
           console.warn("[voice] segment decode failed:", e && e.message || e);
-          diag("seg-decode-fail", { msg: String(e && e.message || e).slice(0, 120), format: format });
+          diag("seg-decode-fail", { msg: String(e && e.message || e).slice(0, 120), format: format, seq: seq });
           failStream("stream segment decode failed");
         });
     }
-    /** Web Audio lookahead 调度：把队列里的缓冲按上一个结束时刻无缝接上。 */
+    /** 按序号把已解码的段放行到队列：缺号就等，保证播放顺序 = 请求顺序。 */
+    function drainReady(g) {
+      while (g.ready.has(g.playSeq)) {
+        g.queue.push(g.ready.get(g.playSeq));
+        g.ready.delete(g.playSeq);
+        g.playSeq++;
+      }
+    }
+    /** Web Audio lookahead 调度：只排未来 LOOKAHEAD_SEC 秒内的缓冲，其余留在队列，
+     *  由 300ms 轮询与 onended 继续补；段与段按上一个结束时刻无缝接上。 */
     function pumpQueue() {
       if (!gapless || !gapless.queue.length) return;
       const ctx = gapless.ctx;
+      const limit = ctx.currentTime + LOOKAHEAD_SEC;
       let t = Math.max(ctx.currentTime + 0.03, gapless.scheduledEnd);
-      while (gapless.queue.length) {
+      while (gapless.queue.length && t < limit) {
         const buf = gapless.queue.shift();
         const src = ctx.createBufferSource();
         src.buffer = buf;
@@ -486,15 +521,15 @@ window.__ModuleLoader__.load({
           const idx = gapless.sources.indexOf(src);
           if (idx >= 0) gapless.sources.splice(idx, 1);
           checkStreamEnd();
+          pumpQueue(); // 腾出位置，补下一段
         };
         t += buf.duration;
         gapless.scheduledEnd = t;
       }
-      pollStreamOnce(); // 队列空了，继续取段（填充 ≤3 预取）
     }
     function checkStreamEnd() {
       if (!gapless) return;
-      if (gapless.fetchDone && !gapless.inflight && !gapless.queue.length && !gapless.sources.length) {
+      if (gapless.fetchDone && !gapless.inflight && !gapless.queue.length && !gapless.ready.size && !gapless.sources.length) {
         endStreamNormally();
       }
     }
