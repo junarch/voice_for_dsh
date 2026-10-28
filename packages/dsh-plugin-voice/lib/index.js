@@ -513,7 +513,7 @@ function apply(ctx, config) {
 
   /** 保存后核对：从 profile patch 读回 voice 条目，比对"用户最怕丢"的几个字段。
    *  true=文件里已一致；false=对不上（没落盘）；null=拿不到核对入口（测试/旧宿主）。 */
-  const PERSIST_CHECK_PATHS = ['autoSpeak', 'language', 'tts.provider', 'tts.local.sid', 'tts.local.speed', 'tts.local.numThreads']
+  const PERSIST_CHECK_PATHS = ['autoSpeak', 'language', 'tts.provider', 'tts.volcengine.speaker', 'tts.local.sid', 'tts.local.speed', 'tts.local.numThreads']
   function pickPath(obj, path) {
     let cur = obj
     for (const key of path.split('.')) {

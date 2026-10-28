@@ -139,10 +139,12 @@ window.__ModuleLoader__.load({
       "hint.chime": "任何会话在跑（含子代理）就循环工作音；你等的那一轮结束响一次完成音；DSH 弹出提问等你回答响一次提问音。与朗读互不影响。",
       "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
       "chime.source.custom": "自定义（上传音频）",
-      "chime.variant.work.a": "木鱼", "chime.variant.work.b": "轻叩", "chime.variant.work.c": "沙锤",
+      "chime.variant.work.a": "木鱼", "chime.variant.work.b": "轻叩", "chime.variant.work.c": "仪表盘",
       "chime.variant.done.a": "清铃", "chime.variant.done.b": "木琴", "chime.variant.done.c": "余韵",
       "chime.variant.ask.a": "轻问", "chime.variant.ask.b": "上扬", "chime.variant.ask.c": "回声",
       "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
+      "chime.loopHint": " 上传的素材会自动循环；短于 2 秒的素材按每 2 秒重放一次（不是无缝拼接）",
+      "speaker.empty": "音色不能为空：填一个音色 ID 再离开输入框",
       "chime.uploadFail": "❌ 上传失败：", "chime.uploadFailUnknown": "未知错误",
       "chime.tooLarge": "文件超过 10MB，换个小一点的",
       "chime.tooLong": "音频超过 60 秒（{seconds} 秒），换短一点的",
@@ -274,10 +276,12 @@ window.__ModuleLoader__.load({
       "hint.chime": "Loop a work sound while any session runs (subagents included); a done sound when the turn you are waiting on finishes; an ask sound when DSH is waiting on your answer. Independent of readout.",
       "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
       "chime.source.custom": "Custom (upload audio)",
-      "chime.variant.work.a": "Woodfish", "chime.variant.work.b": "Soft tap", "chime.variant.work.c": "Shaker",
+      "chime.variant.work.a": "Woodfish", "chime.variant.work.b": "Soft tap", "chime.variant.work.c": "Dashboard",
       "chime.variant.done.a": "Bright bell", "chime.variant.done.b": "Woodblock", "chime.variant.done.c": "Resonance",
       "chime.variant.ask.a": "Soft ask", "chime.variant.ask.b": "Rising", "chime.variant.ask.c": "Echo",
       "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
+      "chime.loopHint": " Uploaded audio loops automatically; clips shorter than 2s are replayed every 2s (not gapless)",
+      "speaker.empty": "Voice id cannot be empty — enter one before leaving the field",
       "chime.uploadFail": "❌ Upload failed: ", "chime.uploadFailUnknown": "Unknown error",
       "chime.tooLarge": "File is over 10MB - pick a smaller one",
       "chime.tooLong": "Audio is over 60 seconds ({seconds}s) - pick a shorter one",
@@ -1149,7 +1153,20 @@ window.__ModuleLoader__.load({
         // 不做旋律、不做长音（循环久了会被记住、会烦）。
         { id: "a", total: 2.4, notes: [{ f: 760, t: 0, d: 0.14, g: 0.5, p: [[1, 1], [2.7, 0.22], [5.3, 0.1]] }, { f: 760, t: 1.2, d: 0.14, g: 0.4, p: [[1, 1], [2.7, 0.22]] }] },
         { id: "b", total: 2.4, notes: [{ f: 520, t: 0, d: 0.2, g: 0.45, p: [[1, 1], [2.2, 0.28]] }, { f: 520, t: 1.2, d: 0.16, g: 0.12, p: [[1, 1], [2.2, 0.2]] }] },
-        { id: "c", total: 2.4, notes: [{ f: 900, t: 0, d: 0.12, g: 0.3, noise: 0.5, p: [[1, 0.15]] }, { f: 900, t: 1.2, d: 0.1, g: 0.22, noise: 0.45, p: [[1, 0.15]] }] },
+        { id: "c", total: 3.2, notes: [
+          { f: 1568, t: 0.00, d: 0.10, g: 0.42, p: [[1, 1], [2.4, 0.2]] },
+          { f: 2093, t: 0.18, d: 0.08, g: 0.34 },
+          { f: 1319, t: 0.42, d: 0.10, g: 0.40, p: [[1, 1], [3, 0.15]] },
+          { f: 2637, t: 0.60, d: 0.07, g: 0.28, noise: 0.18 },
+          { f: 1760, t: 0.88, d: 0.09, g: 0.36 },
+          { f: 2349, t: 1.05, d: 0.08, g: 0.30 },
+          { f: 1397, t: 1.32, d: 0.12, g: 0.40, p: [[1, 1], [2.7, 0.2]] },
+          { f: 1976, t: 1.55, d: 0.09, g: 0.32, noise: 0.12 },
+          { f: 1568, t: 1.80, d: 0.10, g: 0.38 },
+          { f: 2637, t: 2.02, d: 0.08, g: 0.26 },
+          { f: 1760, t: 2.30, d: 0.11, g: 0.34, p: [[1, 1], [2.2, 0.2]] },
+          { f: 2093, t: 2.55, d: 0.09, g: 0.30 },
+        ] },
       ],
       done: [
         { id: "a", total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
@@ -1499,8 +1516,10 @@ window.__ModuleLoader__.load({
         startChimePoll();
         // 音源换了：正在 loop 的工作音不会自己换（loop 节点常驻），必须重起一次。
         // 旧的那一声立刻停掉——它是环境声，没有"等这一遍放完"的自然切口。
+        // 注意要连"短素材两响之间"的定时器一起清：那一刻 nodes 是空的，但 timer 还在，
+        // 不清就会一直按 2 秒节拍掐断新素材。
         var sourceChanged = prevSig !== null && prevSig !== chimeSig;
-        if (sourceChanged && chimeNodes.work) {
+        if (sourceChanged && (chimeNodes.work || chimeWorkTimer || chimeWorkPending)) {
           stopChime("work");
           stopWorkTimer();
           chimeWorkPending = false;
@@ -1969,7 +1988,8 @@ window.__ModuleLoader__.load({
           }) : null,
           row.enabled ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview }, t("chime.preview")) : null),
         row.enabled && row.source === "custom"
-          ? React.createElement("p", { className: "dsh-voice-chime-file" }, file || t("chime.noFile"))
+          ? React.createElement("p", { className: "dsh-voice-chime-file" }, file || t("chime.noFile"),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("chime.loopHint")))
           : null,
         missing ? React.createElement("p", { className: "dsh-voice-chime-warn" }, t("chime.missing")) : null,
         msg ? React.createElement("p", { className: "dsh-voice-msg" }, msg) : null);
@@ -2291,23 +2311,22 @@ window.__ModuleLoader__.load({
             return !langs || langs.indexOf(cfg.language) >= 0;
           })
         : voices;
-      /** 语种变了：提交用户选择（能出现在下拉里就是合法组合）。 */
+      /** 语种变了：提交用户选择（能出现在下拉里就是合法组合）。
+       *  必须走 setField —— 只 setCfg 的话界面变了、磁盘没写，重启就回旧值（豆包这两行踩过）。 */
       function onLanguageChange(v) {
-        const next = JSON.parse(JSON.stringify(cfg));
-        next.language = v;
-        setCfg(next);
-        setMsg("");
+        setField("language", v);
       }
-      /** 音色变了：若当前语种这个音色说不了（如从中文音色换到英文音色），落到它支持的第一项。 */
+      /** 音色变了：若当前语种这个音色说不了（如从中文音色换到英文音色），落到它支持的第一项。
+       *  联动改掉的语种必须和音色**同一次**提交（拆两次会被旧草稿盖掉第一条）；
+       *  空音色只留草稿、不落盘（写进去等于让合成发空 speaker）。 */
       function onSpeakerChange(sp) {
-        const next = JSON.parse(JSON.stringify(cfg));
-        next.tts.volcengine.speaker = sp;
+        if (!sp) { setMsg(t("speaker.empty")); return; }
+        const entries = [["tts.volcengine.speaker", sp]];
         const allowed = languagesOfVoice(voices, sp);
-        if (allowed && allowed.length && allowed.indexOf(next.language) < 0) {
-          next.language = allowed.indexOf("zh") >= 0 ? "zh" : allowed[0];
+        if (allowed && allowed.length && allowed.indexOf(cfg.language) < 0) {
+          entries.push(["language", allowed.indexOf("zh") >= 0 ? "zh" : allowed[0]]);
         }
-        setCfg(next);
-        setMsg("");
+        setFields(entries);
       }
       /** 播报引擎三选一（引擎总开关）：browser=免费系统 TTS；volcengine=豆包（付费 API Key 生效）；
        * local=本地 Kokoro 中英（免费，进程内合成）。切到豆包时 autoSpeakCloudTts 同步写入 true

@@ -451,6 +451,14 @@ check('核对：文件里的值对不上 → persisted:false（不假装成功�
 editorState.override = { tts: { provider: 'local' } }
 const saveNoKey = await rpc('setConfig', { patch: { tts: { provider: 'local', local: { numThreads: 8 } } } })
 check('核对：文件里缺这个键（等于继承默认）不算失败', saveNoKey.ok === true && saveNoKey.persisted === undefined, saveNoKey.persisted)
+// 音色必须在核对清单里：它是豆包最常改的字段，写盘失败不能显示"已保存"
+editorState.override = { tts: { volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } }
+const saveSpeakerBad = await rpc('setConfig', { patch: { tts: { volcengine: { speaker: 'en_female_dacey_uranus_bigtts' } } } })
+check('核对：音色没写进文件 → persisted:false', saveSpeakerBad.ok === true && saveSpeakerBad.persisted === false, saveSpeakerBad.persisted)
+editorState.override = { tts: { volcengine: { speaker: 'en_female_dacey_uranus_bigtts' } } }
+const saveSpeakerOk = await rpc('setConfig', { patch: { tts: { volcengine: { speaker: 'en_female_dacey_uranus_bigtts' } } } })
+check('核对：音色写进文件 → 不报未落盘', saveSpeakerOk.ok === true && saveSpeakerOk.persisted === undefined, saveSpeakerOk.persisted)
+await rpc('setConfig', { patch: { tts: { volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } } })
 editorState.disable = true
 const saveNoEditor = await rpc('setConfig', { patch: { tts: { provider: 'local' } } })
 check('核对：拿不到核对入口时如实降级（不误报）', saveNoEditor.ok === true && saveNoEditor.persisted === undefined, saveNoEditor.persisted)

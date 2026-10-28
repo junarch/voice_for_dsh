@@ -172,7 +172,11 @@ globalThis.fetch = async (url, init) => {
       ok: true,
       pluginVersion: '9.9.9',
       dshCompat: '0.2.1-rc.3',
-      voices: [{ id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', languages: ['zh', 'en', 'auto', 'yue'] }],
+      voices: [
+        { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', languages: ['zh', 'en', 'auto', 'yue'] },
+        // 英文音色：驱动"换音色会联动改语种"的分支（否则这段代码永远测不到）
+        { id: 'en_female_dacey_uranus_bigtts', name: 'Dacey (EN)', languages: ['en', 'auto'] },
+      ],
       kokoroVoices: [{ id: 48, name: 'Kokoro 48' }],
       languages: [{ id: 'zh', label: '普通话' }, { id: 'en', label: 'English' }, { id: 'auto', label: '自动' }, { id: 'yue', label: '粤语', dialect: true, dialectId: 'yue' }],
       stylePresets: [{ id: 'standard', name: '标准', tone: '' }, { id: 'companion', name: '陪伴', tone: '\n语气：温柔。' }],
@@ -387,6 +391,45 @@ tree = await flush()
 tree = await expand(tree, '转写')
 check('本地：不显示「风格预设」', !allText(tree).includes('风格预设'))
 check('本地：提示词标题为「本地提示词」', allText(tree).includes('本地提示词'))
+
+// 8) 豆包音色/语种必须落盘（回归：这两行曾经只改草稿、不写盘 → 重启回旧值）
+tree = await mount(CaseBrowser)
+engineSelect(tree).props.onChange({ target: { value: 'volcengine' } })
+tree = await flush()
+tree = await expand(tree, '当前引擎声音设置')
+saveCalls = []
+// 先把语种拨回中文，才能验证"换英文音色 → 语种被联动成 en 且与音色同一次提交"
+{
+  const zhSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'zh'))
+  zhSelect.props.onChange({ target: { value: 'zh' } })
+  await new Promise((r) => setTimeout(r, 450))
+  tree = await flush()
+  saveCalls = []
+}
+const speakerSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'en_female_dacey_uranus_bigtts'))
+check('豆包：音色下拉里有英文音色', !!speakerSelect, allText(tree).slice(-400))
+speakerSelect.props.onChange({ target: { value: 'en_female_dacey_uranus_bigtts' } })
+await new Promise((r) => setTimeout(r, 450))
+tree = await flush()
+{
+  const call = saveCalls[saveCalls.length - 1]
+  check('改音色 → 立刻落盘 speaker', !!call && call.tts && call.tts.volcengine && call.tts.volcengine.speaker === 'en_female_dacey_uranus_bigtts', call)
+  check('换英文音色 → 语种在同一次提交里被联动成 en（不是两次写）',
+    !!call && call.language === 'en' && saveCalls.length === 1, saveCalls)
+  check('该次提交不含未改动字段（无 transcribe/chime）', !!call && !('transcribe' in call) && !('chime' in call), call && Object.keys(call))
+}
+saveCalls = []
+{
+  const langSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'auto'))
+  langSelect.props.onChange({ target: { value: 'auto' } })
+  await new Promise((r) => setTimeout(r, 450))
+  tree = await flush()
+  check('改语种/方言 → 落盘 language', saveCalls.some((p) => p.language === 'auto'), saveCalls)
+}
+// 重挂载（等价于重新打开设置页）后仍是新值：不动 config，只重建组件树
+tree = await (async () => { rootEl = reactStub.createElement(CaseBrowser); return await flush() })()
+check('重开后音色仍是 Dacey（没有回退）',
+  config.tts.volcengine.speaker === 'en_female_dacey_uranus_bigtts', config.tts.volcengine.speaker)
 
 const failed = checks.filter((c) => !c.ok)
 console.log('\n结果: ' + (checks.length - failed.length) + ' passed, ' + failed.length + ' failed')
