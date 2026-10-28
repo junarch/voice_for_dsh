@@ -145,24 +145,20 @@ const VOLC_VOICES = [
   { id: 'en_female_stokie_uranus_bigtts', name: 'Stokie（英·女）' },
 ]
 
-/** 本地 Kokoro v1.1 精选音色（设置页下拉 + 「手填 sid」兜底）。
+/** 本地 Kokoro v1.1 全量音色表（官方 sid→name 表，sherpa 模型页给出的 103 个）。
  *
- * 模型只暴露数字 sid（0–102），上游没有随包发名字表，所以这里不写"谁是谁"，
- * 只写能复现的三种事实：① sid ② 语种/性别归属（按枚举实测的基频分段：
- * 0–2 = 英文，3–57 女声，58–102 男声）③ 同一句中文实测的基频高低（高/中/低）。
- * 名字里的"高/中/低"就是这个基频档，不代表音质好坏；想换音色直接手填 sid 逐个试。
- * 英文三个音色对应上游 hexgrad/Kokoro-82M-v1.1-zh 的 Maple（美·女）、Sol（美·女）、
- * Vale（英·女，年长），顺序即 voices.bin 的 0/1/2。 */
+ * 前缀即语种与性别：af=美式女（sid 0–1）、bf=英式女（sid 2）、zf=中文女（3–57）、zm=中文男（58–102）。
+ * **英文只有这三个女声，没有英文男声**（上游 hexgrad/Kokoro-82M-v1.1-zh 就这么定的）。
+ * 官方试听：https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html
+ */
+const LOCAL_ZH_FEMALE = ['zf_001', 'zf_002', 'zf_003', 'zf_004', 'zf_005', 'zf_006', 'zf_007', 'zf_008', 'zf_017', 'zf_018', 'zf_019', 'zf_021', 'zf_022', 'zf_023', 'zf_024', 'zf_026', 'zf_027', 'zf_028', 'zf_032', 'zf_036', 'zf_038', 'zf_039', 'zf_040', 'zf_042', 'zf_043', 'zf_044', 'zf_046', 'zf_047', 'zf_048', 'zf_049', 'zf_051', 'zf_059', 'zf_060', 'zf_067', 'zf_070', 'zf_071', 'zf_072', 'zf_073', 'zf_074', 'zf_075', 'zf_076', 'zf_077', 'zf_078', 'zf_079', 'zf_083', 'zf_084', 'zf_085', 'zf_086', 'zf_087', 'zf_088', 'zf_090', 'zf_092', 'zf_093', 'zf_094', 'zf_099']
+const LOCAL_ZH_MALE = ['zm_009', 'zm_010', 'zm_011', 'zm_012', 'zm_013', 'zm_014', 'zm_015', 'zm_016', 'zm_020', 'zm_025', 'zm_029', 'zm_030', 'zm_031', 'zm_033', 'zm_034', 'zm_035', 'zm_037', 'zm_041', 'zm_045', 'zm_050', 'zm_052', 'zm_053', 'zm_054', 'zm_055', 'zm_056', 'zm_057', 'zm_058', 'zm_061', 'zm_062', 'zm_063', 'zm_064', 'zm_065', 'zm_066', 'zm_068', 'zm_069', 'zm_080', 'zm_081', 'zm_082', 'zm_089', 'zm_091', 'zm_095', 'zm_096', 'zm_097', 'zm_098', 'zm_100']
 const LOCAL_VOICES = [
-  { id: '48', name: '中文女声 · 中高（sid 48）', lang: 'zh' }, // 实测基频 ~261Hz
-  { id: '40', name: '中文女声 · 高（sid 40）', lang: 'zh' },   // ~289Hz
-  { id: '14', name: '中文女声 · 中（sid 14）', lang: 'zh' },   // ~233Hz
-  { id: '8', name: '中文女声 · 低（sid 8）', lang: 'zh' },     // ~173Hz
-  { id: '66', name: '中文男声 · 高（sid 66）', lang: 'zh' },   // ~202Hz
-  { id: '75', name: '中文男声 · 中（sid 75）', lang: 'zh' },   // ~186Hz
-  { id: '81', name: '中文男声 · 低（sid 81）', lang: 'zh' },   // ~102Hz
-  { id: '0', name: '英文女声 · Maple（sid 0）', lang: 'en' },
-  { id: '2', name: '英文女声 · Vale（sid 2）', lang: 'en' },
+  { id: '0', name: '英文女声 · af_maple（美式）', lang: 'en', gender: 'female' },
+  { id: '1', name: '英文女声 · af_sol（美式）', lang: 'en', gender: 'female' },
+  { id: '2', name: '英文女声 · bf_vale（英式）', lang: 'en', gender: 'female' },
+  ...LOCAL_ZH_FEMALE.map((name, i) => ({ id: String(3 + i), name: '中文女声 · ' + name, lang: 'zh', gender: 'female' })),
+  ...LOCAL_ZH_MALE.map((name, i) => ({ id: String(58 + i), name: '中文男声 · ' + name, lang: 'zh', gender: 'male' })),
 ]
 /** 按 sid 查本地音色（含中/英归属，供试听选样例）；自定义 sid 返回 null。 */
 function localVoiceOf(sid) {

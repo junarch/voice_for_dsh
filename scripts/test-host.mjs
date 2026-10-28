@@ -1240,7 +1240,7 @@ function fakeEngine(config) {
     sampleRate: engineState.sampleRate,
     generateAsync({ text, generationConfig, onProgress }) {
       const callNo = engineState.calls.length + 1
-      engineState.calls.push({ text, sid: generationConfig && generationConfig.sid, speed: generationConfig && generationConfig.speed })
+      engineState.calls.push({ text, sid: generationConfig && generationConfig.sid, speed: generationConfig && generationConfig.speed, silenceScale: generationConfig && generationConfig.silenceScale })
       if (engineState.failFromCall && callNo >= engineState.failFromCall) return Promise.reject(new Error('mock synth boom'))
       if (engineState.failOnlyCall && callNo === engineState.failOnlyCall) return Promise.reject(new Error('mock synth boom'))
       if (engineState.hangFromCall && callNo >= engineState.hangFromCall) return new Promise(() => {})
@@ -1273,6 +1273,17 @@ check('meta 不再有 cosyvoiceVoices（CosyVoice 已退役）', meta20.cosyvoic
 check('meta 带插件版本与适配的 DSH 版本（设置页标题下方展示）',
   /^\d+\.\d+\.\d+/.test(String(meta20.pluginVersion || '')) && /^\d+\.\d+\.\d+/.test(String(meta20.dshCompat || '')),
   { pluginVersion: meta20.pluginVersion, dshCompat: meta20.dshCompat })
+check('meta 音色表是官方全量 103 个（英文 3 + 中文女 55 + 中文男 45）',
+  meta20.kokoroVoices.length === 103
+  && meta20.kokoroVoices.filter((v) => v.lang === 'en').length === 3
+  && meta20.kokoroVoices.filter((v) => v.lang === 'zh' && v.gender === 'female').length === 55
+  && meta20.kokoroVoices.filter((v) => v.lang === 'zh' && v.gender === 'male').length === 45,
+  meta20.kokoroVoices.length)
+check('meta 音色名与 sid 对得上（3=zf_001 / 58=zm_009 / 0=af_maple）',
+  (meta20.kokoroVoices.find((v) => v.id === '3') || {}).name === '中文女声 · zf_001'
+  && (meta20.kokoroVoices.find((v) => v.id === '58') || {}).name === '中文男声 · zm_009'
+  && (meta20.kokoroVoices.find((v) => v.id === '0') || {}).name === '英文女声 · af_maple（美式）',
+  meta20.kokoroVoices.slice(0, 3).map((v) => v.name))
 
 // —— Float32 → Int16 纯函数（客户端只认 16bit 小端裸 PCM）——
 const conv = float32ToInt16Pcm(new Float32Array([0, 1, -1, 0.5, -0.5, 1.5, -2]))
@@ -1303,6 +1314,7 @@ check('转写稿保持原文语言（中文不被改成英文）', r20.transcrip
 check('零情感指令 LLM 调用（本地引擎没有 context_texts 通道）', llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length === instrCount20)
 check('LLM 只调 1 次（转写；重播零新增由 T3/T18 保证）', llmState.calls.length === calls20 + 1, llmState.calls.length - calls20)
 check('进程内合成被调用一次，带 sid/speed', engineState.calls.length === 1 && engineState.calls[0].sid === 48 && engineState.calls[0].speed === 1, engineState.calls)
+check('合成带 silenceScale=0.1（句间静音 440ms→约 220ms）', engineState.calls[0].silenceScale === 0.1, engineState.calls[0].silenceScale)
 // 默认 pauseStyle=tight 会去掉中文句读，所以比较时忽略标点（内容与顺序必须一致）
 check('送合成的是转写稿本身（中文，未经英文改写）',
   String(engineState.calls[0].text).replace(/[，。、；：！？]/g, '') === '本地中文转写稿保持中文', engineState.calls[0].text)
@@ -1365,7 +1377,7 @@ const pvDraft = await rpc('preview', { cfg: draftCfg })
 check('试听按草稿音色（sid 75）与草稿语速（1.25）合成',
   engineState.calls.length === 1 && engineState.calls[0].sid === 75 && engineState.calls[0].speed === 1.25,
   engineState.calls[0])
-check('试听标签给当前音色名（本地给音色，不给语种）', pvDraft.voiceLabel === '中文男声 · 中（sid 75）', pvDraft.voiceLabel)
+check('试听标签给当前音色名（本地给音色，不给语种）', pvDraft.voiceLabel === '中文男声 · zm_041', pvDraft.voiceLabel)
 check('试听不落盘：保存值仍是 48', (await rpc('getConfig')).config.tts.local.sid === 48)
 
 // 不传草稿（老 Client / 内部调用）：回落保存值

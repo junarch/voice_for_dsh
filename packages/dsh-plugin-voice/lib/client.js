@@ -72,7 +72,11 @@ window.__ModuleLoader__.load({
       "settings.retrySave": "重试保存",
       "row.localNumThreads": "合成线程数",
       "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
-      "local.sidHint": " 模型只有数字音色编号（0–102），没有官方名字；下拉是精选几档，想换音色直接手填 sid 试听",
+      "local.sidHint": " 共 103 个音色：sid 就是模型 voices.bin 的行号。英文只有 3 个女声（没有英文男声），中文女 55 个、中文男 45 个。",
+      "local.voiceGroup.en": "英文女声（sid 0–2，3 个）",
+      "local.voiceGroup.zhf": "中文女声（sid 3–57，55 个）",
+      "local.voiceGroup.zhm": "中文男声（sid 58–102，45 个）",
+      "local.audition": "官方试听页",
       "local.customSid": "手填 sid（0–102）",
       "local.numThreadsHint": " 多线程更吃 CPU；线程多首声更快，默认 4；改完要重启应用才生效",
       "local.streaming": "分句流式播报",
@@ -199,7 +203,11 @@ window.__ModuleLoader__.load({
       "settings.retrySave": "Retry save",
       "row.localNumThreads": "Synthesis threads",
       "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
-      "local.sidHint": " The model only exposes numeric voice ids (0-102) with no official names; the dropdown lists a few picks, type any sid to audition more",
+      "local.sidHint": " 103 voices in total: the sid is the row index in the model's voices.bin. English has only 3 female voices (no English male); Chinese has 55 female and 45 male.",
+      "local.voiceGroup.en": "English female (sid 0–2, 3)",
+      "local.voiceGroup.zhf": "Chinese female (sid 3–57, 55)",
+      "local.voiceGroup.zhm": "Chinese male (sid 58–102, 45)",
+      "local.audition": "Official audition page",
       "local.customSid": "Custom sid (0-102)",
       "local.numThreadsHint": " More threads use more CPU and start speaking sooner. Default 4; a new value applies after the app restarts",
       "local.streaming": "Segmented streaming",
@@ -319,12 +327,14 @@ window.__ModuleLoader__.load({
         { id: "playful", name: "俏皮", prompt: "" },
       ],
       rateStops: ["很慢", "稍慢", "正常", "稍快", "很快"],
+      // 只在 Host meta 取不到时兜底（裂脑/旧 Host）；正常路径用 meta.kokoroVoices 的全量表。
       kokoroVoices: [
-        { id: "48", name: "中文女声 · 中高（sid 48）" }, { id: "40", name: "中文女声 · 高（sid 40）" },
-        { id: "14", name: "中文女声 · 中（sid 14）" }, { id: "8", name: "中文女声 · 低（sid 8）" },
-        { id: "66", name: "中文男声 · 高（sid 66）" }, { id: "75", name: "中文男声 · 中（sid 75）" },
-        { id: "81", name: "中文男声 · 低（sid 81）" }, { id: "0", name: "英文女声 · Maple（sid 0）" },
-        { id: "2", name: "英文女声 · Vale（sid 2）" },
+        { id: "0", name: "英文女声 · af_maple（美式）", lang: "en", gender: "female" },
+        { id: "1", name: "英文女声 · af_sol（美式）", lang: "en", gender: "female" },
+        { id: "2", name: "英文女声 · bf_vale（英式）", lang: "en", gender: "female" },
+        { id: "48", name: "中文女声 · zf_084", lang: "zh", gender: "female" },
+        { id: "66", name: "中文男声 · zm_020", lang: "zh", gender: "male" },
+        { id: "75", name: "中文男声 · zm_041", lang: "zh", gender: "male" },
       ],
     };
 
@@ -2131,6 +2141,15 @@ window.__ModuleLoader__.load({
       const languages = m.languages || [];
       const voices = m.voices || [];
       const kokoroVoices = m.kokoroVoices || [];
+      // 本地音色分组（Host 下发 lang/gender）：老 Host 没有这两个字段时退回一组"全部"
+      const kokoroGroups = (() => {
+        const groups = [
+          { key: "en", label: t("local.voiceGroup.en"), items: kokoroVoices.filter((v) => v.lang === "en") },
+          { key: "zhf", label: t("local.voiceGroup.zhf"), items: kokoroVoices.filter((v) => v.lang === "zh" && v.gender === "female") },
+          { key: "zhm", label: t("local.voiceGroup.zhm"), items: kokoroVoices.filter((v) => v.lang === "zh" && v.gender === "male") },
+        ].filter((g) => g.items.length);
+        return groups.length ? groups : [{ key: "all", label: t("row.localVoice"), items: kokoroVoices }];
+      })();
       const speakerKnown = voices.some((v) => v.id === cfg.tts.volcengine.speaker);
       // local 子配置（旧 Host/缓存无该对象时补默认，避免 UI 读空崩溃）
       if (!cfg.tts.local) cfg.tts.local = { sid: 48, speed: 1, numThreads: 4, modelDir: "", timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 };
@@ -2324,14 +2343,17 @@ window.__ModuleLoader__.load({
                   value: kokoroVoiceKnown ? String(cfg.tts.local.sid) : VOICE_CUSTOM,
                   onChange: (v) => { if (v !== VOICE_CUSTOM) setField("tts.local.sid", Number(v)); },
                 },
-                  kokoroVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+                  // 按语种/性别分组（103 个：英文女 3 / 中文女 55 / 中文男 45），标签带官方音色名与 sid
+                  kokoroGroups.map((g) => React.createElement("optgroup", { key: g.key, label: g.label },
+                    g.items.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)))),
                   React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
                 (kokoroVoiceKnown ? null : React.createElement(TextInput, {
                   value: String(cfg.tts.local.sid),
                   onChange: (v) => { const n = Number(v); if (Number.isInteger(n) && n >= 0) setField("tts.local.sid", n); },
                   placeholder: t("local.customSid"),
                 })),
-                React.createElement("span", { className: "dsh-voice-dim" }, t("local.sidHint"))),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("local.sidHint"), " ",
+                  React.createElement("a", { href: "https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html", target: "_blank", rel: "noreferrer" }, t("local.audition")))),
               React.createElement(Row, { label: t("row.localSpeed") },
                 React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
               // 本地模型没有"语种参数"：它按文稿语言发音，所以这里控制的是"让转写稿写成哪种语言"

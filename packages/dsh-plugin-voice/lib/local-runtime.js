@@ -27,6 +27,12 @@ import { fileURLToPath } from 'node:url'
 export const MODEL_DIR_NAME = 'kokoro-multi-lang-v1_1'
 /** Kokoro 输出固定 24kHz 单声道 Float32（客户端只认 16bit 小端裸 PCM，由本层转）。 */
 export const LOCAL_SAMPLE_RATE = 24000
+
+/** 句间静音系数：Kokoro 的 sherpa 实现按标点切句、在句间插 `silenceScale × 2200ms` 的静音。
+ *  默认 0.2（≈440ms）——中文每个逗号都停这么久，听起来就是"一顿一顿"。
+ *  0.1 ≈ 220ms（中文）/ 150ms（英文），实测更接近正常语速的呼吸间隔。
+ *  它是 generationConfig 参数、逐次请求生效，不需要重载引擎。实测表见 docs/pipeline.md §4.3。 */
+const SILENCE_SCALE = 0.1
 /** 可选的模型文件名（fp32 优先；int8 兼容老包）。 */
 const MODEL_FILE_NAMES = ['model.onnx', 'model.int8.onnx']
 /** 规则文件（中文日期/数字/电话号码的正则化；缺失不致命，只是数字读法退化为逐字）。 */
@@ -390,7 +396,7 @@ export function createLocalRuntime(options = {}) {
     }
     const run = tts.generateAsync({
       text: input,
-      generationConfig: { sid: v.sid, speed: v.speed },
+      generationConfig: { sid: v.sid, speed: v.speed, silenceScale: SILENCE_SCALE },
       onProgress: push,
     })
     let finished = false
