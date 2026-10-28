@@ -41,9 +41,16 @@ jobs:
       - name: Run client contract test
         run: node scripts/test-client.mjs
 
+      # 提示音：headless 渲染（五层设置页的渐进显隐）与播放调度（循环/去重/叠放）
+      - name: Run chime UI test
+        run: node scripts/test-chime-ui.mjs
+
+      - name: Run chime playback test
+        run: node scripts/test-chime-playback.mjs
+
       # 手写纯 JS 无构建步骤：Client/Host 半至少做语法级冒烟，抓低级拼写/括号错误
       - name: Syntax-check hand-written lib
-        run: node --check packages/dsh-plugin-voice/lib/index.js && node --check packages/dsh-plugin-voice/lib/client.js && node --check packages/dsh-plugin-voice/lib/speech-clean.js && node --check packages/dsh-plugin-voice/lib/voice-compat.js && node --check packages/dsh-plugin-voice/lib/volcengine-ws.js
+        run: node --check packages/dsh-plugin-voice/lib/index.js && node --check packages/dsh-plugin-voice/lib/client.js && node --check packages/dsh-plugin-voice/lib/speech-clean.js && node --check packages/dsh-plugin-voice/lib/voice-compat.js && node --check packages/dsh-plugin-voice/lib/volcengine-ws.js && node --check packages/dsh-plugin-voice/lib/local-runtime.js && node --check packages/dsh-plugin-voice/lib/model-installer.js && node --check packages/dsh-plugin-voice/lib/model-manifest.js
 
       # 静态安全守护：Client 半禁止危险 HTML 注入 API（防 XSS 回归）
       - name: Forbid unsafe HTML APIs in client half

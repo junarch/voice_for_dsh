@@ -44,6 +44,13 @@ cache_config 初次/重播下发而 regen/换音色重播不下发等。
 并驱动 turnTail 徽标的 claim 逻辑（本轮没有可朗读消息 / 该消息没读过 → 必须返回 null 不占位）、
 会话 Definition 注册与 zh/en i18n 键对齐。每次改完 Client 半必跑。
 
+### 第 1.6 层：零成本——提示音渲染与调度 `scripts/test-chime-ui.mjs` / `scripts/test-chime-playback.mjs`
+不启浏览器，用极小的 React 替身把真实的设置页组件渲染成树，断言五层的渐进显隐：
+总开关关着时三行不出现、关某行时它的音源与上传不渲染、层头是 `button` 且 `aria-expanded` 正确。
+播放侧用假 `AudioContext` 记账，断言：多个会话同时跑只起一份工作音、结束与提问两种音都能响且工作音不停、
+审批与子代理不触发、同 key 去重、连续结束只响一次、短素材改按间隔播、缺素材回落到默认音。
+改设置页或提示音必跑这两个。
+
 ### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
 一键自检（推荐先跑这个，逐条打印证据、退出码 0/1）：
 ```powershell
