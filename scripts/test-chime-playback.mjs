@@ -109,6 +109,18 @@ function makeEnv(chime, options) {
     },
   }
   env.sessions = { list: { getSnapshot: () => ({ phase: 'ready', ids: Object.keys(env.rows), byId: env.rows }) } }
+  env.remoteListeners = new Map()
+  env.remote = {
+    $on: (ev, fn) => {
+      const set = env.remoteListeners.get(ev) || new Set()
+      set.add(fn)
+      env.remoteListeners.set(ev, set)
+      return () => set.delete(fn)
+    },
+  }
+  env.emitRemote = (ev, ...args) => {
+    for (const fn of (env.remoteListeners.get(ev) || [])) fn(...args)
+  }
   env.setStatus = (id, status) => { env.snapshot.set(id, status); for (const fn of env.statusListeners) fn() }
   env.setRow = (id, row) => { env.rows[id] = row }
   env.dispatch = (type) => { for (const fn of (env.listeners.get(type) || []).slice()) fn({ type }) }
@@ -134,7 +146,7 @@ async function boot(env) {
   const client = entry.factory((id) => { if (id === 'react') return reactStub; throw new Error('dep ' + id) })
   const ctx = {
     effect: (fn) => { const d = fn(); if (typeof d === 'function') env.disposers.push(d) },
-    get: (name) => (name === 'uiSession' ? env.uiSession : name === 'sessions' ? env.sessions : undefined),
+    get: (name) => (name === 'uiSession' ? env.uiSession : name === 'sessions' ? env.sessions : name === 'remote' ? env.remote : undefined),
     slots: { inject: () => {}, register: () => {} },
     locale: undefined,
     uiConversation: { events: { register: () => {} } },
@@ -332,6 +344,57 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   await settle()
   check('停播报（cancel 系统语音）后：工作音没被停', env.stopped.length === before, { before, after: env.stopped.length })
   check('提示音只在它自己的上下文里（没混进播报的 24k 上下文）', env.contexts.every((c) => c.ctorOpts === null), env.contexts)
+}
+
+// ============ 场景 12：别的工作区有会话在跑（不在 sessionStatus 里）也要响 ============
+{
+  const env = makeEnv(baseChime())
+  await boot(env)
+  // 当前工作区没有任何会话；另一个工作区的会话通过全局 api-session/status 进来
+  env.emitRemote('api-session/status', 'other-ws-1', true)
+  await settle()
+  check('别的项目有会话在跑：工作音也要响', env.started.filter((s) => s.loop).length === 1, env.started)
+  check('别的工作区的会话不在当前列表里也算数', Object.keys(env.rows).length === 0)
+
+  globalThis.fetch = env.fetch
+  const doneBefore = startsByDuration(env, 0.7).length
+  env.emitRemote('api-session/status', 'other-ws-1', false)
+  await settle()
+  check('别的工作区的会话结束：响一次完成音', startsByDuration(env, 0.7).length === doneBefore + 1, env.started)
+  check('都停了以后：工作音停掉', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
+}
+
+// ============ 场景 13：Host 账本里有会话在跑（已开跑、之后没有状态变化）也要响 ============
+{
+  const env = makeEnv(baseChime())
+  const baseFetch = env.fetch
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: ['host-1'], count: 1, lastEndedAt: 0 }) }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  await boot(env)
+  await settle()
+  check('Host 账本说有会话在跑：工作音起（补上已开跑的情况）', env.started.filter((s) => s.loop).length === 1, env.started)
+
+  // 账本掉到 0 并给出结束时间 → 完成音 + 工作音停
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: [], count: 0, lastEndedAt: 123456 }) }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  const doneBefore = startsByDuration(env, 0.7).length
+  env.emitRemote('api-session/status', 'probe-wake', true)
+  env.emitRemote('api-session/status', 'probe-wake', false)
+  await sleep(3400)
+  check('Host 账本报结束：响一次完成音', startsByDuration(env, 0.7).length >= doneBefore + 1, env.started)
+  check('账本归零后工作音停下', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
 }
 
 console.log('\n结果: ' + (cases.length - failed) + ' passed, ' + failed + ' failed')

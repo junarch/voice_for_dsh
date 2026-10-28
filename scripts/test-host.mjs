@@ -1952,6 +1952,16 @@ async function waitDeploy(installer, timeoutMs = 8000) {
   check('chime 配置可经 settings.update 写回（设置页保存路径）', liveConfig.chime.get().work.enabled === false && liveConfig.chime.get().enabled === false)
 }
 
+// —— 提示音的全局 running 账本（跨工作区补齐，客户端轮询 chimeStatus） ——
+fire({ type: 'turn/start', data: { turn: 90 } })
+{
+  const a = await rpc('chimeStatus', {})
+  check('chimeStatus：turn/start 后账本记下会话', a.ok === true && a.count === 1 && Array.isArray(a.running) && a.running.includes('s1'), a)
+  fire({ type: 'turn/end', data: { turn: 90, reason: { kind: 'completed' } } })
+  const b = await rpc('chimeStatus', {})
+  check('chimeStatus：turn/end 后账本归零并给出结束时间', b.ok === true && b.count === 0 && b.lastEndedAt > 0, b)
+}
+
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）
 await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })
 

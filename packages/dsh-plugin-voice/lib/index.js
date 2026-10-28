@@ -558,6 +558,10 @@ function apply(ctx, config) {
   const clientDiagLog = []
   // 引用上文状态：每会话最近的用户输入与已播报文稿（供转写语境 + TTS 上文引用）
   const turnBySession = new Map()        // sid → 当前 turn（turn/start）
+  // 全局"有会话在跑"账本：Host 收到所有会话的事件（含别的工作区），客户端只看得到当前工作区，
+  // 所以由 Host 记这份账，客户端轮询 /voice/api/chimeStatus 补齐。
+  const chimeRunning = new Set()         // sid 集合
+  let chimeLastEndedAt = 0               // 最近一次 turn 结束的时间戳（客户端据此响完成音）
   const userTurnsBySession = new Map()   // sid → [{ turn, text }]（上限 6）
   const transcriptsBySession = new Map() // sid → [{ turn, text }]（上限 4）
 
@@ -589,6 +593,7 @@ function apply(ctx, config) {
     if (event.type === 'turn/start') {
       if (d && typeof d.turn === 'number') turnBySession.set(sid, d.turn)
       turnGeneration++
+      chimeRunning.add(sid)
       return
     }
     if (event.type === 'user/message') {
@@ -611,6 +616,7 @@ function apply(ctx, config) {
       return
     }
     if (event.type === 'turn/end') {
+      if (chimeRunning.delete(sid)) chimeLastEndedAt = Date.now()
       const kind = d && d.reason && d.reason.kind
       const turn = d && d.turn
       let cfg
@@ -1822,6 +1828,13 @@ function apply(ctx, config) {
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
+    }),
+    /** 全局"有会话在跑"账本：客户端轮询它补齐别的工作区的会话（自建订阅只在状态变化时触发）。 */
+    chimeStatus: async () => ({
+      ok: true,
+      running: Array.from(chimeRunning),
+      count: chimeRunning.size,
+      lastEndedAt: chimeLastEndedAt,
     }),
     localStatus: async () => {
       // 运行时自检：模型目录/有没有加载/音色数/采样率/线程数（模型已装则顺手加载一次，

@@ -991,6 +991,10 @@ window.__ModuleLoader__.load({
     var chimeWorkGen = 0;      // 加载途中被停过 → 迟到的加载结果不许起播
     var chimeDoneAt = 0;       // 上一次完成音的时间（抑制窗）
     var chimePrevRunning = {}; // sessionId → 上一次 running（判真→假）
+    var chimeRemoteRunning = {}; // 全局 api-session/status 记下的 running（含其他工作区）
+    var chimeGlobalCount = 0;    // Host 账本的 running 数（补齐已开跑未变化的会话）
+    var chimeGlobalEndedAt = 0;  // Host 账本的最近结束时间
+    var chimePollTimer = null;   // 轮询 Host 账本的定时器
     var chimeAskKeys = {};     // interaction key → true（同一交互只响一次）
     var chimeMissing = {};     // kind → 配置里的文件名（读不到、已回落默认音）
     var chimePreheat = null;   // 首次交互预热用的监听器
@@ -1230,38 +1234,84 @@ window.__ModuleLoader__.load({
       if (row.parentId !== undefined && row.parentId !== null) return false;
       return true;
     }
-    /** 状态对账：work 计数、done 真→假、ask 按 key 去重。 */
+    /** 全局 running 事件（api-session/status）记录：其他工作区的会话不在 sessionStatus 里，
+     *  只靠当前工作区的快照会漏掉"别处还有活在跑"的情况。 */
+    function chimeRemoteStatus(id, running) {
+      if (!chimeCfg || !chimeCfg.enabled) return;
+      var sid = String(id);
+      if (running) {
+        if (!chimeRemoteRunning[sid]) { chimeRemoteRunning[sid] = true; chimeTick(); }
+        return;
+      }
+      if (!chimeRemoteRunning[sid]) return;
+      delete chimeRemoteRunning[sid];
+      chimePrevRunning[sid] = false;
+      triggerDoneChime();
+      chimeTick();
+    }
+    /** 轮询 Host 的全局账本：补上"已经开跑、之后没有状态变化"的会话（切工作区后尤其需要）。 */
+    function pollChimeStatus() {
+      if (!chimeCfg || !chimeCfg.enabled) return;
+      rpc("chimeStatus").then(function (res) {
+        if (!res || !res.ok) return;
+        chimeGlobalCount = typeof res.count === "number" ? res.count : (Array.isArray(res.running) ? res.running.length : 0);
+        if (res.lastEndedAt && res.lastEndedAt !== chimeGlobalEndedAt) {
+          chimeGlobalEndedAt = res.lastEndedAt;
+          triggerDoneChime();
+        }
+        chimeTick();
+      }).catch(function () {});
+    }
+    function startChimePoll() {
+      if (chimePollTimer || typeof setInterval !== "function") return;
+      pollChimeStatus();
+      chimePollTimer = setInterval(pollChimeStatus, 1500);
+    }
+    function stopChimePoll() {
+      if (chimePollTimer) { clearInterval(chimePollTimer); chimePollTimer = null; }
+      chimeGlobalCount = 0;
+      chimeGlobalEndedAt = 0;
+    }
+    /** 状态对账：work 计数、done 真→假、ask 按 key 去重。
+     *  running 取三处并集：uiSession.sessionStatus（当前工作区，含 pendingInteraction）、
+     *  全局 api-session/status 事件、Host 的 chimeStatus 账本（含已开跑未变化与别的工作区）。 */
     function chimeTick() {
       if (!chimeCfg || !chimeCfg.enabled) { stopChimes(); return; }
       var uiSession = clientService("uiSession");
-      if (!uiSession || !uiSession.sessionStatus) return;   // 缺服务：静默，不影响播报
-      var snap;
-      try { snap = uiSession.sessionStatus.getSnapshot(); } catch (e) { return; }
-      if (!snap || typeof snap.forEach !== "function") return;
+      var snap = null;
+      if (uiSession && uiSession.sessionStatus) {
+        try { snap = uiSession.sessionStatus.getSnapshot(); } catch (e) { snap = null; }
+      }
       var runningCount = 0;
       var liveAsk = {};
       var seen = {};
-      snap.forEach(function (st, id) {
-        if (isTopLevelSession(id)) {
-          seen[id] = true;
-          var running = !!(st && st.running);
-          if (running) runningCount += 1;
-          if (running) chimePrevRunning[id] = true;
-          else {
-            if (chimePrevRunning[id] === true) triggerDoneChime();
-            chimePrevRunning[id] = false;
-          }
-          var interaction = st && st.pendingInteraction;
-          if (interaction && typeof interaction === "object") {
-            var kind = interaction.kind;
-            if (kind === "question" || kind === "plan-review") {
-              var key = String(interaction.key || (id + ":pending"));
-              liveAsk[key] = true;
-              triggerAskChime(key);
+      if (snap && typeof snap.forEach === "function") {
+        snap.forEach(function (st, id) {
+          if (isTopLevelSession(id)) {
+            seen[id] = true;
+            var running = !!(st && st.running);
+            if (running) runningCount += 1;
+            if (running) chimePrevRunning[id] = true;
+            else {
+              if (chimePrevRunning[id] === true) triggerDoneChime();
+              chimePrevRunning[id] = false;
+            }
+            var interaction = st && st.pendingInteraction;
+            if (interaction && typeof interaction === "object") {
+              var kind = interaction.kind;
+              if (kind === "question" || kind === "plan-review") {
+                var key = String(interaction.key || (id + ":pending"));
+                liveAsk[key] = true;
+                triggerAskChime(key);
+              }
             }
           }
-        }
-      });
+        });
+      }
+      for (var rid in chimeRemoteRunning) {
+        if (!seen[rid]) runningCount += 1;     // 已在快照里的不重复计数
+      }
+      if (chimeGlobalCount > 0) runningCount += 1;
       for (var sid in chimePrevRunning) { if (!seen[sid]) delete chimePrevRunning[sid]; }
       for (var k in chimeAskKeys) { if (!liveAsk[k]) delete chimeAskKeys[k]; }
       if (runningCount > 0) startWorkChime();
@@ -1273,8 +1323,10 @@ window.__ModuleLoader__.load({
       if (chimeCfg.enabled) {
         ensureChimeCtx();       // 关着的时候不建上下文：不占声卡、不需要手势
         applyChimeVolume();
+        startChimePoll();
         chimeTick();
       } else {
+        stopChimePoll();
         stopChimes();
       }
       if (!chimeRowEnabled("work")) stopWorkChime();
@@ -1299,6 +1351,7 @@ window.__ModuleLoader__.load({
       document.addEventListener("keydown", chimePreheat, true);
     }
     function disposeChime() {
+      stopChimePoll();
       stopChimes();
       if (typeof document !== "undefined" && chimePreheat) {
         document.removeEventListener("pointerdown", chimePreheat, true);
@@ -1318,9 +1371,21 @@ window.__ModuleLoader__.load({
       if (!uiSession || !uiSession.sessionStatus) return;
       var unsubscribe = null;
       try { unsubscribe = uiSession.sessionStatus.subscribe(chimeTick); } catch (e) { unsubscribe = null; }
+      // 全局 running 事件：其他工作区的会话不在 sessionStatus 里，靠它补上
+      var offRemote = null;
+      var remote = clientService("remote");
+      if (remote && typeof remote.$on === "function") {
+        try { offRemote = remote.$on("api-session/status", chimeRemoteStatus); } catch (e) { offRemote = null; }
+      }
       chimeTick();
-      if (unsubscribe && pluginCtx && typeof pluginCtx.effect === "function") {
-        pluginCtx.effect(function () { return function () { try { unsubscribe(); } catch (e) {} }; }, "voice: chime status");
+      if (pluginCtx && typeof pluginCtx.effect === "function") {
+        pluginCtx.effect(function () {
+          return function () {
+            try { if (unsubscribe) unsubscribe(); } catch (e) {}
+            try { if (typeof offRemote === "function") offRemote(); } catch (e2) {}
+            chimeRemoteRunning = {};
+          };
+        }, "voice: chime status");
       }
     }
     /** 探一个素材文件在不在（设置页提示用；HEAD 只问在不在，不下载整段音频）。 */
