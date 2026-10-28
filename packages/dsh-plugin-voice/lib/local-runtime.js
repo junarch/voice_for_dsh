@@ -9,7 +9,7 @@
  * 锁 1.13.8：2.x 起不再用 espeak 回退，英文词典外的词与数字会被静默跳过；
  * 1.x 带 espeak，数字（number-zh.fst 等规则）与词典外词都能读。
  *
- * 模型：`kokoro-multi-lang-v1_1`（fp32，解包约 387MB，中英混读，103 个数字音色）。
+ * 模型：`kokoro-multi-lang-v1_1`（fp32，压缩包 348MB、解包后 407MB，中英混读，103 个数字音色）。
  * int8 包也能跑（只是本机实测慢约 4 倍），文件名不同，两者都认。
  *
  * 模型目录解析顺序（先命中先用）：
@@ -165,7 +165,7 @@ export function pcmToWav(pcm, sampleRate = LOCAL_SAMPLE_RATE) {
 
 /**
  * 测试注入点：替换"怎么拿到 OfflineTts 实例"这一步。
- * 只有 scripts/test-host.mjs 用（它跑在无模型的机器上，不需要 387MB 模型也能验证
+ * 只有 scripts/test-host.mjs 用（它跑在无模型的机器上，不需要那 407MB 模型也能验证
  * 切段/PCM 转换/超时/错误分类）；生产路径永远走 sherpa-onnx-node。
  */
 let engineLoaderForTest = null

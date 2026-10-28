@@ -7,9 +7,9 @@
  * 不用开 DevTools 翻 console。
  *
  * 用法（重启桌面端后）：
- *   1. 从应用启动日志里拿带 token 的地址（形如 http://127.0.0.1:19387/?token=xxxx）
- *   2. node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=xxxx"
- *   3. 想同时验真实合成：加 --speak-paid（豆包会花几分钱；本地引擎免费）
+ *   1. 从应用启动日志里拿带 token 的地址（端口以日志/地址栏为准，形如 http://127.0.0.1:<端口>/?token=xxxx）
+ *   2. node scripts/verify-installed.mjs --url "http://127.0.0.1:<端口>/?token=xxxx"
+ *   3. 想同时验真实合成：加 --speak-paid（豆包会花几分钱；本地 Kokoro 免费）
  *
  * 退出码：0 = 全部通过；1 = 有项目没通过；2 = 用法错误。每项都打印证据。
  */
@@ -22,7 +22,7 @@ const urlArg = opt('url')
 const paid = args.includes('--speak-paid')
 
 if (urlArg === undefined) {
-  console.error('用法：node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=<token>" [--speak-paid]')
+  console.error('用法：node scripts/verify-installed.mjs --url "http://127.0.0.1:<端口>/?token=<token>" [--speak-paid]')
   process.exit(2)
 }
 

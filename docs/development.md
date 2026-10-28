@@ -3,6 +3,9 @@
 > 本插件 v1 为**手写纯 JS、无构建步骤**：`packages/dsh-plugin-voice/lib/` 下
 > `index.js`（Host 半）、`client.js`（Client 半）、`volcengine-ws.js`（双向流 WS 客户端）、
 > `speech-clean.js`（净化 `sanitizeForSpeech`）、
+> `local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro，懒加载/分块合成/错误分类）、
+> `model-installer.js`（模型下载、续传、校验、解包、删除）、
+> `model-manifest.js`（模型包清单：URL、体积、sha256）、
 > `voice-compat.js`（配置兼容/归一单一事实源：音色↔语种 `normalizeVoiceConfig`、
 > 引擎归一 `ttsProviderOf`、音调归一 `pitchOf`）是**源码，直接提交进 git**。
 > `src/` 仅为后续 TS/tsdown 化预留的占位。
@@ -10,10 +13,12 @@
 ## 1. 开发循环
 
 ### 改 Host 半（`lib/index.js`）
-改 → 重启桌面端 dsh 才生效。
+改 → 保存即随 Loader 热加载生效（Host 半在进程内重挂，路由与 schema 跟着换）。
+例外是**组合变更**（装/升级依赖、改 `cordis.patch.yml`）：这类以重启桌面端为准。
 
 ### 改 Client 半（`lib/client.js`）
-改 → 重启 dsh（client-modules 重新扫描、rev 变化）→ 界面**手动刷新** `http://127.0.0.1:19387`。
+改 → **必须重启桌面端**（client-modules 重新扫描、rev 变化）→ 界面**手动刷新**。
+只刷新页面不够：Client 半只有整个应用重启才进 boot 图。
 v1 无 dev watcher / HMR（后续 tsdown 化后才有 `pnpm run dev:web` 无刷新更新）。
 
 ### 改完跑集成测试（mock 零成本 + 探针花几分钱）
@@ -29,10 +34,10 @@ node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针
 ## 2. 安装 / 卸载插件（desktop profile）
 
 ```powershell
-# 桌面端自带 CLI（跑同一份 0.2.0-rc.2）
+# 桌面端自带 CLI（版本随桌面端，`dsh --version` 可查）
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 
-# 在仓库根目录执行（相对路径锚定到调用时的 cwd）
+# 在仓库根目录执行（相对路径怎么解析取决于 CLI，见下面那条）
 & $dsh plugin --profile desktop add packages/dsh-plugin-voice
 # 链接式（开发时改代码即生效；注意：link 不会代装插件自身依赖，见 §4）
 & $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
@@ -45,9 +50,9 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 - 卸载后 bundles 列表自动 reconcile；必要时手动清理 `cordis.patch.yml` 残留补丁行。
 - 本插件运行需要 `@deepseek-ai/schemastery ≥ 3.18.4`（`.volatile()` 从该版本才有）；桌面版 profile 共享的
   `profiles\node_modules` 里就是 3.18.4，插件自身 `dependencies` 也要跟上，否则 `npm run` 侧的自检会用到旧版。
-- **`link:` 的相对路径锚定 profile 目录，不是执行命令时的 cwd**：写成 `link:packages/dsh-plugin-voice`
-  会被解析到 `profiles\desktop\packages\...`（不存在），装的时候报
-  `cannot resolve profile bundle "dsh-plugin-voice"`。用绝对路径。
+- **`link:` 的相对路径由 CLI 自己解析**，锚定到哪个目录以 CLI 的实际行为为准（本仓库不对方向作承诺）：
+  写成相对路径若被解析到别处（例如 `profiles\desktop\packages\...`，不存在），装的时候会报
+  `cannot resolve profile bundle "dsh-plugin-voice"`。报这个错就换成绝对路径。
 - **装完（或升级依赖后）要重启桌面端**：Host 半会随 Loader 热加载进来，但 **Client 半不会**——
   实测在运行中的应用里刚装好的插件，`/plugins/<id>/client.js?rev=…` 一直 404（rev 按上游
   `artifactRevision` 算法复算过、与冷启动后的 rev 一致），只有整个应用重启后才进 boot 图。
@@ -71,13 +76,13 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 **重启桌面端后的一键自检**（零成本，逐条打印证据）：
 
 ```powershell
-# 从应用启动日志里拿带 token 的地址（形如 http://127.0.0.1:19387/?token=xxxx）
-node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=xxxx"
-# 想连真实合成一起验：加 --speak-paid（豆包花几分钱；本地引擎免费）
+# 端口与 token 以启动日志/地址栏给的为准（默认端口之外也可能换过）
+node scripts/verify-installed.mjs --url "http://127.0.0.1:<端口>/?token=<token>"
+# 想连真实合成一起验：加 --speak-paid（豆包花几分钱；本地 Kokoro 免费）
 ```
 
 它检查：Host 半路由活着 → **Client 半在 boot 图里且能取回字节** → 配置可读且关键字段在 →
-两个本地引擎的环境能推导。退出码 0/1，可以直接接进发版检查。
+本地模型目录与运行时状态可推导（已装/未装、线程数、采样率）。退出码 0/1，可以直接接进发版检查。
 
 两个坑（脚本里已处理，手工验时要知道）：带 token 访问首页会**先 303 并下发 `dsh-auth-*` cookie**，
 要手动跟一次跳转并把 cookie 带上（`fetch` 默认自动跟随会丢 cookie，落到 401/400）；

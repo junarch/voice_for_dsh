@@ -6,7 +6,7 @@
  *  - 输入框左下角："自动朗读"开关（持久化 voice.autoSpeak）
  *  - turnTail 徽标：本轮已朗读 ✓ / 朗读中…（点击重播；只 claim 读过的轮次，不抢 deliverables 产物链）
  *  - 设置页（settings.section id=voice）：全配置可视化 + 试听
- *  - 播报：browser = speechSynthesis（自动剥离 [#...] 语音指令标签）；云 TTS = <audio src="/voice/audio/<id>">
+ *  - 播报：browser = speechSynthesis（自动剥离 [#...] 语音指令标签）；豆包 = <audio src="/voice/audio/<id>">
  *  - i18n：locale 命名空间 voice（zh/en）；与 Host 半走 /voice/api/* JSON RPC
  */
 window.__ModuleLoader__.load({
@@ -32,7 +32,7 @@ window.__ModuleLoader__.load({
       "settings.saveFail": "❌ 保存失败：", "settings.loadFail": "读取配置失败",
       "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
-      "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（云 TTS）…", "settings.previewAudio": "▶ 试听中…",
+      "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（豆包）…", "settings.previewAudio": "▶ 试听中…",
       "layer.l1.title": "常用", "layer.l2.title": "当前引擎的声音", "layer.l3.title": "转写", "layer.l4.title": "高级",
       "layer.l2.summary.browser": "系统 TTS · 语速 {rate}",
       "layer.l2.summary.local": "本地 Kokoro · 音色 {sid} · 语速 {rate}",
@@ -41,8 +41,8 @@ window.__ModuleLoader__.load({
       "layer.l4.summary": "分句={seg} · 线程={threads} · 目录={dir}",
       "layer.value.on": "开", "layer.value.off": "关", "layer.value.auto": "自动", "layer.value.custom": "自定义",
       "status.browser": "浏览器自带语音：免费，不用装东西",
-      "status.volcengine.ok": "豆包云 TTS：按量计费，试听会真的调用",
-      "status.volcengine.noKey": "豆包云 TTS：还没填 API Key，试听会失败",
+      "status.volcengine.ok": "豆包：按量计费，试听会真的调用",
+      "status.volcengine.noKey": "豆包：还没填 API Key，试听会失败",
       "status.local.installed": "本地模型已装好，可以直接播报",
       "status.local.missing": "本地模型还没装，先下载才能出声",
       "status.local.busy": "正在装本地模型：{percent}%",
@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
-      "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（中英·免费）",
+      "engine.browser": "系统 TTS（浏览器语音·免费）", "engine.volcengine": "豆包（付费）", "engine.local": "本地 Kokoro（中英·免费）",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localNumThreads": "合成线程数",
       "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
@@ -64,7 +64,7 @@ window.__ModuleLoader__.load({
       "local.customSid": "手填 sid（0–102）",
       "local.numThreadsHint": " 多线程更吃 CPU；线程多首声更快，默认 4",
       "local.streaming": "分句流式播报",
-      "local.streamingHint": " 开=按句切段逐段合成，约 1 秒出声、长稿边算边播（推荐）；关=整段合成完才播，长稿要等 / on = segment-by-segment, first sound ~1s",
+      "local.streamingHint": " 开=按句切段逐段合成，首声约 0.6 秒、长稿边算边播（推荐）；关=整段合成完才播，长稿要等",
       "local.modelDir": "模型目录",
       "local.modelDirHint": " 空=自动找（用户目录 → 仓库 local/models）；也可在这里指定自己解包的目录",
       "local.notInstalled": "⚠ 本地模型还没装：点上面的「下载模型」直接装；也可以把已解包的目录填到「模型目录」",
@@ -143,7 +143,7 @@ window.__ModuleLoader__.load({
       "settings.saveFail": "❌ Save failed: ", "settings.loadFail": "Failed to load config",
       "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
-      "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (cloud TTS)…", "settings.previewAudio": "▶ Previewing…",
+      "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (Doubao)…", "settings.previewAudio": "▶ Previewing…",
       "layer.l1.title": "Basics", "layer.l2.title": "Current engine voice", "layer.l3.title": "Transcription", "layer.l4.title": "Advanced",
       "layer.l2.summary.browser": "System TTS · rate {rate}",
       "layer.l2.summary.local": "Local Kokoro · voice {sid} · rate {rate}",
@@ -152,8 +152,8 @@ window.__ModuleLoader__.load({
       "layer.l4.summary": "segments={seg} · threads={threads} · dir={dir}",
       "layer.value.on": "on", "layer.value.off": "off", "layer.value.auto": "auto", "layer.value.custom": "custom",
       "status.browser": "Built-in browser voice: free, nothing to install",
-      "status.volcengine.ok": "Doubao cloud TTS: pay per use; preview calls the real API",
-      "status.volcengine.noKey": "Doubao cloud TTS: no API Key yet; preview will fail",
+      "status.volcengine.ok": "Doubao: pay per use; preview calls the real API",
+      "status.volcengine.noKey": "Doubao: no API Key yet; preview will fail",
       "status.local.installed": "Local model installed - ready to speak",
       "status.local.missing": "Local model not installed - download it first",
       "status.local.busy": "Installing local model: {percent}%",
@@ -167,7 +167,7 @@ window.__ModuleLoader__.load({
       "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
       "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
-      "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
+      "engine.browser": "System TTS (browser voice · free)", "engine.volcengine": "Doubao (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
       "row.localNumThreads": "Synthesis threads",
       "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
@@ -689,7 +689,7 @@ window.__ModuleLoader__.load({
       return t("toast.fallback");
     }
 
-    /** 统一播报入口：双向流流式 > 云 TTS 音频 > 浏览器 speechSynthesis；ttsError/degraded/warn 降级告警。 */
+    /** 统一播报入口：双向流流式 > 豆包整段音频 > 浏览器 speechSynthesis；ttsError/degraded/warn 降级告警。 */
     function playResult(res, hooks) {
       stopPlaybackOnly();
       if (res && res.notice) { console.warn("[voice]", res.notice); showToast(res.notice); }

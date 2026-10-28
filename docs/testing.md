@@ -17,9 +17,10 @@
 ```
 [DeepSeek 输出完成] -> Host 监听 turn/end(completed|max-tokens) -> 提取最后一条含 text 的助手消息
    -> LLM 口语化转写（独立调用，prompt 由风格预设/语种拼） -> 转写稿缓存（provider/model/prompt/effort 四者一致才命中）
-   -> TTS：browser=客户端 speechSynthesis | volcengine=豆包云合成 | local=本地 Kokoro（英文稿）
-        └ local：先 supervisor.ensure（探 /health → 复用或经 ctx.subprocess 拉起；dsh 退出回收）
-                  → splitForStream 分句 → 逐段 pcm16 合成 → 段队列（首段 ~2.5s 出声）
+   -> TTS：browser=客户端 speechSynthesis | volcengine=豆包（云端合成） | local=本地 Kokoro（进程内 sherpa-onnx）
+        └ local：懒加载模型（冷启动约 3s，之后常驻复用）
+                  → splitForStream 分句 → 逐段合成 → Float32 转 Int16 裸 PCM → 按 ~0.5s 音频切段入队
+                  → 客户端边取边播（模型已加载时首声约 0.6s）
         | Host 合成 + 一次性音频路由 -> 浏览器播放
 ```
 
@@ -30,8 +31,9 @@
 
 ### 第 1 层：零成本——mock 集成测试 `scripts/test-host.mjs`
 不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路；
-插件配置按**真实导出的 `Config` schema**解析（含默认值 + volatile 引用），所以"插件能不能被 0.2.0 正常加载并解析出配置"
-这件事本身就有断言兜着（旧缺陷正是加载即 `TypeError`）。已固化大量断言，每条对应一个历史坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
+插件配置按**真实导出的 `Config` schema**解析（含默认值 + volatile 引用），所以"插件能不能被目标版 DSH
+（当前基线 `0.2.1-rc.3`）正常加载并解析出配置"这件事本身就有断言兜着（加载即 `TypeError` 这类事故就栽在这条上）。
+已固化大量断言，每条对应一个坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
 撞顶 4 倍额度重试、失败降级、自动播报门控、context_texts 指令组装、音色↔语种归一、重播零 LLM、regen 重新生成、
 cache_config 初次/重播下发而 regen/换音色重播不下发等。
 每次改完 Host 半必跑。
@@ -45,31 +47,44 @@ cache_config 初次/重播下发而 regen/换音色重播不下发等。
 ### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
 一键自检（推荐先跑这个，逐条打印证据、退出码 0/1）：
 ```powershell
-# token 从应用启动日志给的地址里取
-node scripts/verify-installed.mjs --url "http://127.0.0.1:19387/?token=xxxx"
+# 端口与 token 以启动日志/地址栏给的为准；下面都用 $base，换过端口只改这一行
+$base = "http://127.0.0.1:19387"      # 示例端口
+node scripts/verify-installed.mjs --url "$base/?token=xxxx"
 ```
 单项手工打（`curl.exe` 在本机 PowerShell 里可能不可用，改用 `Invoke-WebRequest`）：
 ```powershell
-curl.exe -s -X POST http://127.0.0.1:19387/voice/api/ping
-curl.exe -s -X POST http://127.0.0.1:19387/voice/api/getConfig
-curl.exe -s -X POST http://127.0.0.1:19387/voice/api/meta
-curl.exe -s -X POST http://127.0.0.1:19387/voice/api/preview    # 试听（云 TTS 花几分钱）
-curl.exe -s -X POST http://127.0.0.1:19387/voice/api/clientDiagDump   # 读回浏览器播放链路事件
+curl.exe -s -X POST "$base/voice/api/ping"
+curl.exe -s -X POST "$base/voice/api/getConfig"
+curl.exe -s -X POST "$base/voice/api/meta"
+curl.exe -s -X POST "$base/voice/api/preview"            # 试听（豆包花几分钱）
+curl.exe -s -X POST "$base/voice/api/clientDiagDump"    # 读回浏览器播放链路事件
 ```
 看返回关键字段：`cached`（true=缓存命中没花钱）、`degraded`（true=转写失败走兜底）、`ttsError`、`audioUrl`。
 播报"没声音"时先看 `clientDiagDump`：`stream-start` 的 `ctx` 是不是 `suspended`、`stream-end` 的 `played`
-是不是 0——把"服务端还没算完"与"浏览器根本没排上播放"分开（本地 CPU 引擎首声几十秒，靠耳朵分不出来）。
+是不是 0——把"Host 还没算完"与"浏览器根本没排上播放"分开（冷启动 3 秒、首声 0.6 秒，差这么点时间，
+光靠耳朵分不出是没出声还是没排上）。
 
 ### 第 3 层：几分钱——真实外呼探针 `scripts/tts-*.mjs`
-对火山 TTS 做受控实验（读目标 profile `cordis.patch.yml` 里 `voice.tts.volcengine.apiKey`）。时长对比只能证明"标签被照读/数值参数生效"这类强信号；
+对火山 TTS 做受控实验（读目标 profile `cordis.patch.yml` 里 `voice.tts.volcengine.apiKey`）。
+时长对比只能证明"标签被照读/数值参数生效"这类强信号；
 **语气、音色、方言这类只有人耳能判断的效果，必须听音频**。怀疑任何外部接口行为时，先跑探针再改代码。
 
-本地引擎是进程内合成（没有服务、没有端口），实测走 `scripts/test-host.mjs` 的 T23 段：设
-`VOICE_LOCAL_MODEL_DIR` 指向解包好的 `kokoro-multi-lang-v1_1` 后会真加载模型、合成中英各一句，
-并打印首声/RTF 读数；不设则跳过（不把"没装模型"当失败）。
+本地引擎是进程内合成（没有服务、没有端口），四段断言都在 `scripts/test-host.mjs` 里：
+
+- **T21 本地运行时**：模型目录解析顺序、自检读数、停止；
+- **T22 本地分句流式**：每 ~0.5s 音频入一段、中途失败保留已播段、首段失败降级整段、单段超时；
+- **T23 真模型端到端**：设 `VOICE_LOCAL_MODEL_DIR` 指向解包好的 `kokoro-multi-lang-v1_1` 后会真加载模型、
+  合成中英各一句并打印首声/RTF 读数；不设则跳过（不把"没装模型"当失败）。
+- **T24 模型安装器**：下载 / 续传 / 校验失败 / 取消 / 磁盘不足 / 删除（注入假 fetch 与假解包，
+  零网络、零 348MB）。
+
+提示音另有一组断言（同样零成本）：三种信号只从客户端状态快照对账（`turn/end` 不参与）、
+子代理会话要过滤掉、审批 `approval` 不响、素材上传按魔数认格式并拒绝 `..` 与超限、
+启动清扫不误删刚上传还没保存的文件、提示音用独立 AudioContext 不被停止播报连坐。
 
 ### 第 4 层：手动验收（最贵，只测前三层测不到的）
-浏览器里：设置页渲染、下拉/滑块交互、朗读按钮状态机、自动播报节奏、方言试听。只在这一层测"人能感知"的东西。
+浏览器里：设置页渲染、五层里除第一层外**默认折叠**（点开/收起、层头摘要跟着当前值变）、
+下拉/滑块交互、朗读按钮状态机、自动播报节奏、提示音上传与试听、方言试听。只在这一层测"人能感知"的东西。
 
 ## 3. 账单防御
 

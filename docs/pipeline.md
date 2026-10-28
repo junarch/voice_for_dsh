@@ -105,7 +105,7 @@
 
 ### 3.2 生成（内容驱动，LLM 三行输出）
 
-转写后（仅云 TTS + 转写开启 + 非降级），用 `INSTRUCTION_EMOTION_SYSTEM` 调 LLM，
+转写后（仅豆包 + 转写开启 + 非降级），用 `INSTRUCTION_EMOTION_SYSTEM` 调 LLM，
 输入 = 口播文稿，输出严格三行：① 播报指令（8~25 字）② 情感标签（固定集合）③ 情绪强度 1~5。
 maxTokens=256、温度 0.3、超时 15s（段落粒度 8s）。失败/超时/异常 → 返回空，调用方回退预设。
 
@@ -262,6 +262,13 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 > 也能跑（默认 browser TTS）。设置页（`settings.section id=voice`"语音播报"）只暴露常用项，
 > 以下标注"（无 UI）"的字段**已从设置页隐藏**：schema 保留（向后兼容，老配置里的值仍生效）、
 > 走固定默认值，仅需高级/内部逻辑时在 profile patch 直改。
+>
+> **设置页五层 ↔ 本文件字段**：L1 常用 = `tts.provider` + `autoSpeak`；L2 当前引擎的声音 =
+> `tts.browser.*` / `tts.volcengine.*`（含 `apiKey`、`gateway`、`speaker`、`language`）/ `tts.local.sid`+
+> `speed`（本地模型的安装与「运行时自检」也挂在这层，走 `deployStart`/`deployStatus`/`deployCancel`/
+> `deployRemove` 与 `localStatus` 这几个 RPC）；
+> L3 转写 = `transcribe.*` + `provider`/`model`；L4 高级 = `tts.local.numThreads`/`streaming`/`modelDir`；
+> L5 提示音 = `chime.*`（§6.2）。`autoSpeakCloudTts` 不单独占一行：由 L1 选豆包时联动写入。
 
 ### 6.0 配置模型与热改边界（0.2.0 起）
 
@@ -280,7 +287,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   `RATE_STOPS`/`PITCH_STOPS` 仍在 schema 里（设置页的语速/音调档位用），只是 `pitchLevel` 不再影响发声。
 - `tts.volcengine.apiKey` **不标 `role('secret')`**（有意）：dsh-settings 的写入路径会把非 volatile 的秘密字段
   从落盘补丁里剥掉（`strip(raw, form)`），而设置页每次保存都会整块重写该条目的 config——一旦标 secret，
-  用户第一次在设置页点保存就会**把 patch 里的 apiKey 删掉**，云 TTS 从此失效。所以 key 保持在 profile patch 里
+  用户第一次在设置页点保存就会**把 patch 里的 apiKey 删掉**，豆包从此失效。所以 key 保持在 profile patch 里
   明文（与旧 settings.yaml 同一安全等级），设置页可读可改。
 
 ```yaml
@@ -424,9 +431,9 @@ voice:
 
 - 转写在 Host 用 `ctx.llm`（独立辅助调用、不入主历史）：复用已配 provider/凭据、不暴露 key、prompt 可控。
 - 默认 TTS = 浏览器兜底：零配置、免费、离线。
-- 云 TTS 走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
+- 豆包走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；动态沙箱禁 fetch。
-- 云 TTS 默认关闭（默认引擎 browser，全免费）；设置页切豆包 = 用户显式为付费 API 买单，
+- 豆包默认关闭（默认引擎 browser，全免费）；设置页切豆包 = 用户显式为付费 API 买单，
   自动播报才可能走豆包；profile patch 里直改的配置仍由 `autoSpeakCloudTts` 门控防账单失控；
   local 免费引擎不在门控之列。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。

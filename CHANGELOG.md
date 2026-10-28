@@ -10,7 +10,23 @@
 
 （随下一次发版归档到版本号下；当前 `packages/dsh-plugin-voice` 版本 0.4.0。）
 
-### 升级指引（DSH 0.1.x → 0.2.0）
+### 升级指引（Python 版 → 0.4.0）
+
+本地合成从"独立的 Python 服务"改成"dsh 进程内原生模块"。这一版对本地引擎是**破坏性**的，
+照下面四条做一次即可，其余功能不受影响：
+
+- **模型要重下**：模型包换成 `kokoro-multi-lang-v1_1`（中英混读），旧版 `local/models` 里的英文
+  Kokoro v1.0 不再被读取。设置页 →「语音播报」→ **常用** 选「本地 Kokoro」→ **当前引擎的声音**
+  层头点「下载模型」（下载 348MB、解包后 407MB，只存本机、可断点续传、装完不用重启）。
+  已有解包好的目录可以填进 **高级** 层的「模型目录」直接用。
+- **`local/` 可以整个删**：venv、旧引擎的源码与权重、旧模型、临时目录都不再被读写
+  （逐项清单见 `docs/local-tts.md` §5.1）。**不需要**再装 Python、不用再起本地服务、不用管端口。
+- **配置不用改**：`tts.local.sid`/`speed` 继续生效；旧的 `provider: local-cosyvoice` 会自动归一到
+  `local`（旧配置的意图就是"用本地引擎"）；已退役的 `baseUrl`/`voice`/`autoStart`/`pythonPath`
+  读到会被忽略，下次保存时被清掉。
+- **豆包不受影响**：`tts.volcengine.apiKey` 的位置与写法完全不变（仍是 profile `cordis.patch.yml` 里的明文）。
+
+### 升级指引（0.1.x → 0.2.0，配置位置变更）
 
 - **必须做**：把旧的 `voice` 配置搬进目标 profile。0.2.0 起插件配置不再来自 `$DSH_HOME\settings.yaml`
   （首次启动已被改名成 `settings.yaml.imported`），而是来自 profile 的 `cordis.patch.yml`：
@@ -18,25 +34,71 @@
   node scripts/migrate-voice-config.mjs          # 预览
   node scripts/migrate-voice-config.mjs --write  # 落盘（写前自动备份 patch，幂等）
   ```
-  不迁移的后果：转写路由、音色/语速、云 TTS 开关与 apiKey 全部掉回默认值（默认引擎 = 浏览器 TTS）。
+  不迁移的后果：转写路由、音色/语速、豆包开关与 apiKey 全部掉回默认值（默认引擎 = 系统 TTS（浏览器语音））。
 - **若插件装在旧的 `web` profile**：桌面端只读 `desktop` profile，需要重新装到 desktop
   （`& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice`），否则插件页里根本看不到它。
 
+### Added
+
+- **本地合成改为进程内**（`local` provider 重写）：`sherpa-onnx-node@1.13.8` 直接在 dsh 的 Host 进程里合成
+  （Kokoro v1.1，中英跟随原文语言，103 个数字音色），**不起子进程、不装 Python、不监听端口**，
+  dsh 退出即随进程释放。模型输出 Float32 24kHz，Host 侧转成客户端唯一认的 16bit 小端裸 PCM
+  （`float32ToInt16Pcm`）；整段播报则加 WAV 头，走同一条一次性音频路由回传。
+  模型**懒加载**：第一次点朗读才读进内存（本机实测 2.8–2.9s），之后常驻复用（约 510MB，合成后约 600MB）；
+  改 `tts.local.modelDir` 会作废已加载实例、按新目录重载。
+- **分句流式播报**（`tts.local.streaming`，默认开）：转写稿按句切段（`splitForStream`，目标 220 字符，
+  向前找句末标点），逐段合成；每产出约 0.5 秒音频（`采样率×2×0.5` 字节）就切一段入队，
+  客户端边取边播——模型已加载时**首声约 0.6 秒**；关掉则退回整段合成（对照/排查用）。
+  超时语义是**单段停顿时限** `segmentTimeoutMs`（默认 30s），长稿不会因为总时长被掐。
+- **失败按因分类**（`ttsErrorKind`）：本地四类——`model-missing`（模型没装）/ `load-failed`（原生模块或模型
+  文件坏了）/ `synth-failed`（合成报错）/ `timeout`（合成超时）；豆包路径的非 2xx 与帧错误记为 `http`。
+  toast 按 kind 给专用文案，不再让"模型没装"和"合成失败"共用一句笼统提示。
+- **设置页一键安装本地模型**：插件自己下载 → 校验（清单里的 sha256）→ 解包 → 装到
+  `<DSH_HOME>/voice/models/kokoro-multi-lang-v1_1`，全程不用终端、装完不用重启。
+  - 下载显示已下/总量与百分比，`Range` + `If-Range` **断点续传**（断线自动重试 2 次，失败可点重试接着下）；
+    随时可「取消」，取消即清临时文件；解包后归档自动删掉（峰值约 760MB，预检要求 ≥1.2GB 空闲）。
+  - 失败分类直接给结论：`network` / `checksum`（上游换了包，等插件升级）/ `disk`（空间不够）/
+    `extract`（缺 tar 或写不进去，界面给等价手动命令）。
+  - 「删除模型」只删带装机标记的那一份（自己解包的目录显示「不在可删范围」并说明原因）。
+  - 代理：`fetch` 默认不走系统代理，需要代理的机器设好 `HTTPS_PROXY`/`HTTP_PROXY` 后加
+    `NODE_USE_ENV_PROXY=1` 启动 dsh。
+- **设置页改五层渐进展开**：常用（引擎 + 自动播报 + 一行引擎状态）／当前引擎的声音（按引擎只渲染它自己的
+  字段，本地模型安装行常驻层头）／转写／高级（线程数、分句流式、模型目录）／提示音。
+  除第一层外默认收起，层头带当前值摘要；转写与提示音的主开关放在层头，不展开也能开关。
+- **提示音**（`voice.chime`，默认整层关闭）：工作音（顶层会话在跑时）、完成音（running 真→假）、
+  提问音（`pendingInteraction` 为 `question`/`plan-review`，审批不响）。信号只从客户端
+  `uiSession.sessionStatus` 快照对账，`turn/end` 不参与，播报关掉也照响；子代理会话会被过滤掉。
+  - 默认三种音都是程序合成（正弦 + 指数衰减包络），不随包带音频文件。
+  - 可上传自定义音：`POST /voice/sounds?kind=work|done|ask&name=<原名>`（≤10MB，按魔数认 mp3/wav/ogg/
+    m4a/aac/flac/opus/webm，文件名白名单拒绝 `..`），落盘 `<DSH_HOME>/voice/sounds`；
+    `GET /voice/sounds/<file>` 只读不删；未被引用且超过 1 天的文件在启动时清扫。
+  - 独立 `AudioContext` + 独立 master gain：提示音不受停止播报影响，播报也不会被提示音打断。
+- **运行时自检**：`/voice/api/localStatus` 给模型目录、来源、是否已加载、音色数、采样率、线程数、加载耗时；
+  设置页「🔌 运行时自检」按钮手动触发（打开设置页不自动跑）。
+- **客户端播放链路可观测**：客户端把起播模式 / AudioContext 状态 / 取段 / 解码 / 结束时的 `played` 段数
+  上报 Host（`/voice/api/clientDiag`，`clientDiagDump` 读回）——"还没算完"与"浏览器没排上播放"必须能区分。
+- 新增 `scripts/verify-installed.mjs`：重启桌面端后一键自检（Host 路由活着 → Client 半进 boot 图且能取回字节
+  → 配置可读 → 本地模型与运行时状态），退出码 0/1，可接进发版检查。
+
 ### Changed
 
-- **适配 DSH 0.2.0-rc.2 的插件配置模型**：`ctx.settings.register(ns, schema)` 已被上游移除，插件改为导出
+- **适配 DSH 0.2.x 的插件配置模型**：`ctx.settings.register(ns, schema)` 已被上游移除，插件改为导出
   `Config`（schemastery schema，可热改字段标 `.volatile()`），插件体 `apply(ctx, config)` 读配置；
-  写入仍走 `ctx.settings.update('voice', patch)`（深合并写回 profile patch，volatile 字段热生效不重挂插件）。
-  迁移前插件一加载就 `TypeError`，整条朗读链不可用。
-- 依赖与基线对齐：`@deepseek-ai/schemastery` 升到 `^3.18.4`（`.volatile()` 从该版本才有）、
-  peer 依赖升到 `^0.2.0-rc.2`、`@deepseek-ai/cordis` 到 `~4.0.4`；删掉 0.2.0 里已不存在的
-  `@deepseek-ai/dsh-client-runtime`（`dsh.client.inject` 与 peer 列表）；peer 全部标 optional
-  （运行时由桌面版提供，本地 `npm install` 不再 ERESOLVE）。
+  写入仍走 `ctx.settings.update('voice', patch)`（深合并写回 profile patch，volatile 字段热生效、不重挂插件）。
+- 依赖与基线对齐：`@deepseek-ai/schemastery ^3.18.4`（`.volatile()` 从该版本才有）、peer 依赖
+  `^0.2.1-rc.3`、`@deepseek-ai/cordis ~4.0.4`；新增 `sherpa-onnx-node` 1.13.8（锁死，2.x 不再带 espeak
+  回退、词典外的词与数字会被静默跳过）；删掉 0.2.0 里已不存在的 `@deepseek-ai/dsh-client-runtime`，
+  peer 全部标 optional。
+- **转写 prompt 改为"听感优先"取舍标准**：新增总原则——听众只用耳朵、只听一遍、无法回看，凡靠眼睛对照才有
+  意义的内容（精确数值、哈希/序列号、版本号、表格逐项参数）不逐个读出，用一句定性概括代替；数字只在承载
+  结论或需据此行动时保留量级/比较。同步收紧旧规则里鼓励逐字的三处（表格概括结论、不给文件名/关键数字
+  无差别保留、标识符与哈希一律不读）。修的是"把 commit 哈希、表格字节数逐字念出来"那种怪听感。
+- **`autoSpeakCloudTts` 不再出现在界面上**：引擎是"播报引擎"三选一（系统 TTS／豆包／本地 Kokoro），
+  该字段只作为直改配置时的成本门控保留。
 - 文档/脚本按 desktop profile 与新配置位置重写（`README`、`AGENTS.md`、`docs/*`），并修正两处与上游不符的
   描述：正式 bundle 的 Client 半**没有** `host`/`styles`（那是动态沙箱专有），`turnTail` 是 list 槽位。
-- 记下两条实操事实（`docs/development.md` §2）：`link:` 的相对路径锚定 profile 目录而不是 cwd；
-  装完/升依赖后**必须重启桌面端**——Host 半会热加载，Client 半只有重启才进 boot 图。
-- CHANGELOG 记录：`voice.tts.volcengine.apiKey` 现在明文存在 profile patch（与旧 settings.yaml 同级）。
+- 记下一条实操事实（`docs/development.md` §2）：装完插件或升级依赖后**必须重启桌面端**——Host 半会随
+  Loader 热加载，Client 半只有整个应用重启才进 boot 图。
 
 ### Fixed
 
@@ -48,8 +110,8 @@
   顺延（上限 30 分钟），滞留上限 512 段、TTL 30 分钟；慢消费探针（每段按真实时长取）无 404。
 - **播放队列收紧**：`pumpQueue` 只预排未来 5 秒（原来会把整条音频一口气排到几十秒后）；
   抓取回调绑定发起时的播放轮次，停止后立刻重播不会再把上一轮的残段漏进新一轮；
-  解码结果按请求序号放行，两个请求完成顺序颠倒也不跳段；PCM 段加内容校验
-  （长度、ID3/RIFF/OggS 容器头），非音频内容按解码失败降级。`seg-decoded` 诊断补 `seq` 与 `ahead`。
+  解码结果按请求序号放行，两个请求完成顺序颠倒也不跳段；PCM 段加内容校验（长度、容器头），
+  非音频内容按解码失败降级。`seg-decoded` 诊断补 `seq` 与 `ahead`。
 - **播报时的「滋滋」电流声**：播放器原来按硬件采样率（48 kHz）建 `AudioContext`，却把 24 kHz 的音频段
   直接塞进去——`AudioBufferSourceNode` 会对每个 buffer 单独做采样率转换，在 12 kHz 以上留下约 -28 dB 的
   频谱镜像（回环录音实测；系统播放器播同一段 WAV 为 -47 dB）。现在 `ensureAudioContext(rate)` 把上下文
@@ -63,109 +125,22 @@
 - **停止播报不再丢转写缓存**：旧实现用 `!run.stopped` 兜底，用户听到几秒就点停止会让整条转写成果作废，
   下次再点又从头转写（每次一份完整输入 token）。现在转写完整即写缓存；双向流把转写生产者与 TTS 消费者解耦，
   停止时未被 TTS 消费的尾部文本也计入完整稿；中途停止不记录残缺 `segments`（重播不会漏读后文）。
-- **段落情感指令加了成本上限**（12 次/条）：旧实现每两句话调一次 LLM，长回复能叠出几十次辅助调用；
-  超过上限沿用最后一次指令，run 停止后不再发起。
-
-
-### Performance
-
-- **本地 CosyVoice3 CPU 推理提速 1.6-2.1x（RTF 4.56-6.6 → 2.2-3.0），流式首声 21.4s → 5-12s**。
-  优化前先量清时间去向：这个"0.5B"只是 AR-LLM 那一段，装机 4.2GB/四个网络、两段串联迭代生成
-  （AR-LLM 每秒音频 25 步 → flow 每 chunk 10 步 ODE × CFG 两次前向 → 声码器），
-  实测 **flow 是关键路径**（30.2s vs AR-LLM 18.7s，后者跑在并行线程里被盖住）。三条有效杠杆：
-  1. **flow ODE 步数 10 → 4**（新增 `--flow-steps`，请求体 `flow_steps` 可覆盖当次；
-     设置页新增「合成质量/速度」档：2/3/4/6/10 步）。实测 4 步 flow 19.6s、3 步 13.5s、2 步 9.1s。
-  2. **flow 估计器换官方 fp32 ONNX + onnxruntime(CPU)**（`local/onnx/flow.decoder.estimator.fp32.onnx`，
-     启动自动探测）：单次前向 **502ms → 280ms**；与 PyTorch 输出相关系数 **1.000000**（同一模型）。
-  3. **线程预算分离**（`--torch-threads` 默认 10 / `--ort-threads` 默认 6）：AR-LLM 与 flow 不再抢同一批核，
-     同线程预算下首声 12.3s → 5.0s。
-  - 被否决：AR-LLM 走 int8 动态量化（每步更快但输出时长 8.8s→12.7s，韵律被改变，整体反而更慢）；
-    以后要动 AR-LLM 应走量化 GGUF 后端（社区 PR #1872 未合并）。
-  - `/health` 新增 `perf` 字段（当前步数/估计器/线程数），排障时一眼可见实际生效的性能档。
-- 新增实测脚本 `tmp/`（不入库）：分段计时 + 配置矩阵、ORT 等价性、线程网格。
-
-### Fixed
-
-- **本地 CosyVoice 播报"点了没声音、CPU 一直满载"**（用户实测）。两个叠加的根因：
-  1. **中止不生效 → 孤儿任务占死推理锁**：客户端超时/点停止只断 HTTP，服务端是同步生成器 +
-     `list(infer(...))`，会把整段（乃至整篇）算完并一直占着推理锁。实测：**125 字的整段请求被
-     客户端 abort 后，服务端仍算满 178.6s（1,999 CPU·秒），期间后续请求被拖到 166.6s 才出声**
-     （正常 15-25s）。于是"首段超时 → 整段兜底也超时 → 留下 20 分钟孤儿 → 之后每次点击都排队超时"
-     形成死循环，用户侧就是"零声音 + CPU 满载"。
-     修法：`local-tts-server-cosyvoice.py` 的推理改为 **async 生成器**，每产出一块前后检查
-     `request.is_disconnected()`，断连即退出并释放推理锁；`finally` 里关闭生成器的 await 放进
-     `anyio.CancelScope(shield=True)`，**release 放在最后且不依赖任何 await**（取消时 finally 里的
-     await 会立刻再次抛 CancelledError，跳过 release 会泄漏锁——这个坑本身也踩了一次）。
-     修复后同一实验：中止的请求 22.6s 结束（238 CPU·秒），后续请求 10.6s 出声。
-  2. **Host 把流式丢掉了**：`synthesizeLocalSegment` 用 `Buffer.concat` 攒完整段才入队，
-     服务端 20 余秒就推了第一块，客户端却要等整段合成完（60 字 ≈ 100s）才有声音。
-     修法：改为 `synthesizeLocalSegmentChunks`（边收边吐），Host 每收到一块就按 ~0.5s 音频
-     （`采样率×2×0.5` 字节）切一段入队 → **首声从"整段时长"降到"首个分块"**。
-- 本地引擎整段兜底不再可能无限空转：孤儿任务消失后，客户端 120s 超时会真正让服务端停下。
-- 客户端播放链路可观测：新增 `/voice/api/clientDiag`（客户端上报起播模式 / AudioContext 状态 /
-  取段 / 解码 / 结束时的 `played` 段数）与 `/voice/api/clientDiagDump`（读回）。慢引擎首声几十秒，
-  "还没算完"与"浏览器没排上播放"必须能区分，不能只靠耳朵。
-
-### Changed
-
-- 本地分句流式首段目标 60 → **40 字**（`splitForStream` 的 firstChars），管线更早进入第 2 段；
-  `segmentChars` 保持 120（有了 0.5s 粒度入队后，缩短段长只会增加每段固定的首块开销，反而更慢）。
-
-### Changed
-
-- **转写 prompt 改为"听感优先"取舍标准**：新增总原则——听众只用耳朵、只听一遍、无法回看，
-  凡靠眼睛对照才有意义的内容（精确数值、哈希/序列号、版本号、表格逐项参数）不逐个读出，
-  用一句定性概括代替；数字仅在承载结论或需据此行动时保留量级/比较。
-  同步修正旧规则中鼓励逐字的三处：表格从"逐行转述数值"改为概括结论、
-  删除"保留文件名/关键数字"的无差别保留、"必要时读出关键符号名"收紧为标识符/哈希一律不读。
-  修复：英文（Kokoro）播报把 commit 哈希、表格字节数等逐字念出的怪异听感。
-
-### Added
-
-- **本地 Kokoro 分句流式播报**（`voice.tts.local.streaming`，默认开）：转写稿按句切成 ~220 字符的段
-  （`splitForStream`，纯函数、导出可单测），逐段 `POST response_format:'pcm16'` 取**裸 PCM**，
-  复用豆包那套段队列 / 客户端预取 3 段 / Web Audio lookahead 无缝播放（客户端播放链路零改动）。
-  - 首声延迟：3606 字符稿从 **40.1s（且撞 30s 超时失败）→ 2.5s**（实测本机 CPU，12 段；
-    全篇合成 ~43s 而音频总长 ~220s，合成快于播放、播放不断粮）；
-  - 超时语义从"整段死线"改为**单段停顿时限** `segmentTimeoutMs`（默认 30s）：长稿不再因总时长被掐；
-  - 失败分档：首段失败 → 自动降级整段 WAV 兜底；中途第 N 段失败 → 保留已播段 + `warn` 注明
-    "第 N/M 段起未播报" + 保留 `ttsErrorKind`（toast 仍按因分类）；第三方服务不认 `pcm16` 同样走这条降级；
-  - `streaming:false` 可退回整段合成（对照/排查用）；`segmentChars` 可调段长。
-- 服务端 `scripts/local-tts-server.py`：`response_format:'pcm16'` 现在真的返回**裸 PCM**
-  （16bit 小端 mono、`audio/pcm`）；两种形态都带 `X-Sample-Rate` 响应头（采样率唯一事实源）。
-- 新增实机探针 `scripts/local-autostart-probe.mjs --stream`：真实拉起服务 + 真实切分 + 真实合成计时，
-  复现上表数字（回归基线）。
-- **本地 TTS 服务由 dsh 自动启停**（`voice.tts.local.autoStart`，默认开）：local 合成前先探 `GET /health`——
-  已在跑则复用，没跑则经 `ctx.subprocess` 拉起 `scripts/local-tts-server.py` 并轮询到就绪（30s 上限）。
-  该子进程归 dsh 托管：插件卸载 / dsh 退出时被回收，不留孤儿、不撞端口——用户不再需要手动跑启动命令。
-  新增 `lib/local-supervisor.js`（路径推导 / 健康探测 / 拉起 / 回收 / `speakError`），
-  解释器与脚本路径按插件真实位置推导（穿透 profile junction），可用 `voice.tts.local.pythonPath` 覆盖。
-- 设置页 local 区块新增「自动启动本地服务」开关与「🔌 本地服务自检」按钮（只读探测，不拉起服务）；
-  新增 `/voice/api/localStatus`。
-- **TTS 失败文案分类**：播报失败响应新增 `ttsErrorKind`（`unavailable` / `timeout` / `http`），
-  toast 由笼统的「TTS 失败，已回退系统朗读」改为按因分类——服务不可达会提示"已尝试自动启动"并指向
-  `docs/local-tts.md`，合成超时/服务报错各有专用文案；无 kind 时退回原文案（向后兼容）。
-  豆包路径的非 2xx 与帧错误同样标 `http`。
-
-### Fixed
-
-- **`pcm16` 契约与实现不符**：此前该分支被接受却仍返回 WAV 容器（而 `docs/local-tts.md` §4 写的是裸采样），
-  现按契约返回裸 PCM；`wav` 分支行为不变。
-- i18n 键对齐：`en` 缺 `read.regenerate`，`zh` 缺 `read.stopTitle`/`read.degraded`（英文界面这两处此前显示为 key 本身）；
-  `test-client.mjs` 新增 zh/en 键集合一致性断言，防再漏配。
-- **本地 Kokoro 播报失败（HTTP 500 Permission denied）**：从 dsh 会话的 shell 启动本地 TTS 服务时，
-  进程继承文件沙箱限制；espeak 后端（phonemizer）会在系统临时目录下新建子目录并复制 `espeak-ng.dll`，
-  该写入被拒绝 → `/v1/audio/speech` 返回 500（`synthesis failed: [Errno 13] Permission denied: ...\Temp\dsh-*\tmp*\espeak-ng.dll`）
-  → 客户端 toast「TTS 失败，已回退系统朗读」，播报落到浏览器 TTS。
-  `scripts/local-tts-server.py` 现于加载模型前修正两处：临时目录不可写时改用仓库内 `local/tmp/`，
-  且用普通 `mkdir` 替代 `tempfile.mkdtemp`（mkdtemp 的 0o700 目录在沙箱下不可写）；并在启动时清掉残留的 espeak 库副本。
-  故障排查已记入 `docs/local-tts.md` §5。
-- **本地 TTS 服务的手动启动器**：新增 `scripts/start-local-tts.bat`（双击启动、退出时保留报错输出），
-  作为自动启动之外的手动/排查手段（`docs/local-tts.md` §2.2）。
+- **段落情感指令加了成本上限**（`MAX_PARAGRAPH_INSTRUCTIONS`）：旧实现每两句话调一次 LLM，长回复能叠出
+  几十次辅助调用；超过上限沿用最后一次指令，run 停止后不再发起。
+- **i18n 键对齐**：`en` 缺 `read.regenerate`，`zh` 缺 `read.stopTitle`/`read.degraded`（英文界面这两处此前
+  显示为 key 本身）；`test-client.mjs` 新增 zh/en 键集合一致性断言，防再漏配。
 
 ### Docs
 
-- README 新增"项目定位"声明（个人项目 + 双引擎动机：豆包=情感化朗读体验、本地英文 TTS=英文播报中文内容以节省认知资源）与本地 TTS 安装步骤；一致性清理：providers.md（三个 provider 表/归一铁律）、ROADMAP.md（本地 TTS 移出待办）、testing.md 管线图。
+- README 重写项目定位与本地 TTS 安装步骤（现在是设置页一键下载，不再是 PowerShell + venv + Python 服务）；
+  术语统一：**转写** = 改写成口语稿、**播报** = 交给 TTS 出声的整段流程、**朗读** = 用户点的那一下；
+  引擎名统一为「系统 TTS（浏览器语音）／豆包／本地 Kokoro」，不再拿"云"字称呼豆包。
+- `docs/architecture.md` 补设置页五层结构与分层理由、提示音信号来源，路由清单补 `/voice/sounds`；
+  `docs/providers.md` 把"本地供应商 = 本地 HTTP 服务"改成"优先进程内原生模块，没有绑定才退回 HTTP"；
+  `docs/testing.md` 管线图换成进程内版本、补 T21–T24 与提示音断言；
+  `docs/ROADMAP.md` 已落地项移入"已完成"，只留未落地的规划。
+- README 分工：根 README 保留完整叙事（定位/安装/成本与隐私），`packages/dsh-plugin-voice/README.md`
+  收缩成 npm 页——安装命令、配置位置、三行功能、指向 `docs/`。
 
 ## [0.3.1] - 2026-09-06
 

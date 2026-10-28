@@ -1,33 +1,41 @@
 # dsh-plugin-voice
 
-给 DeepSeek Harness Web（dsh web）的语音朗读插件：每轮 DeepSeek 输出结束后，先把输出做
-**口语化转写**（代码/表格/Markdown 等改写为适合朗读的口语文稿），再通过 TTS 播报。
+给 DeepSeek Harness Web（dsh web）加"输出朗读"：每轮回答结束后，先把回答改写成口语稿（**转写**），
+再交给 TTS 出声（**播报**）；关掉自动播报，每条助手消息上仍可手动点"**朗读**"。
 
 ## 功能
-- 自动播报开关：开 = 每轮结束自动"转写 + 播报"；关 = 不自动。
-- 每条助手消息的"朗读"按钮：手动转写并播报该条输出；已完整朗读过的消息旁有 **↻ 重新生成**按钮
-  （`regen`：跳过转写缓存，用当前配置重新转写+合成，覆盖旧条目）。
-- TTS 可配置（三选一）：默认浏览器 `speechSynthesis`；豆包 TTS（volcengine：双向流 WebSocket 默认 +
-  HTTP 单向兜底，8 种方言统一走 vv + `explicit_dialect`，音色↔语种双向自适应——改音色自动纠语种、
-  改语种自动纠音色，不锁定音色下拉）；本地 Kokoro-82M（local：免费离线英文播报，中文回复先转写为
-  英文口语再朗读；**分句流式**——按句切段逐段合成，长稿首声约 2.5 秒（`voice.tts.local.streaming`）；
-  **服务由 dsh 自动启停**——合成前探 `/health`，没跑就经 `ctx.subprocess` 拉起，dsh 退出即回收，
-  `voice.tts.local.autoStart` 可关；部署见 `../../docs/local-tts.md`）。
-- 播报失败按因提示：服务不可达 / 合成超时 / 服务报错各有 toast 文案（Host 返回 `ttsErrorKind`）。
-- 设置持久化在目标 profile 的 `cordis.patch.yml`（`voice` 条目的 `config`）。
 
-## 安装（开发期）
+- **自动播报开关**：开 = 每轮结束自动"转写 + 播报"；关 = 不自动，只留每条消息上的"朗读"按钮。
+- **三个播报引擎**：系统 TTS（浏览器语音，默认、免费离线）／豆包（付费，方言与多音色）／
+  本地 Kokoro（免费离线，中英都读，合成在 dsh 进程内）。
+- **提示音**：工作音／完成音／提问音，默认关闭，可上传自定义音；与朗读互不影响。
+- **失败按因提示**：模型未安装／模型加载失败／合成失败／合成超时／服务报错各有自己的文案。
+
+## 安装
+
+需要 DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本；从源码装包还要 Node.js 22+。
+
 ```powershell
-# 在仓库根目录执行（相对路径锚定到 cwd）；桌面端自带 CLI：
+# 在仓库根目录执行（桌面端自带 CLI，版本随桌面端）
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+
+# 1) 先装插件自身依赖（link: 只是链接，不会代装依赖）
+cd packages/dsh-plugin-voice; npm install; cd ../..
+
+# 2) 装进 desktop profile
 & $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
-# 首次或改动依赖后，在插件目录安装一次依赖（link 不会代装插件自身依赖）：
-cd packages/dsh-plugin-voice; npm install
-# 然后重启桌面端
 ```
 
-## 配置
-见 `../docs/pipeline.md` §6（配置字段说明；DSH 0.2.0 起为插件 `Config` schema + profile patch）。
+重启桌面端，设置页里就有"语音播报"。`link:` 的相对路径由 CLI 自己解析，锚定到哪个目录以 CLI 的实际行为为准；
+解析失败（`cannot resolve profile bundle`）时改成绝对路径 `link:<仓库绝对路径>\packages\dsh-plugin-voice`。
 
-## 开发
-见 `../docs/development.md`（开发循环、创造模式试验、常见坑）。
+## 配置
+
+配置存在目标 profile 的 `cordis.patch.yml` 里 `voice` 条目的 `config:` 下（设置页可视化编辑，保存即写回该文件）。
+字段含义见[管线与配置 schema](https://github.com/junarch/voice_for_dsh/blob/main/docs/pipeline.md)；
+本地模型的安装与排障见[本地 TTS](https://github.com/junarch/voice_for_dsh/blob/main/docs/local-tts.md)；
+开发循环见[开发手册](https://github.com/junarch/voice_for_dsh/blob/main/docs/development.md)。
+
+## 协议
+
+[MIT](https://github.com/junarch/voice_for_dsh/blob/main/LICENSE)

@@ -54,11 +54,11 @@ export function pitchOf(v) {
 }
 
 /**
- * 归一化 TTS 引擎：'volcengine'=豆包云（付费），'local'=本地 Kokoro v1.1（免费，
+ * 归一化 TTS 引擎：'volcengine'=豆包（付费），'local'=本地 Kokoro v1.1（免费，
  * 进程内 sherpa-onnx，中英跟随原文）；已退役的 'local-cosyvoice' 归一到 'local'
  * （旧配置的意图是"用本地免费引擎"，不是"用系统朗读"）；其余（含旧值
  * openai-compatible）一律按 'browser' 处理——容忍存量配置里的已废弃值，
- * 避免把未知 provider 当云 TTS。
+ * 避免把未知 provider 当豆包。
  */
 export function ttsProviderOf(cfg) {
   const p = cfg && cfg.tts && cfg.tts.provider

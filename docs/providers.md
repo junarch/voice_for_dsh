@@ -12,7 +12,7 @@
 | `local` | 本地 Kokoro v1.1（中英，进程内 sherpa-onnx，无服务/无端口） | 免费、离线 | 无 | Host 进程内合成 → `/voice/audio/<id>` |
 
 **归一铁律**：provider 语义统一由 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）归一——
-`volcengine`=付费云 TTS（受成本门控）、`local`=本地免费 TTS、其余任何值（含旧值
+`volcengine`=豆包（付费，受成本门控）、`local`=本地免费 TTS、其余任何值（含旧值
 `openai-compatible`）一律归 `browser`。新供应商**必须**先在 `ttsProviderOf` 登记，
 否则永远不会被调用（这是防"未知 provider 悄悄烧钱"的设计）。
 
@@ -44,7 +44,7 @@
 1. **归一**（`lib/voice-compat.js`）：`ttsProviderOf(cfg)` 里识别新值 → 返回新 provider 名；
    需要的话在 `normalizeVoiceConfig` 加字段归一。
 2. **Host 适配层**（`lib/index.js`）：实现该 provider 的"合成一段音频"能力，例如：
-   - 单向：仿 `synthesizeVolcengine`（fetch + 解析），在 `transcribe()` 的云 TTS 分支按 provider 分发；
+   - 单向：仿 `synthesizeVolcengine`（fetch + 解析），在 `transcribe()` 的豆包分支按 provider 分发；
    - 流式（可选）：仿 `streamSpeak` + `lib/volcengine-ws.js`，把音频段经 `audioStore` 一次性路由回传。
    - 配置 schema：在 `VoiceSettingsSchema` 加子对象（**必须带默认值**，遵循配置演进纪律 §6.1）。
 3. **Client 播放端**（`lib/client.js`）：`playResult` 的 `mode`/`audioUrl` 分支已通用（`stream` / `audioUrl` /
@@ -63,17 +63,24 @@
 已落地：`local` provider（Kokoro v1.1，中英，**进程内** sherpa-onnx 合成），实现与部署见
 `docs/local-tts.md`、`docs/pipeline.md` §4.3。接入下一个本地 TTS 的特别约定：
 
-- **隐私卖点**：内容不出本机（可写进 README）。它通常也是一个 HTTP/WS 服务，实现方式与云 provider
-  相同（第 3 节），只是 endpoint 指向 `localhost`（OpenAI 兼容 `/v1/audio/speech` 子集可直换 baseUrl 复用）。
+- **隐私卖点**：内容不出本机（可写进 README）。接入时**优先进程内原生模块**（像 local 这样：
+  N-API 包直接在 Host 进程里加载，不起子进程、不占端口、不需要额外运行时）；只有没有可用绑定、
+  或模型只能通过 HTTP 暴露时，才退回本地 HTTP 服务——那种做法与云 provider 相同（第 3 节），
+  只是 endpoint 指向 `localhost`（OpenAI 兼容 `/v1/audio/speech` 子集可直换 baseUrl 复用），
+  代价是要管端口、进程生命周期与"服务没起来"这类失败。
 - **鉴权**：本地一般无需 key；若本地网关要 key，走 `voice.tts.<provider>.apiKey`（存在目标 profile 的
   `cordis.patch.yml`，明文，勿提交）。
-- **缓存**：本地合成零边际成本，v0.3.0 起 local 不做服务端缓存语义；若新模型合成慢需缓存，
+- **缓存**：本地合成零边际成本，local 不做服务端缓存语义；若新模型合成慢需缓存，
   应做**本机音频文件缓存**（`$DSH_HOME\voice-audio-cache/`），这是与云 provider 差异最大的点，接入时单独设计。
-- **延迟/流式**：本地模型若支持流式/增量，优先走 `streamSpeak` 双向流路径；不支持就单向整段（local 现状）。
+- **两种"流式"不要混**：豆包走的是 **WS 双向流**（Host 与云端建 WebSocket，边送文本边收音频帧，靠 `streamSpeak`）；
+  本地走的是**进程内分块**（`onProgress` 每算出一块就入队，按 ~0.5s 音频切段，没有网络、没有协议帧）。
+  新供应商支持哪种就走哪条：有双向流协议 → 仿 `volcengine-ws.js`；只能整段返回 → 单向整段；
+  能吐中间结果 → 仿 `local-runtime.js` 的分块回调。
 - **新增 schema 时遵循配置演进纪律**：只补默认、绝不覆盖用户配置；新字段带默认值。
 
 ## 5. 明确不做什么
 
-- **不引第三方 TTS 适配库**（保持零依赖：现有实现是手写适配层，理由见 `docs/architecture.md` §7）。
+- **不引第三方 TTS 适配库**（适配层手写，理由见 `docs/architecture.md` §7）。本地引擎只依赖它自己的
+  原生绑定（`sherpa-onnx-node`），不引"统一 TTS SDK"这类中间层。
 - **不发已被淘汰的参数**（如豆包 1.0 的 `emotion`/`emotion_scale`）。
 - **不破坏不变式**（`docs/pipeline.md` §7）：text 不含 `[#`、重播零 LLM、缓存完整才写、regen 绝不下发缓存。

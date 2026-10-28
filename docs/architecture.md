@@ -5,12 +5,12 @@
 
 ## 1. 版本与环境（本机）
 
-- 目标运行环境：**DSH 桌面版 0.2.0-rc.2**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
+- 目标运行环境：**DSH 桌面版 0.2.1-rc.3**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
   需要 inspect 上游实现时用 `node scripts/dsh-inspect-extract.mjs <输出目录> <包名…>` 只读导出
   `dsh/node_modules/@deepseek-ai/*`（不要改安装目录、不要直接读 asar 路径）。
 - `DSH_HOME`（默认 `~/.dsh`）；桌面 profile：`$DSH_HOME\profiles\desktop`；Web 界面
-  `http://127.0.0.1:19387`。桌面端自带的 CLI：`<安装目录>\resources\runtime\cli\bin\dsh.cmd`
-  （跑同一份 0.2.0-rc.2，profile 参数用 `--profile desktop`）。
+  `http://127.0.0.1:<端口>`（端口以启动日志/地址栏为准）。桌面端自带的 CLI：`<安装目录>\resources\runtime\cli\bin\dsh.cmd`
+  （跑同一份 0.2.1-rc.3，profile 参数用 `--profile desktop`）。
 - 用户设置：profile 的 `cordis.patch.yml`（用户 patch 层，含插件 config）；旧的
   `$DSH_HOME\settings.yaml` 在 0.2.0 首次启动被改名成 `settings.yaml.imported`，不再被读取。
 
@@ -27,8 +27,14 @@
 - 包导出 `./client`（浏览器半）+ `.`（Host 半）；`dsh.client` 声明 `{ platform: 'web', inject: [...] }`。
 - client-modules 扫描声明 `dsh.client` 的包，把 `client.js` 经 `/plugins/<id>/client.js` 注入
   `window.__DSH_BOOT__`，浏览器端用 `window.__ModuleLoader__.load({ id, factory })` 注册。
-- 两半通信：本插件走 HTTP（`/voice/api/*` JSON 接口 + `/voice/audio/<id>` 音频一次性路由，Host 侧由
-  `ctx.webServer` 提供）；`harness.handle`/`host.call` 是创造模式动态插件的包内 RPC，正式 bundle 用不到。
+- 两半通信：本插件走 HTTP（`/voice/api/*` JSON 接口 + `/voice/audio/<id>` 音频一次性路由 + `/voice/sounds`
+  提示音素材，Host 侧由 `ctx.webServer` 提供）。三条路由的分工：
+  - `/voice/api/<method>`：POST JSON 的 RPC（`getConfig`/`setConfig`/`meta`/`speak`/`streamNext`/`stop`/
+    `localStatus`/`clientDiag`/`clientDiagDump` 等）；
+  - `/voice/audio/<id>`：**GET**，合成音频一次性回传（取一次即删）；
+  - `/voice/sounds` 与 `/voice/sounds/<file>`：**POST** 上传自定义提示音（`?kind=work|done|ask&name=<原名>`，
+    `application/octet-stream`）、**GET** 取回（只读不删，可反复取）。
+  `harness.handle`/`host.call` 是创造模式动态插件的包内 RPC，正式 bundle 用不到。
 
 ### Client 半（正式静态 bundle）
 factory 只拿到 `require`（可解析 `react` 等少数共享模块），`ctx` 由 `apply(ctx)` 传入；**没有** `host`/`styles`
@@ -50,7 +56,7 @@ factory 只拿到 `require`（可解析 `react` 等少数共享模块），`ctx`
 - `ctx.settings`（`SettingsProvider`）：插件配置由插件自己导出 `Config` schema 声明，条目 config 存在
   profile 的 `cordis.patch.yml`；`update(ns, patch)` 深合并写入（`ns` = profile patch 条目 id，本插件是 `voice`），
   标了 `.volatile()` 的字段热生效、不重挂载插件。`register(ns, schema)` 在 0.2.0 已移除。
-- `ctx.webServer`：`register({kind:'exact'|'prefix', path, handler})` 等（TTS 音频一次性路由用）。
+- `ctx.webServer`：`register({kind:'exact'|'prefix', path, handler})` 等（合成音频的一次性路由与提示音素材路由用）。
 
 ## 5. Client 关键槽位
 
@@ -74,11 +80,24 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
 `getConfig`/`setConfig` RPC 读写（Host 归一后返回，UI 显示 = 实际发声）；`setConfig` 只提交改动过的字段
 （部分 patch），因为秘密字段（`tts.volcengine.apiKey`）不进浏览器，整块回写会把它抹掉。
 
+### 设置页的五层结构（渐进展开）
+
+设置页（`settings.section id=voice`）按"常用的在上、少用的在下"分五层。除第一层外默认收起；收起时层头
+显示当前值摘要，主开关（转写、提示音）放在层头——不展开也能开关，不用进去找。
+
+| 层 | 标题 | 层里放什么 | 收起时层头摘要 |
+|---|---|---|---|
+| L1 | 常用 | 播报引擎三选一、自动播报、当前引擎的一行状态（本地没装时给「去安装」入口） | —（常驻展开） |
+| L2 | 当前引擎的声音 | 按引擎切换渲染：系统 TTS = 语速/音调/语音名；豆包 = 鉴权（网关、apiKey、resourceId）+ 发音（音色、语种方言、语速、音调、音量）；本地 Kokoro = 音色 sid / 语速 /「🔌 运行时自检」，模型安装行常驻层头 | `系统 TTS · 语速 1.00x` / `本地 Kokoro · 音色 48 · 语速 1.00x` / `豆包 · Vivi` |
+| L3 | 转写 | 层头开关 + provider / model / temperature / 风格预设 / prompt | `开：先改写成口语稿` |
+| L4 | 高级 | 本地合成的线程数、分句流式开关、模型目录 | `分句=开 · 线程=4 · 目录=自动` |
+| L5 | 提示音 | 层头总开关 + 总音量 + 工作/完成/提问三行（来源 + 上传） | `开 · 2/3 种 · 音量 30%` |
+
 ## 7. 设计决策（为什么这么搭）
 
 - 转写在 Host 用 `ctx.llm`（独立辅助调用、不入主会话历史）：复用已配 provider/凭据、不暴露 key、prompt 可控。
-- 默认 TTS = 浏览器 `speechSynthesis`：零配置、免费、离线兜底。
-- 云 TTS 走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
+- 默认 TTS = 浏览器 `speechSynthesis`（设置页里的「系统 TTS（浏览器语音）」）：零配置、免费、离线兜底。
+- 豆包走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；创造模式动态沙箱禁 `fetch`。
 - 成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - TTS 用自研适配层（不引第三方库）：无现成 JS 库支持火山 v3 接口；HTTP 单向协议极简（~150 行零依赖）；
@@ -87,6 +106,14 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
   选豆包 = 用户显式为付费 API 买单并写入 `autoSpeakCloudTts=true`），
   `autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控；local 免费不受门控。
 - UI 只占 additive 小槽位，不碰 `root`/`conversation.session` 等高风险整槽位。
+- **设置页分层（L1–L5）而不是一屏平铺**：用户平时只动两件事——换引擎、开自动播报；其余是"配一次就忘"的
+  参数（豆包鉴权、转写路由、本地线程数）。平铺四十来个字段，每次进来都要从头扫一遍才能确认"还是原来那样"。
+  所以：常用项常驻第一层；其余四层收起，层头带当前值摘要（不展开也知道现在是什么）；转写/提示音的主开关
+  放层头（收起也能开关）；第二层只渲染**当前引擎**的字段，三套配置互不干扰。
+- **提示音的信号只来自客户端**：`uiSession.sessionStatus` 快照（`running` / `pendingInteraction` /
+  `completionUnread`）对账，不订阅 `turn/end`、不经过 Host 管线。理由：提示音要在**播报关闭、没读过任何
+  一句话**时照常工作，也要覆盖"子代理在跑""DSH 弹提问等你答"这些与朗读无关的状态；挂在播报链上就会
+  互相牵连。代价是必须在客户端过滤掉子代理会话（否则子代理每跑一轮都响）。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
 - 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，
   其余回退齿轮（源码硬编码，无扩展点）；`settings.section` 注册仅 id/order/label，不支持自定义 icon。

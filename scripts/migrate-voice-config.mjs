@@ -5,7 +5,7 @@
  *
  * 为什么需要：0.2.0 首次启动会把 settings.yaml 改名成 settings.yaml.imported，
  * 里面的 voice 节不再被任何插件读取——不搬就等于用户配置静默丢失
- * （转写路由、音色、语速、云 TTS 开关、apiKey 全都会掉回默认值）。
+ * （转写路由、音色、语速、豆包开关、apiKey 全都会掉回默认值）。
  *
  * 行为：
  *  - 读 legacy YAML 的 voice 节，原样作为 voice 条目的 config 追加到 profile patch 末尾

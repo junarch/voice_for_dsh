@@ -19,7 +19,8 @@ settings.yaml
 .env.*
 !.env.example
 .dsh/
-# 本地 TTS 货物：venv 与下载的模型文件（ Kokoro-82M v1.0，见 docs/local-tts.md），不入库
+# 旧版本地 TTS 的残留（Python venv、旧引擎的源码与权重、旧模型），新版不再读写：
+# 模型是 v1.1、装在 <DSH_HOME>/voice/models（见 docs/local-tts.md），仓库只留下载脚本与文档
 local/
 __pycache__/
 # 编辑器

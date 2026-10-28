@@ -382,7 +382,7 @@ function chimeConfigDefaults() {
  *  profile patch 里的 apiKey 删掉（docs/pipeline.md §6.0）。 */
 const Config = z.object({
   autoSpeak: z.boolean().default(false).volatile(),
-  autoSpeakCloudTts: z.boolean().default(false).volatile(), // 云TTS 开关（设置页"云TTS"复选框）：与 tts.provider 联动（勾选→volcengine 并写入 true）；false=Host 成本门控（自动播报不碰云 TTS）
+  autoSpeakCloudTts: z.boolean().default(false).volatile(), // 成本门控（设置页不再单独显示一行）：选豆包时联动写入 true；false=自动播报不碰豆包（付费），手动按钮与 local 不受限
   language: z.string().default('auto').volatile(), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
   provider: z.string().default('').volatile(), // 转写 LLM provider（空 = 启动时发现并自愈写回可用路由）
   model: z.string().default('deepseek-v4-flash').volatile(),
@@ -617,7 +617,7 @@ function apply(ctx, config) {
       try { cfg = readConfig() } catch { return }
       if (!cfg.autoSpeak) return
       if (kind !== 'completed' && kind !== 'max-tokens') return
-      // 云 TTS 成本门控：未显式允许时自动播报不碰豆包（付费）；local 本地合成免费，不受限
+      // 成本门控：未显式允许时自动播报不碰豆包（付费）；local 本地合成免费，不受限
       if (ttsProviderOf(cfg) === 'volcengine' && !cfg.autoSpeakCloudTts) {
         console.log('[voice] auto-speak skipped: cloud tts gated (autoSpeakCloudTts=false)')
         return
