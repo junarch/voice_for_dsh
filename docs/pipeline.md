@@ -209,9 +209,12 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
   而是让转写稿用该语言输出（与豆包 `explicit_language` 等价的出口，落在文本上）；`auto`=跟随原文。
   转写关闭（直读原文）时不翻译，仍按原文播报，界面已写明。
 - **试听样例**：语种设置优先；`auto` 时按音色的中/英归属选样例（`LOCAL_VOICES[].lang`），自定义 sid 用中文样例。
-- **停顿（`tts.local.pauseStyle`）**：`tight`（默认）在送合成前去掉中文句读，`natural` 保留原标点。
-  实测（`scripts/local-tts-rhythm-probe.mjs`）：同一段中文 4.7 → 5.9 字/秒、最长停顿 430ms → 270ms。
-  `maxNumSentences` 对 Kokoro 无效（运行时日志会写 ignored），`silenceScale` 实测无效且反向，都不要用。
+- **停顿（不提供选项）**：中文标点本身就是 Kokoro 的停顿来源（约 430ms）；去掉标点会变成"几乎没有停顿"，
+  实测语速 4.7 → 5.9 字/秒、听感更差，所以标点一律保留。真正影响听感的是**切段位置**：
+  `splitForStream` 先找句末，找不到就退到最后一个逗号/顿号，再退空白，最后才硬切——
+  硬切出来的段像"话说一半"，是"断句奇怪"的主因。
+  `maxNumSentences` 对 Kokoro 无效（运行时会打印 ignored）；`silenceScale` 实测无效且反向；
+  `dict_dir` 在 sherpa C++ 里注册说明是 "Not used."，传了也没用——都不用。
 - **音色**：模型只暴露数字 `sid`（0–102，无官方名字表）；设置页精选 9 个 + 「手填 sid」。
   超范围明确报错，不静默改音色。**模型只支持中英两种语言、没有方言**（sherpa 文档：Chinese + English, 103 speakers），
   要方言请用豆包。

@@ -27,6 +27,7 @@ window.__ModuleLoader__.load({
       "auto.title": "打开后，每轮回答结束自动转写并朗读",
       "badge.speaking": "朗读中…", "badge.done": "已朗读 ✓", "badge.replay": "点击重播此轮播报",
       "settings.title": "语音播报",
+      "settings.dshCompat": "适配 DSH",
       "settings.intro": "每轮回答结束后，先把回答改写成口语稿再念出来。设置存在本机 DSH 的 profile 配置里（cordis.patch.yml），保存后立刻生效。",
       "settings.save": "保存", "settings.saved": "✅ 已保存，立刻生效",
       "settings.dirty": "● 有未保存的改动（约半秒后自动写入）", "settings.saving": "正在保存…",
@@ -36,7 +37,7 @@ window.__ModuleLoader__.load({
       "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
       "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（豆包）…", "settings.previewAudio": "▶ 试听中…",
-      "layer.l1.title": "常用", "layer.l2.title": "当前引擎的声音", "layer.l3.title": "转写", "layer.l4.title": "高级",
+      "layer.l1.title": "常用", "layer.l2.title": "当前引擎声音设置", "layer.l3.title": "转写", "layer.l4.title": "高级",
       "layer.l2.summary.browser": "系统 TTS · 语速 {rate}",
       "layer.l2.summary.local": "本地 Kokoro · 音色 {sid} · 语速 {rate}",
       "layer.l2.summary.volcengine": "豆包 · {speaker}",
@@ -64,11 +65,9 @@ window.__ModuleLoader__.load({
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
       "engine.browser": "系统 TTS（浏览器语音·免费）", "engine.volcengine": "豆包（付费）", "engine.local": "本地 Kokoro（中英·免费）",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
-      "row.localLanguage": "播报语种", "row.localPause": "停顿风格",
+      "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
       "local.languageHint": " 选英文时会把口语稿改写成英文再念（转写关闭时不翻译，仍按原文）",
-      "local.pause.tight": "紧凑（推荐）", "local.pause.natural": "自然（保留句读）",
-      "local.pauseHint": " 紧凑=去掉中文句读：实测语速 4.7→5.9 字/秒、最长停顿 430→270ms",
       "local.dialectHint": "模型只有中英两种语言、没有方言；「东北口音」这类感觉来自音色本身，换个 sid 试听即可；要方言请用豆包。",
       "settings.retrySave": "重试保存",
       "row.localNumThreads": "合成线程数",
@@ -155,6 +154,7 @@ window.__ModuleLoader__.load({
       "auto.title": "When on, each finished turn is transcribed and read aloud",
       "badge.speaking": "Reading…", "badge.done": "Read ✓", "badge.replay": "Click to replay this turn",
       "settings.title": "Voice Readout",
+      "settings.dshCompat": "for DSH",
       "settings.intro": "Each finished turn is rewritten into spoken style, then read aloud. Settings live in this machine's DSH profile config (cordis.patch.yml) and take effect on save.",
       "settings.save": "Save", "settings.saved": "✅ Saved; takes effect now",
       "settings.dirty": "● Unsaved changes (auto-saving in a moment)", "settings.saving": "Saving…",
@@ -164,7 +164,7 @@ window.__ModuleLoader__.load({
       "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
       "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (Doubao)…", "settings.previewAudio": "▶ Previewing…",
-      "layer.l1.title": "Basics", "layer.l2.title": "Current engine voice", "layer.l3.title": "Transcription", "layer.l4.title": "Advanced",
+      "layer.l1.title": "Basics", "layer.l2.title": "Current engine settings", "layer.l3.title": "Transcription", "layer.l4.title": "Advanced",
       "layer.l2.summary.browser": "System TTS · rate {rate}",
       "layer.l2.summary.local": "Local Kokoro · voice {sid} · rate {rate}",
       "layer.l2.summary.volcengine": "Doubao · {speaker}",
@@ -192,11 +192,9 @@ window.__ModuleLoader__.load({
       "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
       "engine.browser": "System TTS (browser voice · free)", "engine.volcengine": "Doubao (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
-      "row.localLanguage": "Spoken language", "row.localPause": "Pause style",
+      "row.localLanguage": "Spoken language",
       "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
       "local.languageHint": " English rewrites the spoken script into English first (with transcription off, the source text is read as-is)",
-      "local.pause.tight": "Tight (recommended)", "local.pause.natural": "Natural (keep punctuation)",
-      "local.pauseHint": " Tight drops Chinese punctuation before synthesis: 4.7 → 5.9 chars/s, longest pause 430 → 270ms in our probe",
       "local.dialectHint": "The model supports Chinese and English only — no dialects. A regional accent you hear comes from the voice itself; try another sid. For dialects, use Doubao.",
       "settings.retrySave": "Retry save",
       "row.localNumThreads": "Synthesis threads",
@@ -2266,6 +2264,10 @@ window.__ModuleLoader__.load({
 
       return React.createElement("div", { className: "dsh-voice-settings" },
         React.createElement("h2", null, t("settings.title")),
+        // 插件版本与适配的 DSH 版本（截图里红框那一行）：排错时第一眼要知道跑的是哪一版
+        React.createElement("p", { className: "dsh-voice-dim dsh-voice-version" },
+          "voice_for_dsh v" + ((m && m.pluginVersion) || "?")
+          + " · " + t("settings.dshCompat") + " " + ((m && m.dshCompat) || "?")),
         React.createElement("p", { className: "dsh-voice-dim" }, t("settings.intro")),
 
         // —— L1 常用：首屏只留引擎与自动播报，外加至多一行引擎/模型状态 ——
@@ -2288,15 +2290,18 @@ window.__ModuleLoader__.load({
               statusCta ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => setL2Open(true) }, t("cta.install")) : null) : null,
             statusWarn ? React.createElement("p", { className: "dsh-voice-warn" }, statusWarn) : null)),
 
-        // —— L2 当前引擎的声音：默认收起，切引擎自动展开；本地安装行常驻层头（收起也不卸载轮询）——
+        // —— L2 当前引擎声音设置：默认收起，切引擎自动展开；本地模型安装/删除信息在层内顶部 ——
         React.createElement(Collapse, {
           id: "l2",
           title: t("layer.l2.title"),
           summary: l2Summary,
           open: l2Open,
           onToggle: setL2Open,
-          extra: ttsEngine === "local" ? React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus }) : null,
         },
+
+            // 本地模型安装信息收进层内（不再占层头）：下载/删除都在这一块
+            ttsEngine === "local" ? React.createElement("div", { className: "dsh-voice-sub" },
+              React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus })) : null,
 
             // —— 系统 TTS（免费）——
             ttsEngine === "browser" ? React.createElement(React.Fragment, null,
@@ -2336,11 +2341,6 @@ window.__ModuleLoader__.load({
                   React.createElement("option", { value: "zh" }, t("local.language.zh")),
                   React.createElement("option", { value: "en" }, t("local.language.en"))),
                 React.createElement("span", { className: "dsh-voice-dim" }, t("local.languageHint"))),
-              React.createElement(Row, { label: t("row.localPause") },
-                React.createElement(SelectInput, { value: cfg.tts.local.pauseStyle || "tight", onChange: (v) => setField("tts.local.pauseStyle", v) },
-                  React.createElement("option", { value: "tight" }, t("local.pause.tight")),
-                  React.createElement("option", { value: "natural" }, t("local.pause.natural"))),
-                React.createElement("span", { className: "dsh-voice-dim" }, t("local.pauseHint"))),
               React.createElement("p", { className: "dsh-voice-dim" }, t("local.dialectHint")),
               (localStatus && localStatus.installed === false ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.notInstalled")) : null),
               React.createElement(Row, { label: t("settings.localCheck") },

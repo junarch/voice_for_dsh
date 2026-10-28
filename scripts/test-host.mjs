@@ -1270,6 +1270,9 @@ check('isLocalProvider：local 与旧值 local-cosyvoice 都算本地（免费�
 const meta20 = await rpc('meta')
 check('meta 带本地音色清单（sid 48 在列）', Array.isArray(meta20.kokoroVoices) && meta20.kokoroVoices.some((v) => v.id === '48'), meta20.kokoroVoices && meta20.kokoroVoices.length)
 check('meta 不再有 cosyvoiceVoices（CosyVoice 已退役）', meta20.cosyvoiceVoices === undefined)
+check('meta 带插件版本与适配的 DSH 版本（设置页标题下方展示）',
+  /^\d+\.\d+\.\d+/.test(String(meta20.pluginVersion || '')) && /^\d+\.\d+\.\d+/.test(String(meta20.dshCompat || '')),
+  { pluginVersion: meta20.pluginVersion, dshCompat: meta20.dshCompat })
 
 // —— Float32 → Int16 纯函数（客户端只认 16bit 小端裸 PCM）——
 const conv = float32ToInt16Pcm(new Float32Array([0, 1, -1, 0.5, -0.5, 1.5, -2]))
@@ -1395,17 +1398,13 @@ engineState.calls = []
 await rpc('preview', { cfg: (await rpc('getConfig')).config })
 check('本地语言=zh：中文样例', engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('你好'), engineState.calls[0] && engineState.calls[0].text)
 
-// 停顿风格：tight 去掉中文句读；natural 保留
-await rpc('setConfig', localCfg({ pauseStyle: 'tight' }))
-engineState.calls = []
-await rpc('preview')
-check('pauseStyle=tight：送合成文本里没有中文句读',
-  engineState.calls.length === 1 && !/[，。、；：！？]/.test(String(engineState.calls[0].text)), engineState.calls[0] && engineState.calls[0].text)
-await rpc('setConfig', localCfg({ pauseStyle: 'natural' }))
-engineState.calls = []
-await rpc('preview')
-check('pauseStyle=natural：保留中文句读',
-  engineState.calls.length === 1 && /[，。、；：！？]/.test(String(engineState.calls[0].text)), engineState.calls[0] && engineState.calls[0].text)
+// 停顿：不再有 pauseStyle 选项；分句切分遇到长句时在逗号处断（不在词中间硬切）
+await rpc('setConfig', localCfg())
+const longComma = '这是一段没有任何句号的长文本，'.repeat(30) + '最后结束'
+const segsLong = splitForStream(longComma, 220)
+check('长句无句号：切点落在逗号上（不硬切在词中间）',
+  segsLong.length > 1 && segsLong.slice(0, -1).every((s) => /[，,、：:]$/.test(s)), segsLong.map((s) => s.slice(-3)))
+check('切分可无损拼回（只允许丢段间空白）', segsLong.join('').replace(/\s/g, '') === longComma.replace(/\s/g, ''))
 
 // 语种进的是转写 prompt（本地模型按文稿语言发音）
 sessionEvents.push(msgEvent('m30', 40, '本地英文播报测试'))

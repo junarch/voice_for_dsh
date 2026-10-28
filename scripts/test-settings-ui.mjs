@@ -170,6 +170,8 @@ globalThis.fetch = async (url, init) => {
   if (target.indexOf('/voice/api/meta') >= 0) {
     return jsonResponse({
       ok: true,
+      pluginVersion: '9.9.9',
+      dshCompat: '0.2.1-rc.3',
       voices: [{ id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', languages: ['zh', 'en', 'auto', 'yue'] }],
       kokoroVoices: [{ id: 48, name: 'Kokoro 48' }],
       languages: [{ id: 'zh', label: '普通话' }, { id: 'en', label: 'English' }, { id: 'auto', label: '自动' }, { id: 'yue', label: '粤语', dialect: true, dialectId: 'yue' }],
@@ -244,7 +246,7 @@ let tree = await mount(CaseBrowser)
 check('系统 TTS：页面渲染完成', allText(tree).includes('语音播报'), allText(tree).slice(0, 60))
 check('系统 TTS：没有「高级」层', !allText(tree).includes('高级'), allText(tree).slice(0, 120))
 check('系统 TTS：没有合成线程数', !allText(tree).includes('合成线程数'))
-tree = await expand(tree, '当前引擎的声音')
+tree = await expand(tree, '当前引擎声音设置')
 check('系统 TTS：展开声音层后仍没有分句流式播报', !allText(tree).includes('分句流式播报'))
 check('系统 TTS：展开声音层后仍没有模型目录', !allText(tree).includes('模型目录'))
 check('系统 TTS：语音名有"名字对不上就按默认音播"的说明', allText(tree).includes('名字对不上系统里的语音'), allText(tree).slice(0, 200))
@@ -257,7 +259,7 @@ tree = await mount(CaseVolcNoKey, (c) => {
   c.autoSpeakCloudTts = true
 })
 check('豆包：没有「高级」层', !allText(tree).includes('高级'))
-tree = await expand(tree, '当前引擎的声音')
+tree = await expand(tree, '当前引擎声音设置')
 check('豆包：展开声音层后仍无合成线程数 / 分句流式 / 模型目录',
   !allText(tree).includes('合成线程数') && !allText(tree).includes('分句流式播报') && !allText(tree).includes('模型目录'))
 check('豆包缺 Key + 自动播报：状态行说清会先失败再回退浏览器语音',
@@ -282,21 +284,21 @@ tree = await mount(CaseVolcCustom, (c) => {
   c.tts.volcengine.httpUrl = 'https://relay.example.com/tts'
   c.tts.volcengine.wsUrl = ''
 })
-tree = await expand(tree, '当前引擎的声音')
+tree = await expand(tree, '当前引擎声音设置')
 check('自定义网关缺 wsUrl：出现"整段合成完再播"的说明', allText(tree).includes('整段合成完再播'), allText(tree).slice(0, 240))
 
 // 4b) 配了 wsUrl 就不该再报（同一包装组件实例，改配置后重新拉一遍）
 config.tts.volcengine.wsUrl = 'wss://relay.example.com/tts'
 rootEl = reactStub.createElement(function CaseVolcCustomWithWs() { return reactStub.createElement(settingsComponent) })
 tree = await flush()
-tree = await expand(tree, '当前引擎的声音')
+tree = await expand(tree, '当前引擎声音设置')
 check('自定义网关配了 wsUrl：说明消失（不再误报）', !allText(tree).includes('整段合成完再播'), allText(tree).slice(0, 240))
 
 // 5) 本地引擎：「高级」层回来，三项与层头摘要都在
 tree = await mount(CaseLocal, (c) => { c.tts.provider = 'local' })
 check('本地：出现「高级」层', allText(tree).includes('高级'))
 check('本地：层头摘要带当前值（线程=4）', allText(tree).includes('线程=4'), allText(tree).slice(0, 240))
-tree = await expand(tree, '当前引擎的声音')
+tree = await expand(tree, '当前引擎声音设置')
 tree = await expand(tree, '高级')
 check('本地：合成线程数 / 分句流式播报 / 模型目录 三项都在',
   allText(tree).includes('合成线程数') && allText(tree).includes('分句流式播报') && allText(tree).includes('模型目录'), allText(tree).slice(0, 300))
@@ -309,9 +311,12 @@ tree = await flush()
 check('试听状态行显示 Host 给的音色名（本地引擎）', allText(tree).includes('中文男声 · 中（sid 75）'), allText(tree).slice(-160))
 check('试听不写盘（不触发 setConfig）', saveCalls.length === savesBeforePreview, saveCalls.length - savesBeforePreview)
 
-// 保存按钮退役 + 本地新增两个设置
+// 保存按钮退役 + 本地新增一个设置
 check('设置页没有「保存」按钮（改动即写盘）', !byType(tree, 'button').some((n) => texts(n).join('').trim() === '保存'))
-check('本地：有「播报语种」「停顿风格」两个下拉', allText(tree).includes('播报语种') && allText(tree).includes('停顿风格'), allText(tree).slice(-260))
+check('标题下方显示插件版本与适配的 DSH 版本',
+  allText(tree).includes('voice_for_dsh v9.9.9') && allText(tree).includes('0.2.1-rc.3'), allText(tree).slice(0, 120))
+check('本地：有「播报语种」下拉', allText(tree).includes('播报语种'), allText(tree).slice(-260))
+check('本地：不再有「停顿风格」选项', !allText(tree).includes('停顿风格'))
 check('本地：方言说明在位（模型只有中英、没有方言）', allText(tree).includes('没有方言'))
 saveCalls = []
 const langSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'auto'))

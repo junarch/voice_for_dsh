@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
-import { sanitizeForSpeech, tightenPause } from './speech-clean.js'
+import { sanitizeForSpeech } from './speech-clean.js'
 import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
 import { createModelInstaller } from './model-installer.js'
 import {
@@ -36,6 +36,12 @@ import {
   effectiveVoiceOf, languagesForVoice, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
   isLocalProvider,
 } from './voice-compat.js'
+
+/** 插件自身版本与适配的 DSH 版本（设置页标题下方展示；版本号只在一处维护：package.json）。 */
+const PLUGIN_VERSION = (() => {
+  try { return String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '') } catch { return '' }
+})()
+const DSH_COMPAT = '0.2.1-rc.3'
 
 /** 转写基线 system prompt（docs/pipeline.md §2.2；可被 voice.transcribe.prompt 覆盖）
  * 规则 9：把内容里的情绪自然写进文字（文本有情绪 → 指令模型才能读出情绪 → TTS 才有情感）。 */
@@ -72,6 +78,8 @@ function splitForStream(text, targetChars, firstChars) {
   const target = Math.max(80, Math.min(2000, Math.round(Number(targetChars) || 220)))
   const maxChars = target * 2
   const firstTarget = firstChars == null ? target : Math.max(40, Math.min(target, Math.round(Number(firstChars) || target)))
+  const HARD_STOP = '。！？!?；;\n'
+  const SOFT_STOP = '，,、：:'
   const segments = []
   let rest = String(text || '')
   let isFirst = true
@@ -79,12 +87,15 @@ function splitForStream(text, targetChars, firstChars) {
     if (rest.length <= maxChars) { segments.push(rest.trim()); break }
     const t = isFirst ? firstTarget : target
     const hi = Math.min(maxChars, rest.length) - 1
+    // 先找句末；没有就退到**最后一个**逗号/顿号（宁可在逗号处断，也不要在词中间硬切）；
+    // 再没有才找空白，最后才硬切。硬切出来的段听起来像"话说一半"，是最伤听感的切法。
     let cut = -1
     for (let i = t; i <= hi; i++) {
       const c = rest[i]
-      if ('。！？!?；;\n'.indexOf(c) >= 0) { cut = i; break }
+      if (HARD_STOP.indexOf(c) >= 0) { cut = i; break }
       if (c === '.' && !/\d/.test(rest[i - 1] || '') && !/\d/.test(rest[i + 1] || '')) { cut = i; break }
     }
+    if (cut < 0) for (let i = hi; i >= t; i--) if (SOFT_STOP.indexOf(rest[i]) >= 0) { cut = i; break }
     if (cut < 0) for (let i = t; i <= hi; i++) if (/\s/.test(rest[i])) { cut = i; break }
     if (cut < 0) cut = hi // 无任何可切点：硬切
     const head = rest.slice(0, cut + 1).trim()
@@ -433,19 +444,18 @@ const Config = z.object({
       sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，无官方名字表）；设置页下拉 + 手填
       speed: z.number().default(1),            // 语速 [0.5, 2]
       language: z.union([z.const('auto'), z.const('zh'), z.const('en')]).default('auto'), // 播报语种：auto=跟随原文；zh/en=让转写稿用该语言（本地按文本语言发音）
-      pauseStyle: z.union([z.const('natural'), z.const('tight')]).default('tight'), // 停顿风格：tight=合成前去掉中文句读（更连贯）；natural=保留原标点
       numThreads: z.number().default(4),       // 合成线程数（1–16；线程多首声更快、更吃 CPU）
       modelDir: z.string().default(''),        // 模型目录覆盖；空=自动解析（无 UI，高级；测试用 env 亦可）
       timeoutMs: z.number().default(30000),    // 单次整段合成超时；失败 → ttsError，客户端降级系统 TTS
       streaming: z.boolean().default(true),    // 分句流式：按句切段逐段合成，首声 ≤1s（关=整段合成，等待长）
       segmentChars: z.number().default(220),   // 分句流式的每段目标字符数（无 UI，高级）
       segmentTimeoutMs: z.number().default(30000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
-    }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', pauseStyle: 'tight', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
+    }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
-    local: { sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', pauseStyle: 'tight', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
+    local: { sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
   // 提示音（设置页第五层）：默认全关；三种音各自可换自定义素材。
@@ -950,9 +960,8 @@ function apply(ctx, config) {
    */
   async function synthesizeLocal(text, cfg) {
     const v = cfg.tts.local || {}
-    const spoken = v.pauseStyle === 'tight' ? tightenPause(text) : text
     const wav = await localRuntime.synthesizeWav({
-      text: (spoken && spoken.trim()) ? spoken : text,
+      text,
       timeoutMs: v.timeoutMs || 30000,
       voice: { sid: v.sid, speed: v.speed },
     })
@@ -1622,10 +1631,9 @@ function apply(ctx, config) {
     if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（本地 TTS）')
 
     // 2) 分句切段 → 3) 逐段合成入队
-    // 停顿风格：tight 把中文句读从句读处去掉（实测语速 4.7→5.9 字/秒、最长停顿 430→270ms）。
-    // 只影响送合成的文本，转写稿本身（run.transcript / 缓存）保持原样。
-    const spokenForTts = v.pauseStyle === 'tight' ? tightenPause(transcript) : transcript
-    const segments = splitForStream((spokenForTts && spokenForTts.trim()) ? spokenForTts : transcript, v.segmentChars)
+    // 标点一律保留：实测中文标点带来的停顿是模型自带的（约 430ms），去掉标点反而变成"没有停顿"，
+    // 听感更差。见 docs/pipeline.md §4.3。
+    const segments = splitForStream(transcript, v.segmentChars)
     if (segments.length > 1) console.log('[voice] local stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
     await ensureLocalReady()
     // 入队粒度：约 0.5s 音频（pcm 16bit mono = 采样率×2 字节/秒）。合成每吐一块就落一段，
@@ -1924,6 +1932,9 @@ function apply(ctx, config) {
     ping: async () => ({ ok: true, now: new Date().toISOString() }),
     meta: async () => ({
       ok: true,
+      // 设置页标题下方展示：插件版本与适配的 DSH 版本（版本号只在 package.json 维护）
+      pluginVersion: PLUGIN_VERSION,
+      dshCompat: DSH_COMPAT,
       // 每个音色带 languages（能选的语种/方言 id，voice-compat 单一事实源）：设置页照它过滤下拉，
       // 客户端不存第二份能力数据；老 Client 忽略该字段即退回"全展示"。
       voices: VOLC_VOICES.map((x) => ({ id: x.id, name: x.name, languages: languagesForVoice(x.id) })),
