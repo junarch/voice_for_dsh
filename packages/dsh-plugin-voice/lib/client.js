@@ -139,7 +139,7 @@ window.__ModuleLoader__.load({
       "hint.chime": "任何会话在跑（含子代理）就循环工作音；你等的那一轮结束响一次完成音；DSH 弹出提问等你回答响一次提问音。与朗读互不影响。",
       "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
       "chime.source.custom": "自定义（上传音频）",
-      "chime.variant.work.a": "雨滴", "chime.variant.work.b": "滴答", "chime.variant.work.c": "低吟",
+      "chime.variant.work.a": "木鱼", "chime.variant.work.b": "轻叩", "chime.variant.work.c": "沙锤",
       "chime.variant.done.a": "清铃", "chime.variant.done.b": "木琴", "chime.variant.done.c": "余韵",
       "chime.variant.ask.a": "轻问", "chime.variant.ask.b": "上扬", "chime.variant.ask.c": "回声",
       "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
@@ -274,7 +274,7 @@ window.__ModuleLoader__.load({
       "hint.chime": "Loop a work sound while any session runs (subagents included); a done sound when the turn you are waiting on finishes; an ask sound when DSH is waiting on your answer. Independent of readout.",
       "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
       "chime.source.custom": "Custom (upload audio)",
-      "chime.variant.work.a": "Raindrop", "chime.variant.work.b": "Tick-tock", "chime.variant.work.c": "Low hum",
+      "chime.variant.work.a": "Woodfish", "chime.variant.work.b": "Soft tap", "chime.variant.work.c": "Shaker",
       "chime.variant.done.a": "Bright bell", "chime.variant.done.b": "Woodblock", "chime.variant.done.c": "Resonance",
       "chime.variant.ask.a": "Soft ask", "chime.variant.ask.b": "Rising", "chime.variant.ask.c": "Echo",
       "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
@@ -424,7 +424,17 @@ window.__ModuleLoader__.load({
         }
       }
       utterance.onend = () => { if (hooks && hooks.onEnd) hooks.onEnd(); };
-      utterance.onerror = (e) => { if (hooks && hooks.onError) hooks.onError("speechSynthesis: " + String(e && e.error || "unknown")); };
+      utterance.onend = () => { if (hooks && hooks.onEnd) hooks.onEnd(); };
+      utterance.onerror = (e) => {
+        // 我们自己调 speechSynthesis.cancel() 时，Chromium 会给 interrupted（规范里叫 canceled）：
+        // 这不是失败，是"用户按了停止"——当成取消处理，不往界面上写红色失败。
+        const code = String((e && e.error) || "");
+        if (code === "interrupted" || code === "canceled") {
+          if (hooks && hooks.onCancel) hooks.onCancel(code);
+          return;
+        }
+        if (hooks && hooks.onError) hooks.onError("speechSynthesis: " + (code || "unknown"));
+      };
       speechSynthesis.speak(utterance);
       return true;
     }
@@ -749,8 +759,11 @@ window.__ModuleLoader__.load({
       if (res && res.messageId) beginPlayback(res.messageId, res.sessionId);
       diag("play-result", { mode: res && res.mode || "", engine: res && res.engine || "", ttsError: (res && res.ttsError ? String(res.ttsError).slice(0, 100) : ""), degraded: !!(res && res.degraded), notice: (res && res.notice ? String(res.notice).slice(0, 100) : "") });
       const done = hooks && hooks.onEnd;
+      const cancelled = hooks && hooks.onCancel;
       const wrapped = {
         onEnd: () => { if (res && res.messageId) finishPlayback(res.messageId, "done"); if (done) done(); },
+        // 用户主动停止：收尾状态，但**不报错**（错误只留给真正的失败）
+        onCancel: (code) => { if (res && res.messageId) finishPlayback(res.messageId, null); if (cancelled) cancelled(code); },
         onError: (reason) => {
           // 出错/被打断时同样要收尾状态：否则徽标会停在"朗读中"
           if (res && res.messageId) finishPlayback(res.messageId, null);
@@ -876,6 +889,8 @@ window.__ModuleLoader__.load({
           if (res.degraded) setLastError(t("read.degraded"));
           const started = playResult(res, {
             onEnd: () => setStatus("idle"),
+            // 用户主动停止（含被新播报打断）：回到未朗读，不记"上次失败"
+            onCancel: () => { setLastError(""); setStatus("idle"); },
             onError: (reason) => { setLastError(reason); setStatus("error"); },
           });
           if (!started) { setLastError("browser speechSynthesis unavailable"); setStatus("error"); return; }
@@ -1028,6 +1043,7 @@ window.__ModuleLoader__.load({
 
     var pluginCtx = null;      // apply 时记下：uiSession / sessions 都是可选服务
     var chimeCfg = null;       // 归一化后的 chime 配置（Host 的 Config.chime 快照）
+    var chimeSig = null;       // 上一份配置的指纹：变了就说明"音源/开关"换过，正在响的工作音要重起
     var chimeCtx = null;       // 提示音专用 AudioContext
     var chimeMaster = null;    // 总音量 master gain
     var chimeNodes = {};       // slot → { src, gain }（正在响的实例；先停后起）
@@ -1093,6 +1109,12 @@ window.__ModuleLoader__.load({
     function chimeRowEnabled(kind) {
       return !!(chimeCfg && chimeCfg.enabled && chimeCfg[kind] && chimeCfg[kind].enabled);
     }
+    /** 配置指纹：只关心"该响哪个音"（开关 + 音源），音量单独走 master gain，不触发重起。 */
+    function chimeSignature(cfg) {
+      if (!cfg) return "";
+      function sig(row) { return row && row.enabled ? String(row.file || row.source || "") : "-"; }
+      return (cfg.enabled ? "1" : "0") + "|" + sig(cfg.work) + "|" + sig(cfg.done) + "|" + sig(cfg.ask);
+    }
     function chimeSourceOf(row) {
       return row && row.source === "custom" ? String(row.file || "") : "";
     }
@@ -1123,9 +1145,11 @@ window.__ModuleLoader__.load({
      *  p = 泛音比例与增益；slide = 单音内部频率漂移（占比），用来做"上扬/下沉"。 */
     var CHIME_VARIANTS = {
       work: [
-        { id: "a", total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
-        { id: "b", total: 2.4, notes: [{ f: 1180, t: 0, d: 0.09, g: 0.42, p: [[1, 1], [2.4, 0.2]] }, { f: 880, t: 1.2, d: 0.1, g: 0.36, p: [[1, 1], [2.4, 0.2]] }] },
-        { id: "c", total: 2.4, notes: [{ f: 220, t: 0, d: 2.1, g: 0.3, slide: 0.04, p: [[1, 1], [2, 0.18]] }] },
+        // 工作音是"有活在跑"时长时间循环的环境声：只用无音高的木质轻击，
+        // 不做旋律、不做长音（循环久了会被记住、会烦）。
+        { id: "a", total: 2.4, notes: [{ f: 760, t: 0, d: 0.14, g: 0.5, p: [[1, 1], [2.7, 0.22], [5.3, 0.1]] }, { f: 760, t: 1.2, d: 0.14, g: 0.4, p: [[1, 1], [2.7, 0.22]] }] },
+        { id: "b", total: 2.4, notes: [{ f: 520, t: 0, d: 0.2, g: 0.45, p: [[1, 1], [2.2, 0.28]] }, { f: 520, t: 1.2, d: 0.16, g: 0.12, p: [[1, 1], [2.2, 0.2]] }] },
+        { id: "c", total: 2.4, notes: [{ f: 900, t: 0, d: 0.12, g: 0.3, noise: 0.5, p: [[1, 0.15]] }, { f: 900, t: 1.2, d: 0.1, g: 0.22, noise: 0.45, p: [[1, 0.15]] }] },
       ],
       done: [
         { id: "a", total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
@@ -1162,6 +1186,7 @@ window.__ModuleLoader__.load({
         var partials = note.p || [[1, 1]];
         var start = Math.round(note.t * rate);
         var dur = Math.max(1, Math.round(note.d * rate));
+        var noiseState = 0;
         for (var i = 0; i < dur; i++) {
           var idx = start + i;
           if (idx >= len) break;
@@ -1171,6 +1196,11 @@ window.__ModuleLoader__.load({
           var bend = 1 + (note.slide || 0) * (i / dur);  // 单音内部滑音
           for (var k = 0; k < partials.length; k++) {
             data[idx] += Math.sin(2 * Math.PI * note.f * partials[k][0] * bend * t) * env * attack * note.g * partials[k][1];
+          }
+          // 噪声瞬态（沙锤/木质"咔"的起音）：一阶低通，免得纯白噪声太刺
+          if (note.noise) {
+            noiseState = noiseState * 0.6 + (Math.random() * 2 - 1) * 0.4;
+            data[idx] += noiseState * env * attack * note.g * note.noise;
           }
         }
       }
@@ -1460,11 +1490,22 @@ window.__ModuleLoader__.load({
     }
     /** 应用一份 chime 配置：关掉立即停；打开按当前状态立刻起（不用等下一次状态变化）。 */
     function applyChimeConfig(chime) {
+      var prevSig = chimeSig;
       chimeCfg = normalizeChimeCfg(chime);
+      chimeSig = chimeSignature(chimeCfg);
       if (chimeCfg.enabled) {
         ensureChimeCtx();       // 关着的时候不建上下文：不占声卡、不需要手势
         applyChimeVolume();
         startChimePoll();
+        // 音源换了：正在 loop 的工作音不会自己换（loop 节点常驻），必须重起一次。
+        // 旧的那一声立刻停掉——它是环境声，没有"等这一遍放完"的自然切口。
+        var sourceChanged = prevSig !== null && prevSig !== chimeSig;
+        if (sourceChanged && chimeNodes.work) {
+          stopChime("work");
+          stopWorkTimer();
+          chimeWorkPending = false;
+          chimeWorkGen++;
+        }
         chimeTick();
       } else {
         stopChimePoll();
@@ -2148,7 +2189,7 @@ window.__ModuleLoader__.load({
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
           else if (res.mode === "browser") {
             setPreviewing(true);
-            speakText(res.text, res.speech, { onEnd: () => setPreviewing(false), onError: () => setPreviewing(false) });
+            speakText(res.text, res.speech, { onEnd: () => setPreviewing(false), onCancel: () => setPreviewing(false), onError: () => setPreviewing(false) });
             setMsg(t("settings.previewBrowser"));
           } else if (res.audioUrl) {
             setPreviewing(true);

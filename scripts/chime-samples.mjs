@@ -1,0 +1,69 @@
+// 导出提示音候选样本（wav），供人耳挑选。零成本、纯本地。
+// 合成公式与 lib/client.js 的 synthChimeBuffer 一致（本脚本是镜像，改那边要同步改这里）。
+// 用法：node scripts/chime-samples.mjs [输出目录]
+import path from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
+
+const dir = process.argv[2] || path.join(process.cwd(), 'out', 'chime-samples')
+mkdirSync(dir, { recursive: true })
+const RATE = 48000
+
+// 现在内置的三个工作音（木鱼 / 轻叩 / 沙锤）
+const VARIANTS = {
+  'work-a-woodfish': { total: 2.4, notes: [{ f: 760, t: 0, d: 0.14, g: 0.5, p: [[1, 1], [2.7, 0.22], [5.3, 0.1]] }, { f: 760, t: 1.2, d: 0.14, g: 0.4, p: [[1, 1], [2.7, 0.22]] }] },
+  'work-b-tap': { total: 2.4, notes: [{ f: 520, t: 0, d: 0.2, g: 0.45, p: [[1, 1], [2.2, 0.28]] }, { f: 520, t: 1.2, d: 0.16, g: 0.12, p: [[1, 1], [2.2, 0.2]] }] },
+  'work-c-shaker': { total: 2.4, notes: [{ f: 900, t: 0, d: 0.12, g: 0.3, noise: 0.5, p: [[1, 0.15]] }, { f: 900, t: 1.2, d: 0.1, g: 0.2, noise: 0.45, p: [[1, 0.15]] }] },
+  // 参考项目那种"柔和钟片"的仿做（供比较；不稳定泛音 + 长尾 + 软起音）
+  'candidate-soft-bell': { total: 2.4, notes: [{ f: 587, t: 0, d: 1.3, g: 0.22, p: [[1, 1], [2.76, 0.35], [5.4, 0.12], [8.9, 0.05]] }] },
+  'candidate-soft-bell-2': { total: 2.4, notes: [{ f: 880, t: 0, d: 1.1, g: 0.18, p: [[1, 1], [2.4, 0.3], [4.7, 0.1]] }, { f: 1174, t: 0.12, d: 0.9, g: 0.1, p: [[1, 1], [2.4, 0.25]] }] },
+}
+
+function render(spec) {
+  const len = Math.round(spec.total * RATE)
+  const data = new Float32Array(len)
+  for (const note of spec.notes) {
+    const partials = note.p || [[1, 1]]
+    const start = Math.round(note.t * RATE)
+    const dur = Math.max(1, Math.round(note.d * RATE))
+    let noiseState = 0
+    for (let i = 0; i < dur; i++) {
+      const idx = start + i
+      if (idx >= len) break
+      const t = i / RATE
+      const env = Math.exp(-4.5 * (i / dur))
+      const attack = Math.min(1, t / 0.004)
+      for (const [ratio, gain] of partials) {
+        data[idx] += Math.sin(2 * Math.PI * note.f * ratio * t) * env * attack * note.g * gain
+      }
+      if (note.noise) {
+        noiseState = noiseState * 0.6 + (Math.random() * 2 - 1) * 0.4
+        data[idx] += noiseState * env * attack * note.g * note.noise
+      }
+    }
+  }
+  let peak = 0
+  for (const v of data) peak = Math.max(peak, Math.abs(v))
+  if (peak > 0.95) { const s = 0.95 / peak; for (let i = 0; i < len; i++) data[i] *= s }
+  return data
+}
+
+function wav(samples) {
+  const pcm = Buffer.alloc(samples.length * 2)
+  for (let i = 0; i < samples.length; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i]))
+    pcm.writeInt16LE(Math.round(v * 32767), i * 2)
+  }
+  const h = Buffer.alloc(44)
+  h.write('RIFF', 0, 'ascii'); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8, 'ascii')
+  h.write('fmt ', 12, 'ascii'); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22)
+  h.writeUInt32LE(RATE, 24); h.writeUInt32LE(RATE * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34)
+  h.write('data', 36, 'ascii'); h.writeUInt32LE(pcm.length, 40)
+  return Buffer.concat([h, pcm])
+}
+
+for (const [name, spec] of Object.entries(VARIANTS)) {
+  const file = path.join(dir, name + '.wav')
+  writeFileSync(file, wav(render(spec)))
+  console.log('写入 ' + path.basename(file))
+}
+console.log('\n输出目录：' + dir)

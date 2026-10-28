@@ -344,8 +344,8 @@ check('上传 >10MB：提示换个小文件', allText(rowOf('work')).includes('�
   const sel = inSubtree(rowOf('work'), (n) => n.type === 'select')[0]
   const opts = flatten(sel).filter((n) => n.kind === 'element' && n.type === 'option').map((n) => texts(n).join(''))
   check('提示音：每类有 3 个内置变体 + 自定义', opts.length === 4 && opts[3] === '自定义（上传音频）', opts)
-  check('提示音：变体有名字（工作音=雨滴/滴答/低吟）',
-    opts[0] === '雨滴' && opts[1] === '滴答' && opts[2] === '低吟', opts)
+  check('提示音：变体有名字（工作音=木鱼/轻叩/沙锤）',
+    opts[0] === '木鱼' && opts[1] === '轻叩' && opts[2] === '沙锤', opts)
   check('提示音：界面不再出现「程序合成」字样', !allText(tree).includes('程序合成'))
 }
 

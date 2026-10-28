@@ -151,6 +151,11 @@ try {
   for (const gone of ['DIALECT_IDS', 'correctSpeakerForLanguage', 'correctLanguageForSpeaker', 'var VV_SPEAKER']) {
     if (source.includes(gone)) throw new Error('Client 不应再内联音色能力逻辑（发现 ' + gone + '）：能力数据只在 Host voice-compat.js，经 meta 下发')
   }
+  // 停止播报 ≠ 失败：cancel() 触发的 interrupted/canceled 必须走"取消"而不是报错；
+  // 换音源后正在 loop 的工作音必须重起（否则要等任务结束才生效）。
+  for (const need of ['code === "interrupted"', 'onCancel', 'chimeSignature', 'sourceChanged']) {
+    if (!source.includes(need)) throw new Error('Client 缺少停止/换音的关键实现：' + need)
+  }
   for (const need of ['languagesOfVoice', 'shownLanguages', 'shownVoices']) {
     if (!source.includes(need)) throw new Error('Client 缺少按音色能力过滤的实现：' + need)
   }
