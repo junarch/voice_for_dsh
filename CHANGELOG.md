@@ -8,7 +8,7 @@
 
 ## [Unreleased]
 
-（随下一次发版归档到版本号下；当前 `packages/dsh-plugin-voice` 版本 0.4.0。）
+## [0.4.0] - 2026-10-28
 
 ### 升级指引（Python 版 → 0.4.0）
 

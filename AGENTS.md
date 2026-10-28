@@ -7,8 +7,8 @@
 
 ## 技术栈与关键事实（先读这里，避免走弯路）
 
-- **目标平台**：DSH 桌面版（Electron，`http://127.0.0.1:19387`），profile = `desktop`。
-- **DSH 版本**：`0.2.0-rc.2`（装机自带，代码在 `<安装目录>\resources\app.asar\dsh`，只读）。
+- **目标平台**：DSH 桌面版（Electron，端口以启动日志/地址栏为准），profile = `desktop`。
+- **DSH 版本**：`0.2.1-rc.3`（装机自带，代码在 `<安装目录>\resources\app.asar\dsh`，只读）。
   要 inspect 上游实现：`node scripts/dsh-inspect-extract.mjs <输出目录> <包名…>` 只读导出
   `dsh/node_modules/@deepseek-ai/*`（别直接读 asar 路径，也别改安装目录）。
 - **DSH_HOME**：默认 `~/.dsh`；桌面 profile：`$DSH_HOME\profiles\desktop`
@@ -73,9 +73,9 @@
 7. **依赖管理**（原则：git 仓库只存"清单和方法"，不存"货物"）：
    - npm 依赖只声明在 `packages/dsh-plugin-voice/package.json`，`node_modules/` 永不入库；
      引入前核对许可证与必要性。
-   - 模型/二进制文件不入库：`.gitignore` 排除目录 + `scripts/` 提供下载脚本 + 文档记录版本
-     （例：本地 TTS 的 ONNX 模型、可执行文件）。
-   - 外部服务（如本地 TTS server、豆包云端）不作为仓库依赖管理，只写部署/对接文档。
+   - 模型/二进制文件不入库：`.gitignore` 排除目录，模型由插件自己下载（`lib/model-manifest.js` 锁版本与 SHA-256，
+     `lib/model-installer.js` 负责下载/校验/解包），文档记录版本与体积。
+   - 外部服务（如豆包云端）不作为仓库依赖管理，只写对接文档。
    - 引入新依赖前先说明"为什么需要它、有没有更轻的替代"。
 
 ## 目录结构
@@ -96,6 +96,8 @@ voice_for_dsh/
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
         │                    #   index.js=Host 半 / client.js=Client 半 /
         │                    #   local-runtime.js(本地合成运行时：sherpa-onnx + Kokoro) /
+        │                    #   model-manifest.js(模型版本与 SHA-256 清单) /
+        │                    #   model-installer.js(下载/校验/解包/删除) /
         │                    #   speech-clean.js(文本净化) / voice-compat.js(音色↔语种+兼容/归一) /
         │                    #   volcengine-ws.js(豆包双向流)
         └── src/             # 仅结构占位（host/index.ts、client/index.ts 桩，无实际逻辑；
