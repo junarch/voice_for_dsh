@@ -65,11 +65,11 @@ window.__ModuleLoader__.load({
       "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
       "local.sidHint": " 模型只有数字音色编号（0–102），没有官方名字；下拉是精选几档，想换音色直接手填 sid 试听",
       "local.customSid": "手填 sid（0–102）",
-      "local.numThreadsHint": " 多线程更吃 CPU；线程多首声更快，默认 4",
+      "local.numThreadsHint": " 多线程更吃 CPU；线程多首声更快，默认 4；改完要重启应用才生效",
       "local.streaming": "分句流式播报",
       "local.streamingHint": " 开=按句切段逐段合成，首声约 0.6 秒、长稿边算边播（推荐）；关=整段合成完才播，长稿要等",
       "local.modelDir": "模型目录",
-      "local.modelDirHint": " 空=自动找（用户目录 → 仓库 local/models）；也可在这里指定自己解包的目录",
+      "local.modelDirHint": " 空=自动找（用户目录 → 仓库 local/models）；保存后下一次合成会重新加载模型，会卡几秒到几十秒",
       "local.notInstalled": "⚠ 本地模型还没装：点上面的「下载模型」直接装；也可以把已解包的目录填到「模型目录」",
       "local.deploy.hint": "来源：{source} · 下载 {download} · 解包后 {extract} · 含声学模型、103 个音色、中英词典和 espeak 数据",
       "local.deploy.checking": "正在检查模型状态…",
@@ -183,11 +183,11 @@ window.__ModuleLoader__.load({
       "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
       "local.sidHint": " The model only exposes numeric voice ids (0-102) with no official names; the dropdown lists a few picks, type any sid to audition more",
       "local.customSid": "Custom sid (0-102)",
-      "local.numThreadsHint": " More threads use more CPU; more threads start speaking sooner. Default 4",
+      "local.numThreadsHint": " More threads use more CPU and start speaking sooner. Default 4; a new value applies after the app restarts",
       "local.streaming": "Segmented streaming",
       "local.streamingHint": " on = sentence-by-sentence synthesis, first sound in ~1s, long texts play while still synthesizing (recommended); off = wait for the whole text",
       "local.modelDir": "Model directory",
-      "local.modelDirHint": " empty = auto (user dir, then repo local/models); you can also point it at your own unpacked directory",
+      "local.modelDirHint": " Empty = auto (user dir, then repo local/models); saving reloads the model on the next synthesis (a few to tens of seconds)",
       "local.notInstalled": "⚠ Local model not installed: click Download model above, or point Model directory at an unpacked copy",
       "local.deploy.hint": "Source: {source} · download {download} · {extract} unpacked · acoustic model, 103 voices, CN/EN lexicons and espeak data",
       "local.deploy.checking": "Checking model status…",
@@ -1927,12 +1927,21 @@ window.__ModuleLoader__.load({
       }
       async function onPreview() {
         setBusy(true); setMsg("");
+        // 连点两次试听不能让两段叠着响：上一段（可能还是旧音色）先停掉，
+        // 否则验收时听到的仍是"旧的声音"，会误判成没修好。
+        if (currentAudio) { try { currentAudio.pause(); } catch (e) { /* 已结束：忽略 */ } currentAudio = null; }
+        if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
         try {
           // 用页面当前草稿试听，不落盘：没点"保存"就不改配置（旧版会先静默写盘再合成）
           const res = await rpc("preview", { cfg: cfg });
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
-          else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser") + (res.languageLabel ? " · " + res.languageLabel : "")); }
-          else if (res.audioUrl) { playAudio(res.audioUrl, {}); setMsg((ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")) + (res.languageLabel ? " · " + res.languageLabel : "")); }
+          else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser")); }
+          else if (res.audioUrl) {
+            playAudio(res.audioUrl, {});
+            // 标签由 Host 给：本地是音色名、豆包是语种；系统 TTS 没有标签（语种对它不生效）
+            const label = res.voiceLabel || res.languageLabel || "";
+            setMsg((ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")) + (label ? " · " + label : ""));
+          }
         } catch (e) { setMsg(t("settings.previewFail") + String(e && e.message || e)); }
         setBusy(false);
       }

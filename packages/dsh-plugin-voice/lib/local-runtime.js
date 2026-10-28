@@ -342,15 +342,29 @@ export function createLocalRuntime(options = {}) {
   }
 
   /**
+   * 解析本次合成用的音色与语速：调用方给了就用它（试听要用页面草稿、播报要用当次快照），
+   * 没给才回落已保存配置。线程数与模型目录仍以已保存配置为准——它们是加载期旋钮。
+   */
+  function voiceOf(override) {
+    const v = localCfg()
+    const o = override && typeof override === 'object' ? override : {}
+    return {
+      sid: Number.isInteger(o.sid) ? o.sid : v.sid,
+      speed: typeof o.speed === 'number' ? o.speed : v.speed,
+    }
+  }
+
+  /**
    * 分块合成：yield 16bit 小端 PCM（每块是一段连续音频）。
    * 超时/停止都靠 onProgress 返回 0 让 sherpa 自己停下（它不接外部 AbortSignal）。
    * @param options.text - 要合成的一段文本
    * @param options.signal - 外部中止信号（停止播报）
    * @param options.timeoutMs - 单次合成超时
+   * @param options.voice - {sid, speed} 覆盖；不传=用已保存配置
    */
-  async function* streamPcm({ text, signal, timeoutMs = 30000 } = {}) {
+  async function* streamPcm({ text, signal, timeoutMs = 30000, voice } = {}) {
     const tts = await ensureLoaded()
-    const v = localCfg()
+    const v = voiceOf(voice)
     assertSid(v.sid, tts)
     const input = String(text || '').trim()
     if (!input) return
@@ -437,10 +451,10 @@ export function createLocalRuntime(options = {}) {
     }
   }
 
-  /** 整段合成：返回完整 WAV Buffer（非流式路径）。 */
-  async function synthesizeWav({ text, signal, timeoutMs = 30000 } = {}) {
+  /** 整段合成：返回完整 WAV Buffer（非流式路径）。voice 覆盖语义同 streamPcm。 */
+  async function synthesizeWav({ text, signal, timeoutMs = 30000, voice } = {}) {
     const parts = []
-    for await (const pcm of streamPcm({ text, signal, timeoutMs })) parts.push(pcm)
+    for await (const pcm of streamPcm({ text, signal, timeoutMs, voice })) parts.push(pcm)
     const pcm = Buffer.concat(parts)
     if (!pcm.length) throw speakError('synth-failed', '本地合成没有产出音频')
     return pcmToWav(pcm, LOCAL_SAMPLE_RATE)

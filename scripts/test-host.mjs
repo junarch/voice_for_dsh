@@ -1317,15 +1317,41 @@ check('转写关闭 + local：不再有"回退系统朗读"的 notice', r20d.not
 check('转写关闭 + local：送合成的是去 Markdown 的中文原文', engineState.calls.length === 1 && engineState.calls[0].text.includes('转写关闭直读内容'), engineState.calls[0] && engineState.calls[0].text)
 await rpc('setConfig', { patch: { transcribe: { enabled: true } } })
 
-// —— preview：local 走进程内合成（语言跟随 voice.language；auto → 中文样例）——
+// —— preview：local 走进程内合成，并且必须按「当前草稿」出声（旧 bug：永远用保存值）——
 engineState.calls = []
 const pv20 = await rpc('preview')
 check('preview 走本地合成', pv20.ok === true && pv20.mode === 'audio' && typeof pv20.audioUrl === 'string', pv20)
 check('preview 中文样例（auto 语言）', engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('你好'), engineState.calls[0] && engineState.calls[0].text)
+
+// 草稿里改音色与语速：试听必须用草稿值，且不许把草稿写回配置
+const draftCfg = (await rpc('getConfig')).config
+draftCfg.tts.local.sid = 75
+draftCfg.tts.local.speed = 1.25
+engineState.calls = []
+const pvDraft = await rpc('preview', { cfg: draftCfg })
+check('试听按草稿音色（sid 75）与草稿语速（1.25）合成',
+  engineState.calls.length === 1 && engineState.calls[0].sid === 75 && engineState.calls[0].speed === 1.25,
+  engineState.calls[0])
+check('试听标签给当前音色名（本地给音色，不给语种）', pvDraft.voiceLabel === '中文男声 · 中（sid 75）', pvDraft.voiceLabel)
+check('试听不落盘：保存值仍是 48', (await rpc('getConfig')).config.tts.local.sid === 48)
+
+// 不传草稿（老 Client / 内部调用）：回落保存值
+engineState.calls = []
+await rpc('preview')
+check('不传草稿 → 用保存值 sid 48', engineState.calls.length === 1 && engineState.calls[0].sid === 48, engineState.calls[0])
+
+// 样例语种跟音色走，不跟隐藏的 voice.language 走（本地合成跟随原文语言）
 await rpc('setConfig', { patch: { language: 'en' } })
 engineState.calls = []
 await rpc('preview')
-check('preview 语言固定 en → 英文样例', engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hi, this is a preview'), engineState.calls[0] && engineState.calls[0].text)
+check('本地：language=en 也不改样例语种（中文音色仍说中文样例）',
+  engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('你好'), engineState.calls[0] && engineState.calls[0].text)
+await rpc('setConfig', localCfg({ sid: 0 }))
+engineState.calls = []
+await rpc('preview')
+check('本地：英文音色（sid 0）→ 英文样例',
+  engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hi, this is a preview'), engineState.calls[0] && engineState.calls[0].text)
+await rpc('setConfig', localCfg())
 await rpc('setConfig', { patch: { language: 'auto' } })
 
 // —— 模型未安装：一条明确的"模型未安装"，不静默失败 ——
@@ -1597,6 +1623,18 @@ if (!realModelInfo.ok) {
   let bytesSid0 = 0
   for await (const pcm of rtSid0.streamPcm({ text: 'Hello, this is a voice check.', timeoutMs: 60000 })) bytesSid0 += pcm.length
   check('真模型：换 sid（英文音色 0）也能合成', bytesSid0 > 24000, bytesSid0)
+  // 音色覆盖（试听/播报按当次 cfg）：同文本两个 sid 的音频必须不同；不传覆盖时回落配置的 48
+  const realVoiceRun = async (voice) => {
+    const parts = []
+    for await (const pcm of realRuntime.streamPcm({ text: '你好，这是音色对比测试。', timeoutMs: 60000, voice })) parts.push(pcm)
+    const buf = Buffer.concat(parts)
+    return { bytes: buf.length, hash: createHash('sha1').update(buf).digest('hex') }
+  }
+  const rv48 = await realVoiceRun({ sid: 48, speed: 1 })
+  const rv75 = await realVoiceRun({ sid: 75, speed: 1 })
+  const rvDefault = await realVoiceRun(undefined)
+  check('真模型：音色覆盖生效（sid 48 与 75 音频指纹不同）', rv48.hash !== rv75.hash, { a: rv48.bytes, b: rv75.bytes })
+  check('真模型：不传覆盖时回落配置（结果与显式 75 不同）', rvDefault.hash !== rv75.hash, rvDefault.bytes)
 }
 
 

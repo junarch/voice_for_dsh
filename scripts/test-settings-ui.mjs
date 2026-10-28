@@ -120,6 +120,14 @@ globalThis.document = {
 globalThis.window = { __ModuleLoader__: { load: (entry) => { globalThis.__clientEntry = entry } } }
 globalThis.URL.createObjectURL = () => 'blob:fake'
 globalThis.URL.revokeObjectURL = () => {}
+// <audio> 替身：试听会 new Audio(url).play()，没有它就测不到"试听标签"这条路
+globalThis.Audio = class {
+  constructor(src) { this.src = src; this.onended = null; this.onerror = null }
+  play() { return Promise.resolve() }
+  pause() {}
+  removeAttribute() {}
+  load() {}
+}
 
 function baseConfig() {
   return {
@@ -142,6 +150,10 @@ function jsonResponse(obj) {
 globalThis.fetch = async (url, init) => {
   const target = String(url)
   if (target.indexOf('/voice/api/getConfig') >= 0) return jsonResponse({ ok: true, config })
+  if (target.indexOf('/voice/api/preview') >= 0) {
+    // 标签由 Host 给（本地=音色名）；客户端只负责显示，不在前端拼
+    return jsonResponse({ ok: true, mode: 'audio', audioUrl: '/voice/audio/preview-1', voiceLabel: '中文男声 · 中（sid 75）' })
+  }
   if (target.indexOf('/voice/api/meta') >= 0) {
     return jsonResponse({
       ok: true,
@@ -274,6 +286,12 @@ tree = await expand(tree, '当前引擎的声音')
 tree = await expand(tree, '高级')
 check('本地：合成线程数 / 分句流式播报 / 模型目录 三项都在',
   allText(tree).includes('合成线程数') && allText(tree).includes('分句流式播报') && allText(tree).includes('模型目录'), allText(tree).slice(0, 300))
+
+// 试听：标签内容由 Host 给（本地=音色名），客户端只负责显示
+const previewBtn = byType(tree, 'button').find((n) => texts(n).join('').includes('试听'))
+previewBtn.props.onClick()
+tree = await flush()
+check('试听状态行显示 Host 给的音色名（本地引擎）', allText(tree).includes('中文男声 · 中（sid 75）'), allText(tree).slice(-160))
 
 // 6) 引擎切换走组件自己的 onChange：系统 TTS → 本地，本地参数随之出现
 tree = await mount(CaseBrowser)

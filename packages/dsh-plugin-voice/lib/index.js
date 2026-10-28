@@ -143,16 +143,21 @@ const VOLC_VOICES = [
  * 英文三个音色对应上游 hexgrad/Kokoro-82M-v1.1-zh 的 Maple（美·女）、Sol（美·女）、
  * Vale（英·女，年长），顺序即 voices.bin 的 0/1/2。 */
 const LOCAL_VOICES = [
-  { id: '48', name: '中文女声 · 中高（sid 48）' }, // 实测基频 ~261Hz
-  { id: '40', name: '中文女声 · 高（sid 40）' },   // ~289Hz
-  { id: '14', name: '中文女声 · 中（sid 14）' },   // ~233Hz
-  { id: '8', name: '中文女声 · 低（sid 8）' },     // ~173Hz
-  { id: '66', name: '中文男声 · 高（sid 66）' },   // ~202Hz
-  { id: '75', name: '中文男声 · 中（sid 75）' },   // ~186Hz
-  { id: '81', name: '中文男声 · 低（sid 81）' },   // ~102Hz
-  { id: '0', name: '英文女声 · Maple（sid 0）' },
-  { id: '2', name: '英文女声 · Vale（sid 2）' },
+  { id: '48', name: '中文女声 · 中高（sid 48）', lang: 'zh' }, // 实测基频 ~261Hz
+  { id: '40', name: '中文女声 · 高（sid 40）', lang: 'zh' },   // ~289Hz
+  { id: '14', name: '中文女声 · 中（sid 14）', lang: 'zh' },   // ~233Hz
+  { id: '8', name: '中文女声 · 低（sid 8）', lang: 'zh' },     // ~173Hz
+  { id: '66', name: '中文男声 · 高（sid 66）', lang: 'zh' },   // ~202Hz
+  { id: '75', name: '中文男声 · 中（sid 75）', lang: 'zh' },   // ~186Hz
+  { id: '81', name: '中文男声 · 低（sid 81）', lang: 'zh' },   // ~102Hz
+  { id: '0', name: '英文女声 · Maple（sid 0）', lang: 'en' },
+  { id: '2', name: '英文女声 · Vale（sid 2）', lang: 'en' },
 ]
+/** 按 sid 查本地音色（含中/英归属，供试听选样例）；自定义 sid 返回 null。 */
+function localVoiceOf(sid) {
+  const key = String(sid)
+  return LOCAL_VOICES.find((v) => v.id === key) || null
+}
 /** 默认音色（中文女声；与 Config 默认值一致）。 */
 const LOCAL_DEFAULT_SID = 48
 
@@ -890,6 +895,8 @@ function apply(ctx, config) {
   /**
    * 本地 TTS 合成（进程内 sherpa-onnx + Kokoro v1.1，docs/pipeline.md §4.3）。
    * 返回完整 WAV Buffer（客户端音频元素直接能播）；中英均由模型自己处理，不做语言改写。
+   * 音色与语速取自传入的 cfg（试听=页面草稿、播报=当次快照），不在这里回读保存值——
+   * 否则"改了音色再试听"永远听到保存值（曾经的真 bug）。
    * 失败统一抛带 kind 的错误（model-missing / load-failed / synth-failed / timeout），
    * 客户端据此选 toast 文案；"没装模型"与"合成失败"必须可区分，不许静默失败。
    */
@@ -898,6 +905,7 @@ function apply(ctx, config) {
     const wav = await localRuntime.synthesizeWav({
       text,
       timeoutMs: v.timeoutMs || 30000,
+      voice: { sid: v.sid, speed: v.speed },
     })
     return wav
   }
@@ -1513,12 +1521,14 @@ function apply(ctx, config) {
     }
   }
   /** 单段合成的分块流：runtime 每算出一块音频就 yield 一段 16bit 小端 PCM，
-   * 播放器不必等整段算完（首声 = 第一块算完，而不是整段）。 */
+   * 播放器不必等整段算完（首声 = 第一块算完，而不是整段）。
+   * 音色/语速用本次播报开始时的那份 cfg 快照：播到一半点保存，后半段也不会换声。 */
   async function* synthesizeLocalSegmentChunks(text, v, signal) {
     yield* localRuntime.streamPcm({
       text,
       signal,
       timeoutMs: v.segmentTimeoutMs || v.timeoutMs || 30000,
+      voice: { sid: v.sid, speed: v.speed },
     })
   }
   /** 本地分句流式：转写稿 → 按句切段 → 逐段合成 → 边出边按 ~0.5s 音频切块入队。
@@ -1984,19 +1994,30 @@ function apply(ctx, config) {
       return { ok: true, pending: p, gen: turnGeneration, gens: Object.fromEntries(turnGenBySession), stopOnNewTurn }
     },
     /** 试听：优先用设置页当前草稿（args.cfg）合成——不落盘，用户没点保存就不改配置；
-     * 无草稿（老 Client）时退回已存配置。返回语种标签，供界面显示"试听中 · 粤语"。 */
+     * 无草稿（老 Client）时退回已存配置。
+     * 标签随引擎：豆包给语种（语种对它真生效），本地给当前音色名（本地跟着原文语言，没有"语种"可报），
+     * 系统 TTS 不给（它的 utterance.lang 恒 zh-CN，语种对它从来不生效）。 */
     preview: async (args) => {
       const draft = args && args.cfg && typeof args.cfg === 'object' ? args.cfg : null
       const cfg = normalizeVoiceConfig(draft || readConfig())
       const languageLabel = (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).label || ''
       if (ttsProviderOf(cfg) === 'browser') {
-        return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, languageLabel, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
+        return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
       }
       try {
-        // 试听样例语言：固定 en → 英文样例；方言用中文稿（方言靠音色发音体现，不改文稿）
-        const text = cfg.language === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+        let text = PREVIEW_SAMPLE
+        let label = languageLabel
+        if (ttsProviderOf(cfg) === 'local') {
+          // 本地引擎按音色自己的中/英归属选样例（语种行对本地是隐藏的，不能再拿它决定说什么语言）
+          const voice = localVoiceOf(cfg.tts.local && cfg.tts.local.sid)
+          text = voice && voice.lang === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+          label = voice ? voice.name : 'sid ' + String((cfg.tts.local && cfg.tts.local.sid) || '')
+        } else if (cfg.language === 'en') {
+          // 豆包：固定 en → 英文样例；方言用中文稿（方言靠音色发音体现，不改文稿）
+          text = PREVIEW_SAMPLE_EN
+        }
         const audioUrl = await synthToRoute(text, cfg, '', { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
-        return { ok: true, mode: 'audio', audioUrl, languageLabel }
+        return { ok: true, mode: 'audio', audioUrl, voiceLabel: label }
       } catch (error) {
         // 试听失败要留证据：这条路径不走 transcribe，不打印就只剩界面上一句 toast
         console.error('[voice] preview failed:', (error && error.stack) || error)
