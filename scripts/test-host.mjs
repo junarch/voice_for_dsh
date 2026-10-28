@@ -1458,7 +1458,7 @@ const LEVEL_CASES = [
   // [档位, 原文长度, 期望上限]（minimal: min(M, clamp(.3M,50,200))；brief: min(M, clamp(.5M,80,450))；full: min(1500, 1.1M)）
   ['minimal', 300, 90], ['minimal', 1000, 200], ['minimal', 5000, 200],
   ['brief', 300, 150], ['brief', 1000, 450], ['brief', 5000, 450],
-  ['full', 300, 330], ['full', 1000, 1100], ['full', 5000, 1500],
+  ['full', 300, 270], ['full', 1000, 900], ['full', 5000, 4500],
 ]
 for (let i = 0; i < LEVEL_CASES.length; i++) {
   const [lvl, n, want] = LEVEL_CASES[i]

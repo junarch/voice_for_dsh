@@ -57,12 +57,11 @@ const TRANSCRIBE_PROMPT_CLOUD = TRANSCRIBE_SHARED + TRANSCRIBE_CLOUD_EXTRA
 const TRANSCRIBE_PROMPT_LOCAL = TRANSCRIBE_SHARED + TRANSCRIBE_LOCAL_EXTRA
 
 /** 篇幅档位：**按原文比例 + 上下限**（不是固定字数）。
- *  回复本身长短差别很大：写死 200 字会把长回答压成短讯，短回答又被撑长，所以用
- *  `min(原文, clamp(比例×原文, 下限, 上限))`——非详细档的上限永不超过原文。
- *  full 另有 1500 字天花板：5000 字原文按 1.1 倍要念二十分钟，那不是"详细"是折磨。
+ *  回复本身长短差别很大：写死 200 字会把长回答压成短讯、短回答又被撑长，所以用
+ *  `min(原文, clamp(比例×原文, 下限, 上限))`——上限永不超过原文，详细档也一样（0.9 倍）。
  *  只往 prompt 里加约束，不截断、不动 maxTokens（流式首声与"各段拼回等于全文"靠这条）。 */
 const LENGTH_LEVELS = [
-  { id: 'full', name: '详细播报', ratio: 1.1, ceil: 1500 },
+  { id: 'full', name: '详细播报', ratio: 0.9 },
   { id: 'brief', name: '简单播报', ratio: 0.5, floor: 80, ceil: 450, sentenceDiv: 60 },
   { id: 'minimal', name: '极简播报', ratio: 0.3, floor: 50, ceil: 200, sentenceDiv: 45 },
 ]
@@ -71,8 +70,8 @@ function lengthBudget(levelId, sourceChars) {
   const lvl = LENGTH_LEVELS.find((l) => l.id === levelId) || LENGTH_LEVELS[0]
   const m = Math.max(1, Math.round(Number(sourceChars) || 0))
   let cap = Math.round(m * (lvl.ratio || 1))
-  // 非详细档：上限永不超过原文（短消息不能因为 floor 被撑长）；详细档只封顶
-  if (lvl.id !== 'full') cap = Math.min(m, Math.max(lvl.floor || 0, cap))
+  // 任何档位都不超过原文（详细 0.9 倍本身就满足；短消息也不能因为 floor 被撑长）
+  cap = Math.min(m, Math.max(lvl.floor || 0, cap))
   if (lvl.ceil) cap = Math.min(cap, lvl.ceil)
   const sentences = lvl.sentenceDiv ? Math.max(3, Math.min(6, Math.round(cap / lvl.sentenceDiv))) : 0
   return { level: lvl.id, cap, sentences, words: Math.round(cap * 0.6), short: m < 120 }

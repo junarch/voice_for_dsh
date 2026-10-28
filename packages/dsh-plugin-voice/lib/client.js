@@ -118,7 +118,7 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS 合成失败（服务返回错误）",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.lengthLevel": "转写篇幅", "row.promptCloud": "豆包提示词", "row.promptLocal": "本地提示词",
-      "lengthLevel.hint": " 按原文长短自动算：详细≤原文 1.1 倍（长文封顶 1500 字）；简单≈原文一半（80–450 字）；极简≈原文三成（50–200 字）",
+      "lengthLevel.hint": " 按原文长短自动算：详细≤原文 0.9 倍；简单≈原文一半（80–450 字）；极简≈原文三成（50–200 字）",
       "stylePreset.hint": " 只改语气；篇幅由上面的档位控制",
       "prompt.engineOnly": "只对当前引擎生效，两个引擎各自独立",
       "prompt.reset": "恢复默认",
@@ -139,7 +139,7 @@ window.__ModuleLoader__.load({
       "hint.chime": "任何会话在跑（含子代理）就循环工作音；你等的那一轮结束响一次完成音；DSH 弹出提问等你回答响一次提问音。与朗读互不影响。",
       "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
       "chime.source.custom": "自定义（上传音频）",
-      "chime.variant.work.a": "雨滴", "chime.variant.work.b": "滴答", "chime.variant.work.c": "仪表盘",
+      "chime.variant.work.a": "雨滴", "chime.variant.work.b": "滴答", "chime.variant.work.c": "仪表盘", "chime.variant.work.d": "木鱼", "chime.variant.work.e": "轻叩",
       "chime.variant.done.a": "清铃", "chime.variant.done.b": "木琴", "chime.variant.done.c": "余韵",
       "chime.variant.ask.a": "轻问", "chime.variant.ask.b": "上扬", "chime.variant.ask.c": "回声",
       "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
@@ -255,7 +255,7 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS synthesis failed (service error)",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.lengthLevel": "Script length", "row.promptCloud": "Doubao prompt", "row.promptLocal": "Local prompt",
-      "lengthLevel.hint": " Scaled to the reply: Detailed ≤1.1× source (capped at 1500 chars); Simple ≈ half (80–450 chars); Minimal ≈ 30% (50–200 chars)",
+      "lengthLevel.hint": " Scaled to the reply: Detailed ≤0.9× source; Simple ≈ half (80–450 chars); Minimal ≈ 30% (50–200 chars)",
       "stylePreset.hint": " Tone only; length is controlled by the level above",
       "prompt.engineOnly": "Applies to the current engine only; the two engines are independent",
       "prompt.reset": "Reset to default",
@@ -276,7 +276,7 @@ window.__ModuleLoader__.load({
       "hint.chime": "Loop a work sound while any session runs (subagents included); a done sound when the turn you are waiting on finishes; an ask sound when DSH is waiting on your answer. Independent of readout.",
       "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
       "chime.source.custom": "Custom (upload audio)",
-      "chime.variant.work.a": "Raindrop", "chime.variant.work.b": "Tick-tock", "chime.variant.work.c": "Dashboard",
+      "chime.variant.work.a": "Raindrop", "chime.variant.work.b": "Tick-tock", "chime.variant.work.c": "Dashboard", "chime.variant.work.d": "Woodfish", "chime.variant.work.e": "Soft tap",
       "chime.variant.done.a": "Bright bell", "chime.variant.done.b": "Woodblock", "chime.variant.done.c": "Resonance",
       "chime.variant.ask.a": "Soft ask", "chime.variant.ask.b": "Rising", "chime.variant.ask.c": "Echo",
       "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
@@ -1088,7 +1088,7 @@ window.__ModuleLoader__.load({
     /** 内置音变体 id：'a'|'b'|'c'（旧配置的 'default' 归一成 'a'；选自定义时按 a 兜底）。 */
     function chimeVariantIdOf(row) {
       var s = row && row.source;
-      return s === "b" || s === "c" ? s : "a";
+      return [ "b", "c", "d", "e" ].indexOf(s) >= 0 ? s : "a";
     }
     function normalizeChimeRow(row) {
       var r = row && typeof row === "object" ? row : {};
@@ -1167,6 +1167,9 @@ window.__ModuleLoader__.load({
           { f: 1760, t: 2.30, d: 0.11, g: 0.34, p: [[1, 1], [2.2, 0.2]] },
           { f: 2093, t: 2.55, d: 0.09, g: 0.30 },
         ] },
+        // 上一版的两个（木质轻击），保留给喜欢它们的人
+        { id: "d", total: 2.4, notes: [{ f: 760, t: 0, d: 0.14, g: 0.5, p: [[1, 1], [2.7, 0.22], [5.3, 0.1]] }, { f: 760, t: 1.2, d: 0.14, g: 0.4, p: [[1, 1], [2.7, 0.22]] }] },
+        { id: "e", total: 2.4, notes: [{ f: 520, t: 0, d: 0.2, g: 0.45, p: [[1, 1], [2.2, 0.28]] }, { f: 520, t: 1.2, d: 0.16, g: 0.12, p: [[1, 1], [2.2, 0.2]] }] },
       ],
       done: [
         { id: "a", total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
