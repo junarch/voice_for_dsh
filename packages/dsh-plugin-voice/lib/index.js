@@ -56,13 +56,31 @@ const TRANSCRIBE_LOCAL_EXTRA = '\n8. 本地语音按文字发音：英文术语�
 const TRANSCRIBE_PROMPT_CLOUD = TRANSCRIBE_SHARED + TRANSCRIBE_CLOUD_EXTRA
 const TRANSCRIBE_PROMPT_LOCAL = TRANSCRIBE_SHARED + TRANSCRIBE_LOCAL_EXTRA
 
-/** 篇幅档位：只往 prompt 里加一句软目标，不截断、不动 maxTokens
- *  （流式首声与"各段拼回等于全文"都靠这条）。 */
+/** 篇幅档位：**绝对上限 + 句子骨架**。不用"原文的百分之几"——那指标跨语言就崩：
+ *  同一份中文改写成英文，字符数天然 2–3 倍，"三成"永远不达标。
+ *  只往 prompt 里加一句约束，不截断、不动 maxTokens（流式首声与"各段拼回等于全文"靠这条）。 */
 const LENGTH_LEVELS = [
-  { id: 'full', name: '详细播报', clause: '\n篇幅：约原文的九成，略短于原文，保留结论与关键细节。' },
-  { id: 'brief', name: '简单播报', clause: '\n篇幅：约原文的五到六成；宁短勿长，但结论、下一步行动、关键数字不得省略。' },
-  { id: 'minimal', name: '极简播报', clause: '\n篇幅：约原文的三成；只留结论、下一步与最关键的一个数字。压不到三成时，以讲清结论为准，不要为凑比例删掉行动项。' },
+  {
+    id: 'full', name: '详细播报', ratio: 1.1,
+    clause: (cap) => '\n篇幅：保留结论、关键细节与下一步；整稿不超过原文长度（' + cap + ' 字以内）。',
+  },
+  {
+    id: 'brief', name: '简单播报', charCap: 450, sentenceCap: 8,
+    clause: () => '\n篇幅：整稿不超过 450 字（英文按 300 词算）、最多 8 句；只讲结论、关键信息、下一步，细节一句话带过。',
+  },
+  {
+    id: 'minimal', name: '极简播报', charCap: 200, sentenceCap: 3,
+    clause: () => '\n篇幅：整稿不超过 200 字（英文按 130 词算）、**最多 3 句**：'
+      + '第一句给结论，第二句给最关键的一条信息或数字，第三句给下一步（没有就两句结束）。',
+  },
 ]
+/** 给某档位算"目标字数上限"（写进 prompt 的数字，也用于超长日志）。 */
+function lengthBudget(levelId, sourceChars) {
+  const lvl = LENGTH_LEVELS.find((l) => l.id === levelId) || LENGTH_LEVELS[0]
+  if (lvl.charCap) return { level: lvl.id, cap: lvl.charCap, sentences: lvl.sentenceCap }
+  const m = Math.max(1, Math.round(Number(sourceChars) || 0))
+  return { level: lvl.id, cap: Math.round(m * (lvl.ratio || 1)), sentences: 0 }
+}
 
 /**
  * 语音演绎指令 + 情感 + 情绪强度 撰写器（内容驱动）。
@@ -785,8 +803,9 @@ function apply(ctx, config) {
   }
 
   /** 解析实际使用的转写 prompt：引擎各自一份（豆包/本地互不干扰），叠加语气段、篇幅、语种。
-   *  用户字段为空 = 用该引擎的内置默认；旧字段 `prompt`（仅 custom 预设）仍作为兜底，不写盘。 */
-  function resolvePrompt(cfg) {
+   *  用户字段为空 = 用该引擎的内置默认；旧字段 `prompt`（仅 custom 预设）仍作为兜底，不写盘。
+   *  sourceChars：原文可读字数（去 Markdown 后），只用于"详细"档按原文长度算上限。 */
+  function resolvePrompt(cfg, sourceChars) {
     const provider = ttsProviderOf(cfg)
     const cloud = provider === 'volcengine'
     const t = (cfg && cfg.transcribe) || {}
@@ -799,7 +818,7 @@ function apply(ctx, config) {
       if (tone && tone.tone) base += tone.tone
     }
     const lvl = LENGTH_LEVELS.find((l) => l.id === (t.lengthLevel || 'full'))
-    if (lvl) base += lvl.clause
+    if (lvl) base += lvl.clause(lengthBudget(lvl.id, sourceChars).cap)
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
     // local 跟随原文语言（Kokoro v1.1 中英混读）：不做语言改写，转写稿保持原文语言。
     // 语种/方言属于豆包发音专属：仅豆包 TTS 时叠加转写语言要求（系统 TTS / 本地按原文即可）
@@ -816,7 +835,20 @@ function apply(ctx, config) {
           + '（本地语音按文稿语言发音，不做二次翻译）。'
       }
     }
+    // 优先级声明放最后：软目标（篇幅）不能顶掉硬约束（输出语言），也不能被语气文采带跑
+    base += '\n执行优先级：输出语言 > 篇幅上限 > 语气与文采。'
     return base
+  }
+  /** 转写超长时打一条日志（不改稿、不截断）：用于判断"档位是否真的生效"。 */
+  function logLengthBudget(levelId, sourceChars, actualChars) {
+    try {
+      const budget = lengthBudget(levelId, sourceChars)
+      if (!actualChars || !budget.cap) return
+      if (actualChars > budget.cap * 1.25) {
+        console.warn('[voice] length overshoot: ' + actualChars + '/' + budget.cap
+          + ' (level=' + budget.level + ', source=' + sourceChars + ')')
+      }
+    } catch { /* 日志失败不影响播报 */ }
   }
 
   /** 引用上文：组装该消息所在轮之前的最近 N 轮（用户输入 + 我的播报文稿）+ 本轮用户输入。 */
@@ -1228,7 +1260,8 @@ function apply(ctx, config) {
   /** 双向流主流程：转写流 → 段落 session（指令链动态情感）→ 音频分段入队。 */
   async function streamSpeak(run, found, cfg, route) {
     const v = cfg.tts.volcengine
-    const promptUsed = resolvePrompt(cfg)
+    const sourceChars = toPlainSpoken(found.text).length
+    const promptUsed = resolvePrompt(cfg, sourceChars)
     const ctxRef = buildContext(run.sessionId, found.turn || 0, cfg.transcribe.contextTurns)
     const effortUsed = cfg.transcribe.reasoningEffort || ''
     const effortPlan = await effortFor(route, effortUsed)
@@ -1501,6 +1534,7 @@ function apply(ctx, config) {
       }
     }
     run.transcript = spokenTranscript || rawTranscript
+    logLengthBudget(cfg.transcribe.lengthLevel, sourceChars, run.transcript.length)
     run.paragraphs = paragraphs
     // 失败时丢弃未完成的半截音频段（否则 segments>0 会抑制 HTTP 兜底，用户听到截断内容）
     if (!run.error) flushSegment(run)
@@ -1618,7 +1652,8 @@ function apply(ctx, config) {
    * 首段算完即可出声；长稿不再等整篇、也不受整段超时限制。 */
   async function streamSpeakLocal(run, found, cfg, route) {
     const v = cfg.tts.local || {}
-    const promptUsed = resolvePrompt(cfg)
+    const sourceChars = toPlainSpoken(found.text).length
+    const promptUsed = resolvePrompt(cfg, sourceChars)
     const effortUsed = cfg.transcribe.reasoningEffort || ''
     const ctxRef = buildContext(run.sessionId, found.turn || 0, cfg.transcribe.contextTurns)
     run.sampleRate = LOCAL_SAMPLE_RATE
@@ -1652,6 +1687,7 @@ function apply(ctx, config) {
     // 1.5) 本地引擎没有独立的情绪指令通道（豆包的 context_texts 是豆包专属），
     //      风格只靠转写 prompt 落进文字；这里不额外调 LLM = 本地播报零额外 token。
     run.transcript = transcript
+    logLengthBudget(cfg.transcribe.lengthLevel, sourceChars, transcript.length)
     if (run.stopped) return
     if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（本地 TTS）')
 
@@ -1709,7 +1745,8 @@ function apply(ctx, config) {
     if (found.error) return { ok: false, error: found.error }
     const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（UI 与实际发声一致）
     const configured = cfg.provider && cfg.model ? { provider: cfg.provider, model: cfg.model } : null
-    const promptUsed = resolvePrompt(cfg)
+    const sourceChars = toPlainSpoken(found.text).length
+    const promptUsed = resolvePrompt(cfg, sourceChars)
     const effortUsed = cfg.transcribe.reasoningEffort || ''
     const ctxRef = buildContext(sessionId, found.turn || 0, cfg.transcribe.contextTurns)
 
@@ -1869,6 +1906,7 @@ function apply(ctx, config) {
     // 注意顺序：先提取 [#...] 再净化，否则方括号/井号会被净化规则剥掉。
     const { clean: cleanTranscript, cmds } = extractVoiceTags(transcript)
     transcript = sanitizeForSpeech(cleanTranscript)
+    logLengthBudget(cfg.transcribe.lengthLevel, sourceChars, transcript.length)
     const extractedCmd = cmds.length ? cmds[0] : '' // 官方仅第一个值有效
 
     // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：只有豆包有 context_texts 这条通道，
