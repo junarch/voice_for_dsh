@@ -145,7 +145,26 @@ check('local（Kokoro）运行时可用（接口在）', !!(local.json && local.
       + (local.json.installed ? '' : ' error=' + String(local.json.error || '').slice(0, 120))
     : String(local.json && local.json.error))
 if (local.json && local.json.ok && local.json.installed === false) {
-  console.log('  --   模型未安装（本地引擎现在会报"模型未安装"）：装法见 docs/local-tts.md')
+  console.log('  --   模型未安装：设置页 → 语音播报 → 引擎选「本地 Kokoro」→ 点「下载模型」（详见 docs/local-tts.md）')
+}
+
+// 4b) 模型安装器：状态口径（只查文件，不会触发下载/加载模型）
+const deploy = await post('deployStatus', {})
+const dj = (deploy.json && deploy.json.ok) ? deploy.json : null
+check('模型安装接口在（/voice/api/deployStatus）', dj !== null, dj ? 'phase=' + dj.phase : 'HTTP ' + deploy.status)
+if (dj) {
+  check('安装状态可读（phase / installed / deletable）',
+    typeof dj.phase === 'string' && typeof dj.installed === 'boolean' && typeof dj.deletable === 'boolean',
+    'phase=' + dj.phase + ' installed=' + dj.installed + ' deletable=' + dj.deletable)
+  check('安装清单口径在（来源 + 下载量 + 解包容积）',
+    !!(dj.manifest && dj.manifest.sourceLabel && dj.manifest.archiveLabel && dj.manifest.extractedLabel),
+    dj.manifest ? dj.manifest.archiveLabel + ' → ' + dj.manifest.extractedLabel + ' · ' + dj.manifest.sourceLabel : '')
+  if (dj.installed) {
+    console.log('  --   模型已装：' + dj.installDir + '（' + Math.round((dj.installedBytes || 0) / (1024 * 1024))
+      + 'MB，版本 ' + (dj.installedVersion || '?') + '，可删=' + dj.deletable + '）')
+  } else {
+    console.log('  --   模型未安装：设置页点「下载模型」（348MB，装完不用重启）')
+  }
 }
 
 // 5) 可选：真实合成（花几分钱）

@@ -58,7 +58,8 @@
 
 // import = 从 Node.js 自带的标准库里取工具。
 // mkdtempSync 建一个一次性临时文件夹；rmSync 删文件夹。
-import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -80,6 +81,8 @@ const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/spe
 const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
 // 本地运行时（local-runtime.js）：模型目录解析 / Float32→Int16 / WAV 封装 / 测试用引擎注入点
 const { setEngineLoaderForTest, float32ToInt16Pcm, pcmToWav, resolveModelDir, inspectModelDir, createLocalRuntime } = await import('../packages/dsh-plugin-voice/lib/local-runtime.js')
+// 模型安装器（model-installer.js）：下载/续传/校验/解包/删除；测试注入 fetch、解包与磁盘读数
+const { createModelInstaller, setInstallerHooksForTest } = await import('../packages/dsh-plugin-voice/lib/model-installer.js')
 // 本仓库根（用于断言"已部署/未部署"两种分支）
 const REPO_ROOT_FOR_TEST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -1525,6 +1528,325 @@ if (!realModelInfo.ok) {
   check('真模型：换 sid（英文音色 0）也能合成', bytesSid0 > 24000, bytesSid0)
 }
 
+
+// =====================================================================
+// T24 模型安装器（下载 / 续传 / 校验失败 / 取消 / 磁盘不足 / 删除）
+// =====================================================================
+// 全部零网络、零 348MB：用注入的假 fetch 供一小段字节，用注入的解包函数摆出
+// "关键的 9 个文件"。被真实验证的仍是安装器自己的逻辑：流式写盘、Range 续传、
+// sha256 校验、临时目录清理、单任务、磁盘预检、删除范围判定。
+section('T24 模型安装器（下载 / 续传 / 校验失败 / 取消 / 磁盘不足 / 删除）')
+// 本段不测真合成：把引擎替身装回来（T23 真模型段会把它摘掉），避免 localStatus 真去加载夹具模型。
+setEngineLoaderForTest(fakeEngine)
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+const DEPLOY_ARCHIVE = Buffer.alloc(200000)
+for (let i = 0; i < DEPLOY_ARCHIVE.length; i++) DEPLOY_ARCHIVE[i] = (i * 37 + 11) % 251
+const DEPLOY_SHA = createHash('sha256').update(DEPLOY_ARCHIVE).digest('hex')
+const DEPLOY_ETAG = '"fixture-etag-1"'
+const DEPLOY_FILES = [
+  { name: 'model.onnx', bytes: 10 },
+  { name: 'voices.bin', bytes: 5 },
+  { name: 'tokens.txt', bytes: 3 },
+  { name: 'lexicon-us-en.txt', bytes: 2 },
+  { name: 'lexicon-zh.txt', bytes: 2 },
+  { name: 'date-zh.fst', bytes: 1 },
+  { name: 'number-zh.fst', bytes: 1 },
+  { name: 'phone-zh.fst', bytes: 1 },
+  { name: 'espeak-ng-data', dir: true },
+]
+const deployManifest = (over) => Object.assign({
+  version: 'kokoro-multi-lang-v1_1',
+  displayVersion: 'v1.1',
+  sourceLabel: '测试来源',
+  url: 'https://example.test/kokoro-multi-lang-v1_1.tar.bz2',
+  archiveBytes: DEPLOY_ARCHIVE.length,
+  archiveSha256: DEPLOY_SHA,
+  extractedBytes: 26,
+  keyFiles: DEPLOY_FILES,
+}, over || {})
+/** 假解包：在目标目录下摆出 `kokoro-multi-lang-v1_1/` 与全部关键文件。 */
+async function deployExtract(_archive, dest) {
+  const dir = path.join(dest, 'kokoro-multi-lang-v1_1')
+  mkdirSync(path.join(dir, 'espeak-ng-data'), { recursive: true })
+  for (const file of DEPLOY_FILES) if (!file.dir) writeFileSync(path.join(dir, file.name), 'x'.repeat(file.bytes))
+  writeFileSync(path.join(dir, 'LICENSE'), 'fixture')
+}
+/**
+ * 假下载源：按 Range 供字节、能中途断网、能放慢，并记下每次请求的 Range 与"请求那一刻的进度"。
+ * @param opts.chunk - 每次给多少字节
+ * @param opts.delayMs - 每块之间的延迟（测取消用）
+ * @param opts.failAfterBytes - 第一次请求给出这么多字节后断网（测续传）
+ * @param opts.status - () => installer.status()（记录断点续传时进度有没有清零）
+ */
+function makeDeployFetch(opts = {}) {
+  const state = { calls: [], receivedAtCall: [] }
+  const chunk = opts.chunk || 32768
+  const getStatus = opts.status || (() => ({ received: 0 }))
+  async function* body(from, failAfter) {
+    let off = from
+    while (off < DEPLOY_ARCHIVE.length) {
+      if (opts.delayMs) await sleep(opts.delayMs)
+      const end = Math.min(off + chunk, DEPLOY_ARCHIVE.length)
+      yield DEPLOY_ARCHIVE.subarray(off, end)
+      off = end
+      if (failAfter && off >= from + failAfter) throw new Error('socket hang up')
+    }
+  }
+  state.fetch = async (_url, init) => {
+    const headers = (init && init.headers) || {}
+    const range = headers.Range || ''
+    const from = range ? Number(String(range).replace('bytes=', '').replace('-', '')) : 0
+    state.calls.push({ range, ifRange: headers['If-Range'] || '', from })
+    state.receivedAtCall.push(Number(getStatus().received) || 0)
+    const failAfter = state.calls.length === 1 && opts.failAfterBytes ? opts.failAfterBytes : 0
+    return {
+      ok: true,
+      status: from > 0 ? 206 : 200,
+      headers: { get: (name) => (String(name).toLowerCase() === 'etag' ? DEPLOY_ETAG : null) },
+      body: body(from, failAfter),
+    }
+  }
+  return state
+}
+const noTmpLeft = (root) => !existsSync(root) || !readdirSync(root).some((name) => name.startsWith('.tmp-'))
+const modelDirOf = (root) => path.join(root, 'kokoro-multi-lang-v1_1')
+/** 摆一份"已经装好"的目录（带装机标记），供删除/不可删用例。 */
+function makeInstalledFixture(root) {
+  const dir = modelDirOf(root)
+  mkdirSync(path.join(dir, 'espeak-ng-data'), { recursive: true })
+  for (const file of DEPLOY_FILES) if (!file.dir) writeFileSync(path.join(dir, file.name), 'x'.repeat(file.bytes))
+  writeFileSync(path.join(dir, '.voice-install.json'), JSON.stringify({
+    version: 'kokoro-multi-lang-v1_1', sha256: DEPLOY_SHA, installedAt: '2026-01-01T00:00:00.000Z', bytes: 25,
+  }))
+  return dir
+}
+async function waitDeploy(installer, timeoutMs = 8000) {
+  const started = Date.now()
+  for (;;) {
+    const st = installer.status()
+    if (['downloading', 'verifying', 'extracting'].indexOf(st.phase) < 0) return st
+    if (Date.now() - started > timeoutMs) return st
+    await sleep(5)
+  }
+}
+
+// —— A. 正常安装：流式写盘 → 校验 → 解包 → 改名 → 写标记 → 清临时文件 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-a-'))
+  const fetchState = makeDeployFetch({ delayMs: 5, status: () => installerA.status() })
+  const installerA = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: '', dir: '' }),
+  })
+  const started = await installerA.start()
+  check('deployStart：返回 started + phase=downloading', started.ok === true && started.started === true && started.state.phase === 'downloading', started)
+  check('deployStart：进度分母是清单里的归档字节数', started.state.total === DEPLOY_ARCHIVE.length, started.state.total)
+  const seen = []
+  const poller = setInterval(() => seen.push(installerA.status()), 3)
+  const done = await waitDeploy(installerA)
+  clearInterval(poller)
+  check('下载阶段报 received/percent（走完 0→100，不是一步到位）', seen.some((s) => s.phase === 'downloading' && s.percent > 0 && s.percent < 100), seen.map((s) => s.percent).slice(0, 8))
+  check('安装完成：phase=done + installed=true', done.phase === 'done' && done.installed === true, { phase: done.phase, installed: done.installed, error: done.error })
+  const marker = JSON.parse(readFileSync(path.join(modelDirOf(root), '.voice-install.json'), 'utf8'))
+  check('装机标记写清版本/sha256/时间/占用', marker.version === 'kokoro-multi-lang-v1_1' && marker.sha256 === DEPLOY_SHA
+    && /^\d{4}-\d{2}-\d{2}T/.test(marker.installedAt) && marker.bytes > 0, marker)
+  check('归档与断点目录用完即删（不留 348MB）', !existsSync(path.join(root, '.partial')))
+  check('失败/成功后都不留 .tmp-*（只有正式目录）', noTmpLeft(root) && readdirSync(root).join(',') === 'kokoro-multi-lang-v1_1', readdirSync(root))
+  check('重复点下载：识别为已装、不重复下载', (await installerA.start()).reason === 'already-installed' && fetchState.calls.length === 1, fetchState.calls.length)
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— B. 断网续传：Range + If-Range，进度不清零 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-b-'))
+  const fetchState = makeDeployFetch({ failAfterBytes: 60000, status: () => installerB.status() })
+  const installerB = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: '', dir: '' }),
+  })
+  await installerB.start()
+  const done = await waitDeploy(installerB)
+  check('断网：自动重试后续传装完（phase=done）', done.phase === 'done' && done.installed === true, { phase: done.phase, error: done.error })
+  check('续传：第 2 次请求带 Range: bytes=<已下字节>-', fetchState.calls.length >= 2
+    && fetchState.calls[1].range === 'bytes=' + fetchState.calls[1].from + '-' && fetchState.calls[1].from >= 60000, fetchState.calls)
+  check('续传：第 2 次请求带 If-Range（文件变了就让服务器回 200 从头来）', fetchState.calls.length >= 2 && fetchState.calls[1].ifRange === DEPLOY_ETAG, fetchState.calls[1])
+  check('续传：重试那一刻进度没有清零（还留着已下字节）', fetchState.receivedAtCall.length >= 2 && fetchState.receivedAtCall[1] >= 60000, fetchState.receivedAtCall)
+  check('续传：两次请求就装完（第 1 次断网、第 2 次接着下）', fetchState.calls.length === 2, fetchState.calls.length)
+  check('续传：最终文件从断点拼回完整（安装成功）', done.installed === true)
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— C. 校验失败：中止、说明"上游文件已更新"、清临时目录、不装 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-c-'))
+  const fetchState = makeDeployFetch()
+  const installerC = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest({ archiveSha256: 'deadbeef'.repeat(8) }), // 篡改清单里的 sha256
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: '', dir: '' }),
+  })
+  await installerC.start()
+  const done = await waitDeploy(installerC)
+  check('校验失败：phase=failed + errorKind=checksum', done.phase === 'failed' && done.errorKind === 'checksum', { phase: done.phase, kind: done.errorKind })
+  check('校验失败：文案说明"上游文件已更新，请升级插件"', /上游文件已更新/.test(done.error) && /升级插件/.test(done.error), done.error)
+  check('校验失败：不重试（只下载 1 次）', fetchState.calls.length === 1, fetchState.calls.length)
+  check('校验失败：临时目录与断点数据都清掉', noTmpLeft(root) && !existsSync(path.join(root, '.partial')))
+  check('校验失败：没有装出半截模型目录', !existsSync(modelDirOf(root)))
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— D. 取消：立刻停、清临时目录、回到未装态 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-d-'))
+  const fetchState = makeDeployFetch({ delayMs: 20, chunk: 16000 })
+  const installerD = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: '', dir: '' }),
+  })
+  await installerD.start()
+  await sleep(50) // 让它真的下到一半
+  const mid = installerD.status()
+  const cancelled = await installerD.cancel()
+  check('取消：下载中途确实在下载（received>0）', mid.phase === 'downloading' && mid.received > 0, { phase: mid.phase, received: mid.received })
+  check('取消：返回 cancelled=true 且回到未装态', cancelled.ok === true && cancelled.cancelled === true && installerD.status().phase === 'idle' && installerD.status().installed === false, cancelled.state)
+  check('取消：临时目录与断点数据都清空', noTmpLeft(root) && !existsSync(path.join(root, '.partial')), readdirSync(root))
+  check('取消：没有装出模型目录', !existsSync(modelDirOf(root)))
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— E. 磁盘不足：直接拒绝，说明还差多少 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-e-'))
+  const fetchState = makeDeployFetch()
+  const installerE = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 100 * 1024 ** 2, // 只剩 100MB，门槛 1.2GB
+    getActive: () => ({ source: '', dir: '' }),
+  })
+  const refused = await installerE.start()
+  check('磁盘不足：直接拒绝（ok=false, errorKind=disk）', refused.ok === false && refused.errorKind === 'disk', refused)
+  check('磁盘不足：说明"还差 X MB"', /还差/.test(refused.error) && /MB/.test(refused.error), refused.error)
+  check('磁盘不足：一个字节都没下、也没建目录', fetchState.calls.length === 0 && !existsSync(modelDirOf(root)), fetchState.calls.length)
+  check('磁盘不足：状态里也带着失败原因（界面刷新后仍能看到）', installerE.status().errorKind === 'disk' && /还差/.test(installerE.status().error), installerE.status().error)
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— F. 删除：只删我们装的那一份 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-f-'))
+  const dir = makeInstalledFixture(root)
+  const installerF = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: makeDeployFetch().fetch,
+    extractImpl: deployExtract,
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: 'user', dir }), // 当前用的就是这份
+  })
+  check('删除：有标记的安装目录可删（deletable=true）', installerF.status().deletable === true, installerF.status())
+  const removed = await installerF.remove()
+  check('删除：返回 removed=true 且目录消失', removed.ok === true && removed.removed === true && !existsSync(dir), removed)
+  check('删除：删完回到未装态（installed=false）', installerF.status().installed === false)
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— G. 不可删：当前模型来自仓库 local/models 或自定义目录 ——
+{
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-g-'))
+  const dir = makeInstalledFixture(root)
+  const installerRepo = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: makeDeployFetch().fetch,
+    extractImpl: deployExtract,
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: 'repo', dir: 'E:/repo/local/models/kokoro-multi-lang-v1_1' }),
+  })
+  const blockedRepo = await installerRepo.remove()
+  check('来自仓库 local/models：删除被拒（不在可删范围）', blockedRepo.ok === false && blockedRepo.errorKind === 'not-removable' && /不在可删范围/.test(blockedRepo.error), blockedRepo)
+  check('来自仓库：目录原样留着（没有误删）', existsSync(dir) && installerRepo.status().installed === true)
+  const installerCfg = createModelInstaller({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: makeDeployFetch().fetch,
+    extractImpl: deployExtract,
+    freeBytes: () => 5 * 1024 ** 3,
+    getActive: () => ({ source: 'config', dir: MODEL_FIXTURE }),
+  })
+  const blockedCfg = await installerCfg.remove()
+  check('来自自定义 modelDir：删除被拒并说明来源', blockedCfg.ok === false && /自定义目录/.test(blockedCfg.error) && /不在可删范围/.test(blockedCfg.error), blockedCfg.error)
+  rmSync(root, { recursive: true, force: true })
+}
+
+// —— H. 走 /voice/api：deployStatus / deployStart / deployRemove 的接线与状态口径 ——
+{
+  // 本机跑 T23 时可能设了 VOICE_LOCAL_MODEL_DIR（真模型段用），它会盖过用户目录；
+  // 这里先摘掉，测完再装回去——否则"当前源=env"会让删除按设计被拒，测不到正常删除。
+  const savedEnvModelDir = process.env.VOICE_LOCAL_MODEL_DIR
+  delete process.env.VOICE_LOCAL_MODEL_DIR
+  const root = mkdtempSync(path.join(tmpdir(), 'voice-deploy-rpc-'))
+  const fetchState = makeDeployFetch()
+  setInstallerHooksForTest({
+    rootDir: () => root,
+    manifest: deployManifest(),
+    fetchImpl: fetchState.fetch,
+    extractImpl: deployExtract,
+    retryDelaysMs: [5, 5],
+    freeBytes: () => 5 * 1024 ** 3,
+  })
+  await rpc('setConfig', { patch: { tts: { provider: 'local', local: { modelDir: '' } } } })
+  const loadsBefore = engineState.loads
+  const ds0 = await rpc('deployStatus')
+  check('deployStatus：未装时 phase=idle + installed=false', ds0.ok === true && ds0.phase === 'idle' && ds0.installed === false, ds0)
+  check('deployStatus：带清单口径（来源/下载量/解包容积/版本）', ds0.manifest && ds0.manifest.sourceLabel === '测试来源'
+    && ds0.manifest.archiveLabel === '195KB' && ds0.manifest.displayVersion === 'v1.1', ds0.manifest)
+  check('deployStatus：只查文件，不加载模型（不动引擎）', engineState.loads === loadsBefore, engineState.loads - loadsBefore)
+  const dsrStart = await rpc('deployStart')
+  check('deployStart：经 /voice/api 开始安装', dsrStart.ok === true && dsrStart.started === true, dsrStart)
+  let dsr = await rpc('deployStatus')
+  for (let i = 0; i < 400 && ['downloading', 'verifying', 'extracting'].indexOf(dsr.phase) >= 0; i++) {
+    await sleep(10)
+    dsr = await rpc('deployStatus')
+  }
+  check('deployStatus：装完 phase=done + installed=true + deletable=true', dsr.phase === 'done' && dsr.installed === true && dsr.deletable === true, { phase: dsr.phase, installed: dsr.installed, deletable: dsr.deletable, error: dsr.error })
+  // 界面刷新靠 localStatus：把模型目录指到"刚装好的这份"，运行时应立刻认出它（不用重启 dsh）
+  await rpc('setConfig', { patch: { tts: { local: { modelDir: root } } } })
+  check('装完 localStatus 立刻报 installed=true（不重启 dsh）', (await rpc('localStatus')).installed === true)
+  const blocked = await rpc('deployRemove')
+  check('deployRemove：当前模型来自自定义目录 → 拒绝且不删目录', blocked.ok === false && blocked.errorKind === 'not-removable' && existsSync(modelDirOf(root)), blocked)
+  await rpc('setConfig', { patch: { tts: { local: { modelDir: '' } } } })
+  const removed = await rpc('deployRemove')
+  check('deployRemove：我们装的那一份删得掉（目录消失）', removed.ok === true && removed.removed === true && !existsSync(modelDirOf(root)), removed)
+  const dsAfter = await rpc('deployStatus')
+  check('删除后 deployStatus 回到未装态', dsAfter.installed === false && dsAfter.deletable === false, dsAfter)
+  setInstallerHooksForTest(null)
+  if (savedEnvModelDir !== undefined) process.env.VOICE_LOCAL_MODEL_DIR = savedEnvModelDir
+  rmSync(root, { recursive: true, force: true })
+}
 
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）
 await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })

@@ -56,7 +56,33 @@ window.__ModuleLoader__.load({
       "local.streamingHint": " 开=按句切段逐段合成，约 1 秒出声、长稿边算边播（推荐）；关=整段合成完才播，长稿要等 / on = segment-by-segment, first sound ~1s",
       "local.modelDir": "模型目录",
       "local.modelDirHint": " 空=自动找（用户目录 → 仓库 local/models）；也可在这里指定自己解包的目录",
-      "local.notInstalled": "⚠ 本地模型未安装：把 kokoro-multi-lang-v1_1 解包到模型目录后点右侧自检（详见 docs/local-tts.md）",
+      "local.notInstalled": "⚠ 本地模型未安装：点上面的「下载模型」直接装到用户目录，或把解包好的目录填到「模型目录」",
+      "row.localModel": "本地模型",
+      "local.deploy.hint": "来源：{source} · 下载 {download} · 解包后 {extract} · 含声学模型、103 个音色、中英词典和 espeak 数据",
+      "local.deploy.checking": "正在检查模型状态…",
+      "local.deploy.notInstalled": "还没装模型，本地引擎现在不能出声",
+      "local.deploy.start": "下载模型",
+      "local.deploy.retry": "重试",
+      "local.deploy.cancel": "取消",
+      "local.deploy.downloading": "正在下载：{received} / {total}（{percent}%）",
+      "local.deploy.verifying": "正在核对文件完整性…",
+      "local.deploy.extracting": "正在解包（约 20–35 秒，别关窗口）…",
+      "local.deploy.installed": "已安装 · 占用 {size} · 版本 {version}",
+      "local.deploy.installedDir": "装在这里：{dir}",
+      "local.deploy.fail": "安装失败：",
+      "local.deploy.errNetwork": "下载中断：网络连不上（已自动重试 2 次）。检查网络后点「重试」，已下好的部分会接着下。",
+      "local.deploy.errChecksum": "校验没通过：上游文件已更新，请升级插件。",
+      "local.deploy.errDisk": "磁盘空间不够，清理一些文件后再试。",
+      "local.deploy.errExtract": "解包失败。",
+      "local.deploy.errUnknown": "未知错误。",
+      "local.deploy.cancelled": "已取消安装，临时文件已清掉",
+      "local.deploy.remove": "删除模型",
+      "local.deploy.removeBlocked": "不在可删范围",
+      "local.deploy.removeTitle": "删掉下载的模型，释放约 407MB",
+      "local.deploy.removeConfirm": "再点一次确认删除（只删下载的这份模型，不动你的配置）",
+      "local.deploy.removeConfirmBtn": "确认删除？",
+      "local.deploy.removed": "✅ 已删除本地模型",
+      "local.deploy.removeFail": "删除失败：",
       "settings.localCheck": "🔌 运行时自检", "settings.localCheckRunning": "✅ 运行时就绪：", "settings.localCheckFail": "❌ 运行时不可用：",
       "settings.localCheckInstalled": "⚠ 模型未安装：",
       "toast.fallback": "TTS 失败，已回退系统朗读",
@@ -115,7 +141,33 @@ window.__ModuleLoader__.load({
       "local.streamingHint": " on = sentence-by-sentence synthesis, first sound in ~1s, long texts play while still synthesizing (recommended); off = wait for the whole text",
       "local.modelDir": "Model directory",
       "local.modelDirHint": " empty = auto (user dir, then repo local/models); you can also point it at your own unpacked directory",
-      "local.notInstalled": "⚠ Local model not installed: unpack kokoro-multi-lang-v1_1 into the model directory, then run the self-check (see docs/local-tts.md)",
+      "local.notInstalled": "⚠ Local model not installed: click \"Download model\" above, or point \"Model directory\" at an unpacked copy",
+      "row.localModel": "Local model",
+      "local.deploy.hint": "Source: {source} · download {download} · {extract} unpacked · acoustic model, 103 voices, CN/EN lexicons and espeak data",
+      "local.deploy.checking": "Checking model status…",
+      "local.deploy.notInstalled": "Model not installed yet - the local engine cannot speak",
+      "local.deploy.start": "Download model",
+      "local.deploy.retry": "Retry",
+      "local.deploy.cancel": "Cancel",
+      "local.deploy.downloading": "Downloading: {received} / {total} ({percent}%)",
+      "local.deploy.verifying": "Verifying file integrity…",
+      "local.deploy.extracting": "Unpacking (~20-35s, keep this window open)…",
+      "local.deploy.installed": "Installed · {size} · {version}",
+      "local.deploy.installedDir": "Installed at: {dir}",
+      "local.deploy.fail": "Install failed: ",
+      "local.deploy.errNetwork": "Download interrupted: network unreachable (retried twice). Check the network and click Retry - finished bytes are kept.",
+      "local.deploy.errChecksum": "Checksum mismatch: upstream files changed, please update the plugin.",
+      "local.deploy.errDisk": "Not enough disk space. Free some space and try again.",
+      "local.deploy.errExtract": "Unpacking failed.",
+      "local.deploy.errUnknown": "Unknown error.",
+      "local.deploy.cancelled": "Install cancelled; temporary files removed",
+      "local.deploy.remove": "Delete model",
+      "local.deploy.removeBlocked": "Not removable",
+      "local.deploy.removeTitle": "Delete the downloaded model, freeing ~407MB",
+      "local.deploy.removeConfirm": "Click again to confirm (only the downloaded model is deleted; your settings stay)",
+      "local.deploy.removeConfirmBtn": "Confirm delete?",
+      "local.deploy.removed": "✅ Local model deleted",
+      "local.deploy.removeFail": "Delete failed: ",
       "settings.localCheck": "🔌 Runtime self-check", "settings.localCheckRunning": "✅ Runtime ready: ", "settings.localCheckFail": "❌ Runtime unavailable: ",
       "settings.localCheckInstalled": "⚠ Model not installed: ",
       "toast.fallback": "TTS failed; fell back to system voice",
@@ -901,6 +953,153 @@ window.__ModuleLoader__.load({
       }, props.children);
     }
 
+    // ---------- 本地模型安装（设置页：下载 / 进度 / 取消 / 删除）----------
+    // 状态只认 Host 的 deployStatus（单任务在 Host），跑着的时候 400ms 轮询。
+    var DEPLOY_POLL_MS = 400;
+    var SIZE_MB = 1024 * 1024;
+    function fmtDeploySize(bytes) {
+      var n = Number(bytes) || 0;
+      if (n <= 0) return "0MB";
+      var mib = n / SIZE_MB;
+      return (mib >= 100 ? String(Math.round(mib)) : mib.toFixed(1)) + "MB";
+    }
+    /** 失败分类 → 一句人话；Host 已给中文原句时优先原句。 */
+    function deployErrorText(st) {
+      var raw = String((st && st.error) || "");
+      if (raw) return raw;
+      var kind = (st && st.errorKind) || "";
+      if (kind === "network") return t("local.deploy.errNetwork");
+      if (kind === "checksum") return t("local.deploy.errChecksum");
+      if (kind === "disk") return t("local.deploy.errDisk");
+      if (kind === "extract") return t("local.deploy.errExtract");
+      return t("local.deploy.errUnknown");
+    }
+
+    /**
+     * 五态：未装 / 下载中 / 安装中 / 已装 / 失败。
+     * 删除是两步：点第一次变「确认删除？」，再点才真删（防误触）。
+     * 装完/删完都通知父组件刷 localStatus（界面即时变，不用重启 dsh）。
+     */
+    function LocalModelDeploy(props) {
+      var stPair = React.useState(null);
+      var st = stPair[0], setSt = stPair[1];
+      var msgPair = React.useState("");
+      var msg = msgPair[0], setMsg = msgPair[1];
+      var confirmPair = React.useState(false);
+      var confirmRemove = confirmPair[0], setConfirmRemove = confirmPair[1];
+      var busyPair = React.useState(false);
+      var busy = busyPair[0], setBusy = busyPair[1];
+      var doneRef = React.useRef("");
+
+      function refresh() {
+        return rpc("deployStatus").then(function (res) {
+          if (res && res.ok) setSt(res);
+          return res;
+        }).catch(function () { return null; });
+      }
+      React.useEffect(function () { refresh(); }, []);
+      var phase = (st && st.phase) || "idle";
+      var running = phase === "downloading" || phase === "verifying" || phase === "extracting";
+      // 只在跑着的时候轮询；停下就清掉定时器（打开设置页不常驻请求）
+      React.useEffect(function () {
+        if (!running) return undefined;
+        var timer = setInterval(refresh, DEPLOY_POLL_MS);
+        return function () { clearInterval(timer); };
+      }, [running]);
+      React.useEffect(function () {
+        if (phase === "done" && doneRef.current !== "done") {
+          doneRef.current = "done";
+          if (props.onChanged) props.onChanged();
+        } else if (phase !== "done") {
+          doneRef.current = "";
+        }
+      }, [phase]);
+
+      async function onStart() {
+        setBusy(true); setMsg(""); setConfirmRemove(false);
+        try {
+          var res = await rpc("deployStart");
+          if (res && res.state) setSt(res.state);
+          // 状态里已带失败原因（磁盘不足等）就不再重复写一遍
+          if (res && res.ok === false && !(res.state && res.state.error)) setMsg(String(res.error || t("local.deploy.errUnknown")));
+        } catch (e) { setMsg(String(e && e.message || e)); }
+        setBusy(false);
+      }
+      async function onCancel() {
+        setBusy(true);
+        try {
+          var res = await rpc("deployCancel");
+          if (res && res.state) setSt(res.state);
+          setMsg(t("local.deploy.cancelled"));
+        } catch (e) { setMsg(String(e && e.message || e)); }
+        setBusy(false);
+      }
+      async function onRemove() {
+        if (!confirmRemove) { setConfirmRemove(true); setMsg(t("local.deploy.removeConfirm")); return; }
+        setBusy(true); setConfirmRemove(false);
+        try {
+          var res = await rpc("deployRemove");
+          if (res && res.state) setSt(res.state);
+          if (res && res.ok) {
+            setMsg(t("local.deploy.removed"));
+            if (props.onChanged) props.onChanged();
+          } else setMsg(t("local.deploy.removeFail") + String((res && res.error) || ""));
+        } catch (e) { setMsg(t("local.deploy.removeFail") + String(e && e.message || e)); }
+        setBusy(false);
+      }
+
+      var manifest = (st && st.manifest) || {};
+      var hintLine = t("local.deploy.hint")
+        .replace("{source}", manifest.sourceLabel || "GitHub k2-fsa/sherpa-onnx")
+        .replace("{download}", manifest.archiveLabel || "348MB")
+        .replace("{extract}", manifest.extractedLabel || "407MB");
+      var installed = !!(st && st.installed);
+      var line = t("local.deploy.checking");
+      if (st) {
+        if (installed && !running) {
+          line = t("local.deploy.installed")
+            .replace("{size}", fmtDeploySize(st.installedBytes || manifest.extractedBytes))
+            .replace("{version}", manifest.displayVersion || "");
+        } else if (phase === "downloading") {
+          line = t("local.deploy.downloading")
+            .replace("{received}", fmtDeploySize(st.received))
+            .replace("{total}", fmtDeploySize(st.total || manifest.archiveBytes))
+            .replace("{percent}", String(st.percent || 0));
+        } else if (phase === "verifying") line = t("local.deploy.verifying");
+        else if (phase === "extracting") line = t("local.deploy.extracting");
+        else if (phase === "failed") line = t("local.deploy.fail") + deployErrorText(st);
+        else line = t("local.deploy.notInstalled");
+      }
+      var button;
+      if (installed && !running) {
+        button = React.createElement("button", {
+          className: "dsh-voice-read-btn" + (confirmRemove ? " danger" : ""),
+          disabled: busy || !st.deletable,
+          title: st.deletable ? t("local.deploy.removeTitle") : (st.deleteBlockedReason || ""),
+          onClick: onRemove,
+        }, confirmRemove ? t("local.deploy.removeConfirmBtn") : (st.deletable ? t("local.deploy.remove") : t("local.deploy.removeBlocked")));
+      } else if (running) {
+        button = React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCancel, disabled: busy }, t("local.deploy.cancel"));
+      } else {
+        button = React.createElement("button", {
+          className: "dsh-voice-read-btn on", onClick: onStart, disabled: busy || !st,
+        }, phase === "failed" ? t("local.deploy.retry") : t("local.deploy.start"));
+      }
+      var note = msg || (installed && st
+        ? (st.deletable ? t("local.deploy.installedDir").replace("{dir}", st.installDir || "") : String(st.deleteBlockedReason || ""))
+        : hintLine);
+      return React.createElement("div", { className: "dsh-voice-deploy" },
+        React.createElement("div", { className: "dsh-voice-deploy-line" },
+          React.createElement("span", null, line),
+          button),
+        running ? React.createElement("div", { className: "dsh-voice-progress" },
+          React.createElement("div", {
+            className: "dsh-voice-progress-bar",
+            style: { width: Math.max(0, Math.min(100, st.percent || 0)) + "%" },
+          })) : null,
+        React.createElement("p", { className: "dsh-voice-deploy-note" }, note));
+    }
+
     function VoiceSettingsSection() {
       const cfgPair = React.useState(null);
       const cfg = cfgPair[0];
@@ -998,6 +1197,10 @@ window.__ModuleLoader__.load({
           }
         } catch (e) { setLocalCheckMsg(t("settings.localCheckFail") + String(e && e.message || e)); }
         setBusy(false);
+      }
+      /** 装完/删完模型后刷新运行时状态：模型已装时这一下会真的加载模型（约 3s），只在这两个时机做。 */
+      function refreshLocalStatus() {
+        rpc("localStatus").then(function (res) { setLocalStatus(res && res.ok ? res : null); }).catch(function () {});
       }
 
       const m = meta || FALLBACK_META; // 裂脑兜底
@@ -1140,6 +1343,9 @@ window.__ModuleLoader__.load({
         ttsEngine === "local" ? React.createElement(React.Fragment, null,
           React.createElement("h3", null, t("tts.section.local")),
           React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
+          // 模型从哪来、装没装、装到哪：下载/取消/删除都在这一行里，用户不用开终端
+          React.createElement(Row, { label: t("row.localModel") },
+            React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus })),
           React.createElement(Row, { label: t("row.localVoice") },
             React.createElement(SelectInput, {
               value: kokoroVoiceKnown ? String(cfg.tts.local.sid) : VOICE_CUSTOM,
@@ -1272,6 +1478,13 @@ window.__ModuleLoader__.load({
           ".dsh-voice-textarea[readonly]{opacity:.7;}",
           ".dsh-voice-dim{opacity:.6;font-size:12px;}",
           ".dsh-voice-warn{margin:2px 0 0 120px;font-size:12px;color:#d97706;}",
+          // 本地模型安装块：状态行 + 按钮 + 进度条 + 一行说明（来源/体积）
+          ".dsh-voice-deploy{display:flex;flex-direction:column;gap:5px;width:100%;min-width:260px;}",
+          ".dsh-voice-deploy-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}",
+          ".dsh-voice-deploy-note{margin:0;font-size:12px;opacity:.6;line-height:1.5;}",
+          ".dsh-voice-progress{height:4px;border-radius:2px;background:rgba(127,127,127,.2);overflow:hidden;}",
+          ".dsh-voice-progress-bar{height:100%;background:rgba(46,139,87,.8);transition:width .2s linear;}",
+          ".dsh-voice-read-btn.danger{border-color:rgba(220,38,38,.7);background:rgba(220,38,38,.12);}",
           ".dsh-voice-actions{display:flex;gap:8px;margin-top:14px;}",
           ".dsh-voice-msg{margin-top:8px;font-size:12px;}",
           // shell.overlay 层默认点击穿透（click-through），toast 自己收回指针事件

@@ -29,7 +29,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
 import { sanitizeForSpeech } from './speech-clean.js'
-import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE } from './local-runtime.js'
+import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
+import { createModelInstaller } from './model-installer.js'
 import {
   VV_SPEAKER, LANGUAGE_OPTIONS,
   dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
@@ -395,6 +396,18 @@ function apply(ctx, config) {
   // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
   // 不需要 Python。运行时随 Host 进程一起释放，没有需要回收的句柄。
   const localRuntime = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => readConfig() })
+
+  // 模型安装器（设置页「下载模型」）：下载 → 校验 → 解包 → 装到用户目录。
+  // 单任务状态在安装器里；这里只把"装到哪"和"当前生效的是哪份模型"接进去
+  // （后者决定删除按钮能不能点——只删我们装的、且没被自定义目录占用的那一份）。
+  const modelInstaller = createModelInstaller({
+    rootDir: () => userModelRoot(),
+    getActive: () => {
+      const info = localRuntime.inspect()
+      return { source: info.source, dir: info.dir }
+    },
+  })
+  try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
 
   // ---- session/event：信封结构，payload 在 event.data ------------------------
   function payloadOf(event) {
@@ -1720,6 +1733,38 @@ function apply(ctx, config) {
       try {
         const s = await localRuntime.status()
         return { ok: true, ...s }
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error) }
+      }
+    },
+    /** 开始下载/安装本地模型（单任务；磁盘不足直接拒绝并说明还差多少）。 */
+    deployStart: async () => {
+      try {
+        return await modelInstaller.start()
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error) }
+      }
+    },
+    /** 安装进度（前端 400ms 轮询）：phase + 下载 received/total/percent + 已装/可删状态。 */
+    deployStatus: async () => {
+      try {
+        return modelInstaller.status()
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error) }
+      }
+    },
+    /** 取消安装：停下载/解包，清临时目录与断点数据，回到未装态。 */
+    deployCancel: async () => {
+      try {
+        return await modelInstaller.cancel()
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error) }
+      }
+    },
+    /** 删除我们装的那一份（带装机标记才可删；当前源是自定义目录/仓库时拒绝）。 */
+    deployRemove: async () => {
+      try {
+        return await modelInstaller.remove()
       } catch (error) {
         return { ok: false, error: String(error && error.message || error) }
       }
