@@ -144,6 +144,19 @@ function baseConfig() {
   }
 }
 let config = baseConfig()
+// 保存调用记录：断言"改动真的发了一次 setConfig"，以及发的是增量而不是整份配置
+let saveCalls = []
+function deepMerge(base, extra) {
+  const out = Object.assign({}, base || {})
+  for (const key of Object.keys(extra || {})) {
+    const a = out[key]
+    const b = extra[key]
+    out[key] = (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b))
+      ? deepMerge(a, b)
+      : b
+  }
+  return out
+}
 function jsonResponse(obj) {
   return { ok: true, status: 200, json: async () => obj, arrayBuffer: async () => new ArrayBuffer(8) }
 }
@@ -168,7 +181,8 @@ globalThis.fetch = async (url, init) => {
   if (target.indexOf('/voice/api/routeInfo') >= 0) return jsonResponse({ ok: true, providers: [], models: [] })
   if (target.indexOf('/voice/api/setConfig') >= 0) {
     const patch = JSON.parse((init && init.body) || '{}').patch || {}
-    Object.assign(config, patch)
+    saveCalls.push(patch)
+    config = deepMerge(config, patch) // 真 Host 是深合并，替身也必须一样，否则红绿都不可信
     return jsonResponse({ ok: true, config })
   }
   return jsonResponse({ ok: false, error: 'unknown ' + target })
@@ -288,21 +302,30 @@ check('本地：合成线程数 / 分句流式播报 / 模型目录 三项都在
   allText(tree).includes('合成线程数') && allText(tree).includes('分句流式播报') && allText(tree).includes('模型目录'), allText(tree).slice(0, 300))
 
 // 试听：标签内容由 Host 给（本地=音色名），客户端只负责显示
+const savesBeforePreview = saveCalls.length
 const previewBtn = byType(tree, 'button').find((n) => texts(n).join('').includes('试听'))
 previewBtn.props.onClick()
 tree = await flush()
 check('试听状态行显示 Host 给的音色名（本地引擎）', allText(tree).includes('中文男声 · 中（sid 75）'), allText(tree).slice(-160))
+check('试听不写盘（不触发 setConfig）', saveCalls.length === savesBeforePreview, saveCalls.length - savesBeforePreview)
 
 // 6) 引擎切换走组件自己的 onChange：系统 TTS → 本地，本地参数随之出现
+saveCalls = []
 tree = await mount(CaseBrowser)
+check('打开设置页不触发保存（没有改动就不写盘）', saveCalls.length === 0, saveCalls.length)
 check('切引擎前：没有本地参数', !allText(tree).includes('合成线程数'))
 engineSelect(tree).props.onChange({ target: { value: 'local' } })
 tree = await flush()
+check('切引擎立刻保存一次', saveCalls.length === 1 && !!saveCalls[0].tts && saveCalls[0].tts.provider === 'local', saveCalls[0])
+check('保存发的是增量（不含未改动的 transcribe/chime）',
+  !('transcribe' in saveCalls[0]) && !('chime' in saveCalls[0]), Object.keys(saveCalls[0]))
+check('保存后状态行显示「已保存（重启后仍然生效）」', allText(tree).includes('已保存（重启后仍然生效）'), allText(tree).slice(-180))
 tree = await expand(tree, '高级')
 check('切到本地：合成线程数出现（同一实例按引擎重渲染）', allText(tree).includes('合成线程数'), allText(tree).slice(0, 300))
 engineSelect(tree).props.onChange({ target: { value: 'volcengine' } })
 tree = await flush()
 check('再切回豆包：本地参数又消失', !allText(tree).includes('合成线程数') && !allText(tree).includes('高级'))
+check('每次切引擎都各自落盘（两次保存）', saveCalls.length === 2, saveCalls.length)
 
 const failed = checks.filter((c) => !c.ok)
 console.log('\n结果: ' + (checks.length - failed.length) + ' passed, ' + failed.length + ' failed')

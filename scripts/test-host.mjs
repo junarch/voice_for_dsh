@@ -225,8 +225,19 @@ const webServer = { register: (r) => routes.push(r) }
 // 我们把监听函数存起来，测试里就能"伪造"事件（turn 开始/结束等）。
 const eventListeners = new Map()
 
+// 替身 6：configEditor（保存后"读回 profile patch"的核对入口）。
+// 真服务读的是 patch 文件；这里用一个可写的 override 快照模拟，测试能控制"文件里到底有什么"。
+const editorState = { override: {}, disable: false }
+const configEditor = {
+  configuration: () => (editorState.disable ? [] : [{
+    entry: { options: { id: 'voice' } },
+    inherited: {},
+    override: JSON.parse(JSON.stringify(editorState.override)),
+  }]),
+}
+
 const ctx = {
-  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : undefined),
+  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : name === 'configEditor' ? configEditor : undefined),
   settings,
   webServer,
   on: (name, fn) => { if (!eventListeners.has(name)) eventListeners.set(name, []); eventListeners.get(name).push(fn) },
@@ -429,6 +440,23 @@ check('替身没有解析失败残留（配置补丁全部合法）', settingsSt
 section('T1 apply/路由注册')
 check('注册了 /voice/api、/voice/audio、/voice/sounds 三条路由', routes.length === 3 && !!apiHandler && !!audioHandler && !!soundsHandler)
 check('ping', (await rpc('ping')).ok === true)
+
+section('T1a 保存后核对（写成功 ≠ 落盘成功）')
+editorState.override = { tts: { provider: 'local', local: { numThreads: 8 } } }
+const saveOk = await rpc('setConfig', { patch: { tts: { provider: 'local', local: { numThreads: 8 } } } })
+check('核对：override 里与 patch 一致 → 不报未落盘', saveOk.ok === true && saveOk.persisted === undefined, saveOk.persisted)
+editorState.override = { tts: { provider: 'local', local: { numThreads: 4 } } }
+const saveBad = await rpc('setConfig', { patch: { tts: { provider: 'local', local: { numThreads: 8 } } } })
+check('核对：文件里的值对不上 → persisted:false（不假装成功）', saveBad.ok === true && saveBad.persisted === false, saveBad.persisted)
+editorState.override = { tts: { provider: 'local' } }
+const saveNoKey = await rpc('setConfig', { patch: { tts: { provider: 'local', local: { numThreads: 8 } } } })
+check('核对：文件里缺这个键（等于继承默认）不算失败', saveNoKey.ok === true && saveNoKey.persisted === undefined, saveNoKey.persisted)
+editorState.disable = true
+const saveNoEditor = await rpc('setConfig', { patch: { tts: { provider: 'local' } } })
+check('核对：拿不到核对入口时如实降级（不误报）', saveNoEditor.ok === true && saveNoEditor.persisted === undefined, saveNoEditor.persisted)
+editorState.disable = false
+editorState.override = {}
+await rpc('setConfig', { patch: { tts: { provider: 'browser' } } })
 
 section('T1b 同源校验（CSRF 防护：跨站不得触发付费调用/改配置）')
 const cr1 = await rpc('ping', {}, { origin: 'http://127.0.0.1:3080', host: '127.0.0.1:3080' })

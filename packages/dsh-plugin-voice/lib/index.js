@@ -483,6 +483,43 @@ function apply(ctx, config) {
     }
   }
 
+  /** 保存后核对：从 profile patch 读回 voice 条目，比对"用户最怕丢"的几个字段。
+   *  true=文件里已一致；false=对不上（没落盘）；null=拿不到核对入口（测试/旧宿主）。 */
+  const PERSIST_CHECK_PATHS = ['autoSpeak', 'language', 'tts.provider', 'tts.local.sid', 'tts.local.speed', 'tts.local.numThreads']
+  function pickPath(obj, path) {
+    let cur = obj
+    for (const key of path.split('.')) {
+      if (cur === null || typeof cur !== 'object' || !(key in cur)) return undefined
+      cur = cur[key]
+    }
+    return cur
+  }
+  function verifyPersisted(patch) {
+    try {
+      const editor = ctx.get('configEditor')
+      if (!editor || typeof editor.configuration !== 'function') return null
+      const rows = editor.configuration()
+      const row = Array.isArray(rows)
+        ? rows.find((r) => r && r.entry && r.entry.options && r.entry.options.id === 'voice')
+        : null
+      if (!row) return null
+      const override = row.override || {}
+      for (const path of PERSIST_CHECK_PATHS) {
+        const sent = pickPath(patch, path)
+        if (sent === undefined) continue // 本次没动这个字段，不核对
+        const disk = pickPath(override, path)
+        // 文件里没有这个键 = 与继承层/默认值相同（configEditor 会把"等于继承层"的键整段删掉），不是失败
+        if (disk === undefined) continue
+        if (typeof sent === 'number' && typeof disk === 'number') {
+          if (Math.abs(sent - disk) > 1e-6) return false
+          continue
+        }
+        if (JSON.stringify(sent) !== JSON.stringify(disk)) return false
+      }
+      return true
+    } catch { return null }
+  }
+
   // 本地 TTS 运行时（docs/pipeline.md §4.3、docs/local-tts.md）：进程内 sherpa-onnx +
   // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
   // 不需要 Python。运行时随 Host 进程一起释放，没有需要回收的句柄。
@@ -1957,7 +1994,12 @@ function apply(ctx, config) {
       // 不再在保存时改写用户选择：设置页的下拉只会产出合法组合（音色能力过滤），
       // 这里如实落盘、只返回归一化视图（旧配置/手改值在读取时软着陆）。
       await ctx.settings.update('voice', patch)
-      return { ok: true, config: normalizeVoiceConfig(readConfig()) }
+      // 写成功 ≠ 落盘成功：再读一次 profile patch 核对几个关键字段。
+      // 不一致时把话说明（客户端会显示"没写进磁盘"），不假装保存成功。
+      const persisted = verifyPersisted(patch)
+      const out = { ok: true, config: normalizeVoiceConfig(readConfig()) }
+      if (persisted === false) out.persisted = false
+      return out
     },
     routeInfo: async (args) => {
       const a = args || {}

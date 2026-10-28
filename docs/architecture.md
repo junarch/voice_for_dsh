@@ -78,7 +78,11 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
 `apply(ctx, config)` 读配置；可热改字段标 `.volatile()`，边界见 `docs/pipeline.md` §6.0。条目 id 是 `voice`
 （bundle 补丁插入的行），config 落在 profile 的 `cordis.patch.yml`。Client 设置页经 `/voice/api` 的
 `getConfig`/`setConfig` RPC 读写（Host 归一后返回，UI 显示 = 实际发声）；`setConfig` 只提交改动过的字段
-（部分 patch），因为秘密字段（`tts.volcengine.apiKey`）不进浏览器，整块回写会把它抹掉。
+（部分 patch）：整块回写会把 Host 刚写回的值（转写路由自愈、聊天里切过的自动播报）覆盖成打开页面时的旧值。
+
+**保存不需要用户惦记**：开关/下拉/滑块防抖 400ms 自动写盘、引擎切换立即写、文本框失焦才提交；
+页面显示「未保存 / 已保存」，写完还会从 profile patch 读回核对（对不上就报「没写进磁盘」）。
+细节见 `docs/pipeline.md` §6.0。
 
 ### 设置页的五层结构（渐进展开）
 

@@ -357,6 +357,8 @@ tree = await flush()
 check('点层头折叠：层体消失（三行不渲染）', byClass(tree, 'dsh-voice-chime-row').length === 0)
 
 // 6) 配置里的文件不存在：设置页给"已回落到默认音"的提示（新组件实例 → 重新拉配置）
+// 自动保存是防抖的：先让上一段改动写完，否则排队中的 patch 会把这里换上的新配置盖掉
+await new Promise((resolve) => setTimeout(resolve, 600))
 config.chime = {
   enabled: true, volume: 0.3,
   work: { enabled: true, source: 'custom', file: 'gone.wav' },

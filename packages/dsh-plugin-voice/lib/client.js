@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
       "settings.title": "语音播报",
       "settings.intro": "每轮回答结束后，先把回答改写成口语稿再念出来。设置存在本机 DSH 的 profile 配置里（cordis.patch.yml），保存后立刻生效。",
       "settings.save": "保存", "settings.saved": "✅ 已保存，立刻生效",
+      "settings.dirty": "● 有未保存的改动（约半秒后自动写入）", "settings.saving": "正在保存…",
+      "settings.savedNow": "✅ 已保存（重启后仍然生效）",
+      "settings.saveUnverified": "⚠ 已提交，但没在配置文件里读回这次改动——可能没落盘，请再点一次「保存」",
       "settings.saveFail": "❌ 保存失败：", "settings.loadFail": "读取配置失败",
       "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
@@ -147,6 +150,9 @@ window.__ModuleLoader__.load({
       "settings.title": "Voice Readout",
       "settings.intro": "Each finished turn is rewritten into spoken style, then read aloud. Settings live in this machine's DSH profile config (cordis.patch.yml) and take effect on save.",
       "settings.save": "Save", "settings.saved": "✅ Saved; takes effect now",
+      "settings.dirty": "● Unsaved changes (auto-saving in a moment)", "settings.saving": "Saving…",
+      "settings.savedNow": "✅ Saved (survives a restart)",
+      "settings.saveUnverified": "⚠ Submitted, but the change is not in the config file — it may not have been persisted; hit Save again",
       "settings.saveFail": "❌ Save failed: ", "settings.loadFail": "Failed to load config",
       "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
@@ -1551,15 +1557,33 @@ window.__ModuleLoader__.load({
         React.createElement("label", { className: "dsh-voice-label" }, props.label),
         React.createElement("div", { className: "dsh-voice-field" }, props.children));
     }
+    /** 文本框：输入过程中只改本地草稿，**失焦或回车才提交**。
+     *  逐字提交会把 apiKey、模型目录写成半截值并落盘，比"没保存"更难排查。 */
     function TextInput(props) {
+      var pair = React.useState(props.value === undefined || props.value === null ? "" : String(props.value));
+      var draft = pair[0], setDraft = pair[1];
+      var editing = React.useRef(false);
+      React.useEffect(function () {
+        if (editing.current) return;
+        setDraft(props.value === undefined || props.value === null ? "" : String(props.value));
+      }, [props.value]);
+      function commit() {
+        var raw = props.type === "number" ? Number(draft) : draft;
+        if (raw !== props.value) props.onChange(raw);
+      }
       return React.createElement("input", {
         className: "dsh-voice-input",
         type: props.type || "text",
-        value: props.value,
+        value: draft,
         placeholder: props.placeholder || "",
         step: props.step, min: props.min, max: props.max,
         list: props.list,
-        onChange: (e) => props.onChange(props.type === "number" ? Number(e.target.value) : e.target.value),
+        onFocus: function () { editing.current = true; },
+        onChange: function (e) { setDraft(e.target.value); },
+        onBlur: function () { editing.current = false; commit(); },
+        onKeyDown: function (e) {
+          if (e && e.key === "Enter") { editing.current = false; commit(); if (e.target && e.target.blur) e.target.blur(); }
+        },
       });
     }
     /** 滑块 + 当前值标签（有明确取值范围的配置用它） */
@@ -1871,6 +1895,22 @@ window.__ModuleLoader__.load({
       const l2Pair = React.useState(false);
       const l2Open = l2Pair[0];
       const setL2Open = l2Pair[1];
+      // 保存状态：dirty=页面草稿与"已落盘配置"不一致；saveNote=给用户看的结果（已保存/失败/没落盘）
+      const dirtyPair = React.useState(false);
+      const dirty = dirtyPair[0];
+      const setDirty = dirtyPair[1];
+      const saveNotePair = React.useState("");
+      const saveNote = saveNotePair[0];
+      const setSaveNote = saveNotePair[1];
+      const savingPair = React.useState(false);
+      const saving = savingPair[0];
+      const setSaving = savingPair[1];
+      // 已落盘配置的指纹 + 防抖计时器 + 并发闸（自动保存与手动保存不互相插队）
+      const savedRef = React.useRef("");
+      const autoTimerRef = React.useRef(null);
+      const savingRef = React.useRef(false);
+      const pendingPatchRef = React.useRef(null);
+      const editSeqRef = React.useRef(0);
 
       React.useEffect(() => {
         rpc("meta").then((m) => { if (m && m.ok) setMeta(m); }).catch(() => {});
@@ -1878,15 +1918,115 @@ window.__ModuleLoader__.load({
         rpc("getConfig").then((res) => {
           if (res && res.ok) {
             setCfg(res.config);
+            savedRef.current = JSON.stringify(res.config);
             applyChimeConfig(res.config.chime);
             rpc("routeInfo", { provider: res.config.provider, model: res.config.model }).then((ri) => { if (ri && ri.ok) setInfo(ri); }).catch(() => {});
           } else setMsg(t("settings.loadFail") + (res && res.error ? "：" + String(res.error) : ""));
         }).catch((e) => setMsg(t("settings.loadFail") + "：" + String(e && e.message || e)));
       }, []);
 
+      // 卸载时把还没触发的改动补写一次：最后几百毫秒的改动不该因为切页/关设置而丢
+      React.useEffect(() => () => {
+        if (autoTimerRef.current) {
+          clearTimeout(autoTimerRef.current);
+          autoTimerRef.current = null;
+          const pending = pendingPatchRef.current;
+          pendingPatchRef.current = null;
+          if (pending && Object.keys(pending).length) rpc("setConfig", { patch: pending }).catch(() => {});
+        }
+      }, []);
+
       if (!cfg) return React.createElement("div", { className: "dsh-voice-settings" }, msg || "…");
 
-      function setFields(entries) {
+      /** 把 [路径, 值] 列表拼成嵌套 patch：只发改动字段（Host 侧是深合并）。 */
+      function nestPatch(entries) {
+        const out = {};
+        for (const [path, value] of entries) {
+          const keys = path.split(".");
+          let o = out;
+          for (let i = 0; i < keys.length - 1; i++) {
+            if (!o[keys[i]] || typeof o[keys[i]] !== "object") o[keys[i]] = {};
+            o = o[keys[i]];
+          }
+          o[keys[keys.length - 1]] = value;
+        }
+        return out;
+      }
+      /** 深合并两个 patch（后写的赢）。 */
+      function mergePatch(base, extra) {
+        const out = Object.assign({}, base || {});
+        for (const key of Object.keys(extra || {})) {
+          const a = out[key];
+          const b = extra[key];
+          out[key] = (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b))
+            ? mergePatch(a, b)
+            : b;
+        }
+        return out;
+      }
+      /** 手点「保存」时用：把草稿与"已落盘快照"比出差异，只写差异，不整体覆盖。 */
+      function diffPatch(base, next) {
+        const patch = {};
+        for (const key of Object.keys(next || {})) {
+          const a = base ? base[key] : undefined;
+          const b = next[key];
+          if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
+            const sub = diffPatch(a, b);
+            if (Object.keys(sub).length) patch[key] = sub;
+          } else if (JSON.stringify(a) !== JSON.stringify(b)) {
+            patch[key] = b;
+          }
+        }
+        return patch;
+      }
+
+      /** 写盘：只发 patch（深合并）；单飞行——写盘期间的新改动排队，写完补一次。
+       *  成功后只清 dirty，**不用服务器返回值回填草稿**（回填会吞掉正在输入的内容）。 */
+      async function saveNow(patch, auto) {
+        const incoming = patch || {};
+        if (!incoming || !Object.keys(incoming).length) { setDirty(false); return; }
+        if (savingRef.current) { pendingPatchRef.current = mergePatch(pendingPatchRef.current || {}, incoming); return; }
+        const seq = editSeqRef.current;
+        savingRef.current = true;
+        setSaving(true);
+        if (!auto) setMsg("");
+        try {
+          const res = await rpc("setConfig", { patch: incoming });
+          if (res && res.ok) {
+            savedRef.current = JSON.stringify(mergePatch(JSON.parse(savedRef.current || "{}"), incoming));
+            if (res.config && res.config.chime) applyChimeConfig(res.config.chime);
+            // Host 会读回 profile patch 核对；对不上就明说，不假装保存成功
+            setSaveNote(res.persisted === false ? t("settings.saveUnverified") : t("settings.savedNow"));
+            if (res.persisted === false) setMsg(t("settings.saveUnverified"));
+            if (editSeqRef.current === seq) setDirty(false);
+          } else {
+            const text = t("settings.saveFail") + (res && res.error ? String(res.error) : "unknown");
+            setSaveNote(text);
+            setMsg(text);
+          }
+        } catch (e) {
+          const text = t("settings.saveFail") + String(e && e.message || e);
+          setSaveNote(text);
+          setMsg(text);
+        }
+        savingRef.current = false;
+        setSaving(false);
+        const queued = pendingPatchRef.current;
+        pendingPatchRef.current = null;
+        if (queued && Object.keys(queued).length) saveNow(queued, true);
+      }
+      /** 防抖自动保存：连续拖动滑块只写最后一次（400ms）。 */
+      function scheduleAutoSave(patch) {
+        pendingPatchRef.current = mergePatch(pendingPatchRef.current || {}, patch);
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+        autoTimerRef.current = setTimeout(() => {
+          autoTimerRef.current = null;
+          const pending = pendingPatchRef.current;
+          pendingPatchRef.current = null;
+          if (pending && Object.keys(pending).length) saveNow(pending, true);
+        }, 400);
+      }
+      function setFields(entries, opts) {
         const next = JSON.parse(JSON.stringify(cfg));
         for (const [path, value] of entries) {
           const keys = path.split(".");
@@ -1896,26 +2036,22 @@ window.__ModuleLoader__.load({
         }
         setCfg(next);
         setMsg("");
+        setSaveNote("");
+        editSeqRef.current++;
+        setDirty(true);
+        const patch = nestPatch(entries);
+        if (opts && opts.immediate) { saveNow(patch, true); return; }
+        scheduleAutoSave(patch);
       }
-      function setField(path, value) {
-        setFields([[path, value]]);
+      function setField(path, value, opts) {
+        setFields([[path, value]], opts);
       }
       async function onSave() {
-        setBusy(true); setMsg("");
-        try {
-          const res = await rpc("setConfig", { patch: cfg });
-          if (res && res.ok) {
-            setCfg(res.config);
-            applyChimeConfig(res.config.chime);
-            setMsg(t("settings.saved"));
-          }
-          else setMsg(t("settings.saveFail") + (res && res.error ? String(res.error) : "unknown"));
-        } catch (e) { setMsg(t("settings.saveFail") + String(e && e.message || e)); }
-        setBusy(false);
-      }
-      async function onSaveSilent() {
-        const res = await rpc("setConfig", { patch: cfg });
-        if (res && res.ok) setCfg(res.config);
+        if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null; }
+        const pending = pendingPatchRef.current;
+        pendingPatchRef.current = null;
+        const diff = diffPatch(JSON.parse(savedRef.current || "{}"), cfg);
+        await saveNow(mergePatch(pending || {}, diff), false);
       }
       async function onRefreshRoute() {
         setBusy(true);
@@ -2048,6 +2184,11 @@ window.__ModuleLoader__.load({
         setCfg(next);
         setMsg("");
         setL2Open(true); // 换引擎就把"当前引擎的声音"展开，省一次点击
+        // 主开关不排队：立刻落盘，避免"以为切过去了，重启又回豆包"
+        if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null; }
+        editSeqRef.current++;
+        setDirty(true);
+        saveNow({ tts: { provider: v }, autoSpeakCloudTts: next.autoSpeakCloudTts }, true);
       }
 
       // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro（进程内）；
@@ -2329,14 +2470,18 @@ window.__ModuleLoader__.load({
               onUploaded: (file) => setFields([
                 ["chime." + kind + ".file", file],
                 ["chime." + kind + ".source", "custom"],
-              ]),
+                // 上传本身已经是写盘动作（素材进了 voice/sounds）；引用不落盘会只靠清扫宽限期活着
+              ], { immediate: true }),
             }))) : null),
 
         React.createElement("div", { className: "dsh-voice-actions" },
-          React.createElement("button", { className: "dsh-voice-read-btn on", onClick: onSave, disabled: busy }, t("settings.save")),
+          // 保存不再因 busy 静默失效：改动本来就会自动写，按钮只是"立刻写一次"
+          React.createElement("button", { className: "dsh-voice-read-btn on", onClick: onSave, disabled: saving }, t("settings.save")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: onRefreshRoute, disabled: busy }, t("settings.refresh")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview, disabled: busy }, t("settings.preview")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => stopAll() }, t("settings.stopAll"))),
+        React.createElement("p", { className: (dirty || !saveNote) ? "dsh-voice-warn" : "dsh-voice-msg" },
+          saving ? t("settings.saving") : (saveNote || (dirty ? t("settings.dirty") : ""))),
         msg ? React.createElement("div", { className: "dsh-voice-msg" }, msg) : null);
     }
 

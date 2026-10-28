@@ -291,6 +291,15 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   `stopOnNewTurn` 各自单独标 volatile。改 schema 时若把 volatile 标到 `tts.xxx` 之下，解析会直接报
   "volatile fields require a fixed object path"。
 - 写入仍走 `ctx.settings.update('voice', patch)`（深合并；patch 只需带改动的字段）。
+- **设置页的保存语义（0.4.x）**：改动即保存——开关/下拉/滑块防抖 400ms 后自动写盘，引擎切换立即写，
+  文本框（apiKey、模型目录、语音名等）**失焦或回车才提交**（逐字写盘会留下半截 key / 半截目录）；
+  设置页关闭时补写还没触发的那一次。写的是**增量 patch**，不是整份配置——整份写会把
+  Host 自愈写回的路由、聊天里切过的自动播报开关一起覆盖回旧值。保存成功后只清"未保存"状态，
+  **不用服务器返回值回填草稿**（回填会吞掉正在输入的内容）。
+- **保存后核对**：`setConfig` 写完会用 `ctx.configEditor.configuration()` 从 profile patch 读回 voice 条目，
+  比对本次 patch 涉及的关键字段；对不上就返回 `persisted:false`，设置页显示"没写进磁盘"。
+  文件里缺该键＝等于继承层默认值（`configEditor` 会把与继承层相同的键整段删掉），不算失败。
+
 - 老配置里只有 `pitchLevel`、没有 `pitch` 时（0.1.x 时代 settings.yaml 的写法）：`pitchOf` 里 `pitch` 的 schema
   默认值 0 恒存在且优先，所以**搬过来的 `pitchLevel` 不影响发声**（存储上不丢，听感按 0 处理）。
   要让老五档音调重新生效，把 `tts.volcengine.pitch` 写成对应半音值（五档映射常数见 `lib/voice-compat.js` 的 `pitchOf`）。
