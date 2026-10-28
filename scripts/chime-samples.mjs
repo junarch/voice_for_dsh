@@ -8,7 +8,7 @@ const dir = process.argv[2] || path.join(process.cwd(), 'out', 'chime-samples')
 mkdirSync(dir, { recursive: true })
 const RATE = 48000
 
-// 现在内置的三个工作音（木鱼 / 轻叩 / 沙锤）
+// 内置的五个工作音（雨滴 / 滴答 / 仪表盘 / 木鱼 / 轻叩）
 const VARIANTS = {
   'work-a-raindrop': { total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
   'work-b-ticktock': { total: 2.4, notes: [{ f: 1180, t: 0, d: 0.09, g: 0.42, p: [[1, 1], [2.4, 0.2]] }, { f: 880, t: 1.2, d: 0.1, g: 0.36, p: [[1, 1], [2.4, 0.2]] }] },

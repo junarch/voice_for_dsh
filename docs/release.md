@@ -9,7 +9,7 @@
 | 位置 | 当前 | 说明 |
 |---|---|---|
 | 本仓库 | `0.4.0` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
-| GitHub main | `0.3.1` | 仍是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
+| GitHub main | `0.3.1` | 仍是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败；本地 main 领先它一批提交（`git rev-list --count origin/main..main` 现算），全部未推 |
 | npm | `0.2.5` | 早于本轮全部改动；本仓库没有 npm 发布 workflow |
 
 发版就是把本仓库推上去、打 tag、把 `0.4.0` 写进 Release；npm 是否发布见 §7。
@@ -19,6 +19,8 @@
 - [ ] `node scripts/test-host.mjs` 全绿。
 - [ ] `node scripts/test-client.mjs` 通过（i18n zh/en 键数一致）。
 - [ ] `node scripts/test-chime-ui.mjs` 与 `node scripts/test-chime-playback.mjs` 全绿。
+- [ ] `node scripts/test-settings-ui.mjs` 全绿（三档引擎下该出现的出现、该藏的不出现）。
+- [ ] `node scripts/audit-release.mjs` 全绿（密钥、本机路径、发版物夹带，见 §6）。
 - [ ] `node --check` 覆盖 `lib/` 下全部 8 个手写模块（CI 已含）。
 - [ ] CI（`.github/workflows/test.yml`）在 PR 上跑过一遍。
 
@@ -68,12 +70,37 @@
 
 ## 6. 发布文件就绪（必须）
 
-- [ ] README 的安装步骤与截图是新设置页（五层结构）；图注与图一致。
+- [ ] README 的安装步骤与截图是新设置页（层数与截图一致：豆包／系统 TTS 四层，本地多一层「高级」）。
 - [ ] 对外文档零内部流程用语（不出现项目内部代号、内部页面名、内部术语）。
 - [ ] `LICENSE` / `CONTRIBUTING.md` / `SECURITY.md` 内容仍准确。
 - [ ] `.gitignore` 覆盖 `node_modules/`、`tmp*/`、`local/`、密钥与日志。
-- [ ] `git grep` 自查：无真实 API key、无本机用户名、无私人邮箱。
+- [ ] `node scripts/audit-release.mjs` 全绿：无密钥形态、无本机用户名路径、profile 与密钥文件未被跟踪、
+      发版物只含源码与清单（见下一节）。
 - [ ] README 的成本与隐私段落写明：哪些操作花钱、内容发往哪些第三方、模型占盘与内存、提示音素材只存本机。
+
+### 6.1 隐私与安全体检（发版前必跑）
+
+一键：`node scripts/audit-release.mjs`（零成本、不联网、不改文件；CI 也跑这一条）。它覆盖机器能判的部分：
+
+| 项 | 判据 | 失败意味着 |
+|---|---|---|
+| 密钥形态 | 跟踪文件里没有 `sk-…`／GitHub token／AWS key／私钥块／硬编码 Bearer／内联 key 赋值 | 有人把真 key 写进了仓库 |
+| 本机身份 | 跟踪文件里没有 `C:\Users\<名字>`、`/Users/<名字>`、`/home/<名字>` | 文档或截图路径泄露使用者的用户名 |
+| 密钥文件 | 没有跟踪 `.env`、`settings.yaml`、`profiles/`、`*.key`、`*.pem` | 用户配置被提交 |
+| 忽略规则 | `.gitignore` 仍覆盖 `node_modules/`、`local/`、`out/`、`*.key`、`*.pem`、`.env`、`tmp*/` | 下次会把模型或密钥提上去 |
+| 发版物 | `npm pack --dry-run` 的清单里没有模型／音频／测试／文档目录 | 装包体积失控或夹带本地文件 |
+| 体积基线 | 打印本机模型、提示音素材、转写缓存的体积与条目数 | 只用来对比"有没有异常增长" |
+
+机器判不了、只能人看的四条：
+
+- [ ] **Token 消耗对账**：真实 key 正常用 1–2 天，把用量页与 `voice-transcript-cache.json` 的 `at` 记录对一遍；
+      单条消息的 LLM 调用应为「首次朗读 1 次、重播 0 次」（豆包另加段落情感指令，见 §2）。
+- [ ] **密钥归属**：`tts.volcengine.apiKey` 只在 profile 的 `cordis.patch.yml` 里（本机私有），
+      没有出现在 README、截图、issue、日志或提交里。
+- [ ] **资源占用**：本地模型加载后常驻内存约 0.5–0.6GB；不选本地引擎时不加载。
+      长时间挂着看任务管理器，Host 进程内存应稳定（模型加载后不再爬升）。
+- [ ] **网络出口**：只有三个地方发请求——配置的转写 LLM、豆包 TTS、模型下载（GitHub Releases）。
+      没有埋点、没有遥测、没有第三方字体或 CDN。
 
 ## 7. 分发方式（发版前定一次）
 
@@ -86,11 +113,14 @@
 
 ## 8. 发版流程（SemVer）
 
-```
-1. 改代码（本仓库）          2. 五项自动化门槛全绿        3. 更新 CHANGELOG.md
-4. git add 相关 && git commit 5. git push                   6. git tag v0.4.0 && git push origin v0.4.0
-7. GitHub Release 写说明（含"Python 版 → 0.4.0"升级指引）
-```
+1. 改代码（本仓库）。
+2. 五个套件 + `node scripts/audit-release.mjs` 全绿（§1）。
+3. 更新 `CHANGELOG.md`：把 `[Unreleased]` 收成 `[0.4.0] - 日期`（同一版本只留一个标题）。
+4. `git add` 相关文件并 commit。
+5. `git push`，等 CI 在 HEAD 上跑绿（README 徽章转绿）。
+6. `git tag v0.4.0 && git push origin v0.4.0`。
+7. GitHub Release 写说明（含"Python 版 → 0.4.0"升级指引）。
+8. 向目录提收录（§9.1），商店随后自动能搜到。
 
 **版本号规则（配置演进纪律）**：
 
@@ -109,6 +139,32 @@
 ## 9. 发布后 72 小时观察窗
 
 - [ ] 盯真实使用 + 首个 issue：有没有"装不上 / 模型下不来 / 重复计费"类反馈。
-- [ ] 提交到 awesome-dsh-plugin 精选列表（截图用新版设置页）。
+- [ ] 提交到目录（§9.1），截图用新版设置页。
 - [ ] 有人报问题：先复现、先取证（看 `[voice]` 日志与缓存文件），再改代码。
 - [ ] 任何修复都先补一条断言，再改实现。
+
+### 9.1 上架（目录 + 商店）
+
+目录（`awesome-dsh-plugin`）与商店（`dsh-market`）读同一份清单：**只向目录提一次 PR，商店随后自动能搜到**。
+前置是 GitHub main 已经是能装的版本——否则别人从目录点进来，装到的是坏的。
+
+1. fork 目录仓库，加一个文件 `data/plugins/junarch__voice_for_dsh--packages-dsh-plugin-voice.yml`：
+
+```yaml
+url: https://github.com/junarch/voice_for_dsh/tree/main/packages/dsh-plugin-voice
+name: junarch/voice_for_dsh#dsh-plugin-voice
+category: voice
+description:
+  en: Reads each reply aloud after spoken-style transcription, with system TTS, Doubao, or an optional local Kokoro model.
+  zh: 把每轮回答改写成口语稿再朗读；支持系统朗读、豆包和可选的本地 Kokoro 模型。
+```
+
+2. 提 PR。CI 先校验 YAML、仓库年龄、`dsh-plugin` topic、子包里的 `dsh.bundle`、README 能否重新生成；
+   然后人工读仓库，判断描述是否属实、分类是否贴合。**夸大是被退回的主要原因**，描述只写现在真能做的。
+3. 合并后，商店（Plugins → Plugin Market）搜 `voice_for_dsh` 就能看到；目录的 README 由脚本生成，不要手改。
+
+维护：
+
+- 卡片上的「DSH 要求」读自 `package.json` 的 `@deepseek-ai/dsh-*` peers，抬版本时同步改 peer 即可；
+- 改描述要再提一次 PR 改那个 YAML；README 与截图跟着仓库走，不用重新提；
+- 可选加分项：在 YAML 里加 `icon:`，指向仓库中 180×180 的 png（否则列表回退成作者头像）。

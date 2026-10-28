@@ -2,6 +2,25 @@
   "name": "dsh-plugin-voice",
   "version": "0.4.0",
   "description": "DSH web plugin: read aloud each DeepSeek turn output after spoken-style transcription (code/table/markdown aware), with per-message manual read buttons and an auto-read toggle.",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "tts",
+    "text-to-speech",
+    "voice",
+    "read-aloud",
+    "kokoro"
+  ],
+  "homepage": "https://github.com/junarch/voice_for_dsh#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/junarch/voice_for_dsh.git",
+    "directory": "packages/dsh-plugin-voice"
+  },
+  "bugs": {
+    "url": "https://github.com/junarch/voice_for_dsh/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {

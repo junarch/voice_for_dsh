@@ -1188,7 +1188,7 @@ window.__ModuleLoader__.load({
       for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
       return list[0];
     }
-    /** 下拉里的三个内置变体（名字在 i18n 里；不出现"程序合成"这类实现词）。 */
+    /** 下拉里的内置变体（工作音五个、完成/提问各三个；名字在 i18n 里，不出现"程序合成"这类实现词）。 */
     function chimeVariantOptions(kind) {
       var list = CHIME_VARIANTS[kind] || [];
       return list.map(function (v) {

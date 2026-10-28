@@ -406,7 +406,7 @@ function chimeRowDefault() {
 function chimeRowSchema() {
   return z.object({
     enabled: z.boolean().default(false),   // 这一类音响不响
-    source: z.string().default('a'),       // a/b/c=三个内置变体 | custom=用户上传
+    source: z.string().default('a'),       // 内置变体 id（a..e；每类有几个由 Client 半的变体表决定）| custom=用户上传
     file: z.string().default(''),          // custom 时：<DSH_HOME>/voice/sounds 下的文件名
   }).default(chimeRowDefault())
 }
