@@ -387,9 +387,9 @@ voice:
   chime:                      # 提示音（设置页第五层）；默认整层关闭，与朗读互不依赖
     enabled: false
     volume: 0.3               # 总音量 0–1（客户端 master gain）
-    work: { enabled: false, source: default, file: "" }   # 工作音：顶层会话在跑时循环
-    done: { enabled: false, source: default, file: "" }   # 完成音：顶层会话 running 真→假
-    ask:  { enabled: false, source: default, file: "" }   # 提问音：question / plan-review（审批不算）
+    work: { enabled: false, source: a, file: "" }   # 工作音：顶层会话在跑时循环（source: a/b/c=内置变体）
+    done: { enabled: false, source: a, file: "" }   # 完成音：顶层会话 running 真→假
+    ask:  { enabled: false, source: a, file: "" }   # 提问音：question / plan-review（审批不算）
 ```
 
 ### 6.1 配置演进约定（升级纪律）
@@ -418,7 +418,7 @@ voice:
   客户端三路信号各自取顶层。拿不到会话表时按顶层处理（不因缺信息丢音）。
 - **上下文独立**：提示音用自己的 `AudioContext` + master gain。播报上下文固定 24kHz 且会被
   `stopPlaybackOnly` 连坐，两者不能共用；提示音不参与播报的停止/中断，播报也压不掉提示音（叠放）。
-- **默认三音程序合成**（正弦振荡 + 指数衰减包络，按上下文缓存），不随包带音频文件；自定义音走
+- **内置音每种三个变体**（工作：雨滴/滴答/低吟，完成：清铃/木琴/余韵，提问：轻问/上扬/回声），现场合成（正弦+泛音+滑音、指数衰减包络，按 `kind|变体` 缓存），不随包带音频文件；变体 a 与旧默认音逐采样一致（`source: default` 的旧配置归一成 `a`）。自定义音走
   `GET /voice/sounds/<file>` 取回后 `decodeAudioData` 解码，读不到时回落默认音（设置页同时提示）。
 - **素材存储**：`POST /voice/sounds?kind=work|done|ask&name=<原名>` 上传（`application/octet-stream`，
   累加 ≤10MB，魔数白名单 mp3/wav/ogg/m4a/aac/flac/opus/webm，文件名白名单并拒绝 `..`），

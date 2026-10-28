@@ -134,7 +134,10 @@ try {
     'layer.l5.title', 'layer.l5.summary.on', 'layer.l5.summary.off',
     'row.chimeEnabled', 'row.chimeVolume', 'hint.chime',
     'chime.work', 'chime.done', 'chime.ask',
-    'chime.source.default', 'chime.source.custom',
+    'chime.source.custom',
+    'chime.variant.work.a', 'chime.variant.work.b', 'chime.variant.work.c',
+    'chime.variant.done.a', 'chime.variant.done.b', 'chime.variant.done.c',
+    'chime.variant.ask.a', 'chime.variant.ask.b', 'chime.variant.ask.c',
     'chime.upload', 'chime.uploading', 'chime.uploaded', 'chime.uploadFail',
     'chime.tooLarge', 'chime.tooLong', 'chime.undecodable',
     'chime.noFile', 'chime.missing', 'chime.preview', 'chime.previewFail',
@@ -156,7 +159,8 @@ try {
   for (const jargon of ['explicit_dialect', '方言需 vv 音色']) {
     if (source.includes(jargon)) throw new Error('设置页文案不应出现术语：' + jargon)
   }
-  for (const k of ['speaker.hint', 'language.hint', 'dialect.onlyVoices', 'language.enOnly']) {
+  // 语种/音色各留一条必要文案（英文改写说明挪进了 English 选项名）
+  for (const k of ['dialect.onlyVoices', 'language.enOption']) {
     if (!zhKeys.includes(k)) throw new Error('missing capability hint key: ' + k)
   }
 

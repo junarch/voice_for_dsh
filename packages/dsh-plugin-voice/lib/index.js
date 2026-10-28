@@ -371,12 +371,12 @@ function sweepChimeSounds(referenced) {
 
 /** 一路提示音配置的默认值（每行三个字段；带默认值即向后兼容）。 */
 function chimeRowDefault() {
-  return { enabled: false, source: 'default', file: '' }
+  return { enabled: false, source: 'a', file: '' }
 }
 function chimeRowSchema() {
   return z.object({
     enabled: z.boolean().default(false),   // 这一类音响不响
-    source: z.string().default('default'), // default=程序合成（不随包带文件）| custom=用户上传
+    source: z.string().default('a'),       // a/b/c=三个内置变体 | custom=用户上传
     file: z.string().default(''),          // custom 时：<DSH_HOME>/voice/sounds 下的文件名
   }).default(chimeRowDefault())
 }

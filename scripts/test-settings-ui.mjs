@@ -317,7 +317,12 @@ check('标题下方显示插件版本与适配的 DSH 版本',
   allText(tree).includes('voice_for_dsh v9.9.9') && allText(tree).includes('0.2.1-rc.3'), allText(tree).slice(0, 120))
 check('本地：有「播报语种」下拉', allText(tree).includes('播报语种'), allText(tree).slice(-260))
 check('本地：不再有「停顿风格」选项', !allText(tree).includes('停顿风格'))
-check('本地：方言说明在位（模型只有中英、没有方言）', allText(tree).includes('没有方言'))
+// 页头说明句已删：标题下只留版本行，不再有"每轮回答结束后…"那段
+check('页头不再有说明句（只留版本行）', !allText(tree).includes('每轮回答结束后'))
+// 底部只剩一个「试听」按钮（刷新/停止播报退役）
+const actionButtons = byType(tree, 'button').map((n) => texts(n).join('').trim())
+check('底部没有「刷新模型/档位列表」按钮', !actionButtons.some((x) => x.includes('刷新')))
+check('底部没有「停止播报」按钮', !actionButtons.some((x) => x.includes('停止播报')))
 saveCalls = []
 const langSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'auto'))
 langSelect.props.onChange({ target: { value: 'en' } })

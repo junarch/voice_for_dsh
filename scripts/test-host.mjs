@@ -2053,9 +2053,9 @@ async function waitDeploy(installer, timeoutMs = 8000) {
 // —— I. 提示音素材：/voice/sounds 上传 + 读取 + 启动清扫 + chime 配置默认值 ——
 {
   const cfgNow = liveConfig.chime.get()
-  check('chime 默认值：总开关关、音量 0.3、三种音各自独立（默认音）',
+  check('chime 默认值：总开关关、音量 0.3、三种音各自独立（内置变体 a）',
     cfgNow.enabled === false && cfgNow.volume === 0.3
-    && ['work', 'done', 'ask'].every((k) => cfgNow[k].enabled === false && cfgNow[k].source === 'default' && cfgNow[k].file === ''),
+    && ['work', 'done', 'ask'].every((k) => cfgNow[k].enabled === false && cfgNow[k].source === 'a' && cfgNow[k].file === ''),
     cfgNow)
   check('getConfig 带回 chime（设置页第五层读得到）', !!(await rpc('getConfig')).config.chime && (await rpc('getConfig')).config.chime.volume === 0.3)
 

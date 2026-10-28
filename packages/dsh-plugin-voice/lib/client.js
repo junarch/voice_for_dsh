@@ -28,14 +28,12 @@ window.__ModuleLoader__.load({
       "badge.speaking": "朗读中…", "badge.done": "已朗读 ✓", "badge.replay": "点击重播此轮播报",
       "settings.title": "语音播报",
       "settings.dshCompat": "适配 DSH",
-      "settings.intro": "每轮回答结束后，先把回答改写成口语稿再念出来。设置存在本机 DSH 的 profile 配置里（cordis.patch.yml），保存后立刻生效。",
       "settings.save": "保存", "settings.saved": "✅ 已保存，立刻生效",
       "settings.dirty": "● 有未保存的改动（约半秒后自动写入）", "settings.saving": "正在保存…",
       "settings.savedNow": "✅ 已保存（重启后仍然生效）",
       "settings.saveUnverified": "⚠ 已提交，但没在配置文件里读回这次改动——可能没落盘，请再点一次「保存」",
       "settings.saveFail": "❌ 保存失败：", "settings.loadFail": "读取配置失败",
-      "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
-      "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
+      "settings.preview": "▶ 试听", "settings.stopPreview": "⏹ 停止试听",
       "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（豆包）…", "settings.previewAudio": "▶ 试听中…",
       "layer.l1.title": "常用", "layer.l2.title": "当前引擎声音设置", "layer.l3.title": "转写", "layer.l4.title": "高级",
       "layer.l2.summary.browser": "系统 TTS · 语速 {rate}",
@@ -60,6 +58,7 @@ window.__ModuleLoader__.load({
       "row.transcribeEnabled": "开启转写",
       "group.auth": "鉴权", "group.pronounce": "发音",
       "row.autoSpeak": "自动播报", "row.engine": "播报引擎", "row.language": "语种/方言",
+      "language.enOption": "English（播报稿改写成英文再念）",
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
@@ -68,7 +67,6 @@ window.__ModuleLoader__.load({
       "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
       "local.languageHint": " 选英文时会把口语稿改写成英文再念（转写关闭时不翻译，仍按原文）",
-      "local.dialectHint": "模型只有中英两种语言、没有方言；「东北口音」这类感觉来自音色本身，换个 sid 试听即可；要方言请用豆包。",
       "settings.retrySave": "重试保存",
       "row.localNumThreads": "合成线程数",
       "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
@@ -122,10 +120,7 @@ window.__ModuleLoader__.load({
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "browser.voiceHint": " 留空=系统默认；名字对不上系统里的语音就按默认音播",
       "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
-      "speaker.hint": "只列会说当前语种/方言的音色；手填音色 ID 也能用，但不保证方言 / only voices that speak the picked language; custom ids allowed (dialects untested)",
-      "language.hint": "不支持的方言不会出现在这里；固定语种会覆盖原文语言 / unsupported dialects are hidden; fixed language overrides source",
       "dialect.onlyVoices": "方言只对上面这几个音色开放（换回普通话即可看到全部音色）/ dialects are limited to the voices listed above",
-      "language.enOnly": "英文音色会把播报稿先改成英文再念（不是只换个嗓子）/ an English voice rewrites the script into English first",
       "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准付费 Key：", "apiKey.hintLink": "新版控制台快速入门",
       "row.gateway": "网关", "row.httpUrl": "HTTP 端点（自定义）",
       "gateway.hint": " plan=智能体套餐（默认）；standard=标准付费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
@@ -137,7 +132,10 @@ window.__ModuleLoader__.load({
       "row.chimeEnabled": "开启提示音", "row.chimeVolume": "总音量",
       "hint.chime": "任何会话在跑（含子代理）就循环工作音；你等的那一轮结束响一次完成音；DSH 弹出提问等你回答响一次提问音。与朗读互不影响。",
       "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
-      "chime.source.default": "默认音（程序合成）", "chime.source.custom": "自定义",
+      "chime.source.custom": "自定义（上传音频）",
+      "chime.variant.work.a": "雨滴", "chime.variant.work.b": "滴答", "chime.variant.work.c": "低吟",
+      "chime.variant.done.a": "清铃", "chime.variant.done.b": "木琴", "chime.variant.done.c": "余韵",
+      "chime.variant.ask.a": "轻问", "chime.variant.ask.b": "上扬", "chime.variant.ask.c": "回声",
       "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
       "chime.uploadFail": "❌ 上传失败：", "chime.uploadFailUnknown": "未知错误",
       "chime.tooLarge": "文件超过 10MB，换个小一点的",
@@ -159,14 +157,12 @@ window.__ModuleLoader__.load({
       "badge.speaking": "Reading…", "badge.done": "Read ✓", "badge.replay": "Click to replay this turn",
       "settings.title": "Voice Readout",
       "settings.dshCompat": "for DSH",
-      "settings.intro": "Each finished turn is rewritten into spoken style, then read aloud. Settings live in this machine's DSH profile config (cordis.patch.yml) and take effect on save.",
       "settings.save": "Save", "settings.saved": "✅ Saved; takes effect now",
       "settings.dirty": "● Unsaved changes (auto-saving in a moment)", "settings.saving": "Saving…",
       "settings.savedNow": "✅ Saved (survives a restart)",
       "settings.saveUnverified": "⚠ Submitted, but the change is not in the config file — it may not have been persisted; hit Save again",
       "settings.saveFail": "❌ Save failed: ", "settings.loadFail": "Failed to load config",
-      "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
-      "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
+      "settings.preview": "▶ Preview", "settings.stopPreview": "⏹ Stop preview",
       "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (Doubao)…", "settings.previewAudio": "▶ Previewing…",
       "layer.l1.title": "Basics", "layer.l2.title": "Current engine settings", "layer.l3.title": "Transcription", "layer.l4.title": "Advanced",
       "layer.l2.summary.browser": "System TTS · rate {rate}",
@@ -191,6 +187,7 @@ window.__ModuleLoader__.load({
       "row.transcribeEnabled": "Enable transcription",
       "group.auth": "Auth", "group.pronounce": "Pronunciation",
       "row.autoSpeak": "Auto-read", "row.engine": "TTS engine", "row.language": "Language/Dialect",
+      "language.enOption": "English (rewrites the script into English first)",
       "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
       "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
@@ -199,7 +196,6 @@ window.__ModuleLoader__.load({
       "row.localLanguage": "Spoken language",
       "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
       "local.languageHint": " English rewrites the spoken script into English first (with transcription off, the source text is read as-is)",
-      "local.dialectHint": "The model supports Chinese and English only — no dialects. A regional accent you hear comes from the voice itself; try another sid. For dialects, use Doubao.",
       "settings.retrySave": "Retry save",
       "row.localNumThreads": "Synthesis threads",
       "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
@@ -253,10 +249,7 @@ window.__ModuleLoader__.load({
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "browser.voiceHint": " Empty = system default; a name the system does not know falls back to the default voice",
       "row.apiKey": "apiKey", "row.speaker": "Speaker",
-      "speaker.hint": "Only voices that speak the picked language/dialect are listed; custom ids allowed (dialects untested)",
-      "language.hint": "Unsupported dialects are hidden here; a fixed language overrides the source language",
       "dialect.onlyVoices": "Dialects are limited to the voices listed above; switch back to Mandarin to see all voices",
-      "language.enOnly": "An English voice rewrites the script into English first — it is not just a different timbre",
       "apiKey.hint": "Doubao TTS: enable the speech service in the Volcengine console, then get an API Key (X-Api-Key) in \"API management\"; plan = agent-plan key, standard = pay-as-you-go key: ", "apiKey.hintLink": "Quick start (new console)",
       "row.gateway": "Gateway", "row.httpUrl": "HTTP endpoint (custom)",
       "gateway.hint": " plan=agent-plan (default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
@@ -268,7 +261,10 @@ window.__ModuleLoader__.load({
       "row.chimeEnabled": "Enable chimes", "row.chimeVolume": "Master volume",
       "hint.chime": "Loop a work sound while any session runs (subagents included); a done sound when the turn you are waiting on finishes; an ask sound when DSH is waiting on your answer. Independent of readout.",
       "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
-      "chime.source.default": "Default (synthesized)", "chime.source.custom": "Custom",
+      "chime.source.custom": "Custom (upload audio)",
+      "chime.variant.work.a": "Raindrop", "chime.variant.work.b": "Tick-tock", "chime.variant.work.c": "Low hum",
+      "chime.variant.done.a": "Bright bell", "chime.variant.done.b": "Woodblock", "chime.variant.done.c": "Resonance",
+      "chime.variant.ask.a": "Soft ask", "chime.variant.ask.b": "Rising", "chime.variant.ask.c": "Echo",
       "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
       "chime.uploadFail": "❌ Upload failed: ", "chime.uploadFailUnknown": "Unknown error",
       "chime.tooLarge": "File is over 10MB - pick a smaller one",
@@ -1053,11 +1049,17 @@ window.__ModuleLoader__.load({
       } catch (e) { /* 服务未提供：按缺失处理 */ }
       try { return c[name]; } catch (e2) { return undefined; }
     }
+    /** 内置音变体 id：'a'|'b'|'c'（旧配置的 'default' 归一成 'a'；选自定义时按 a 兜底）。 */
+    function chimeVariantIdOf(row) {
+      var s = row && row.source;
+      return s === "b" || s === "c" ? s : "a";
+    }
     function normalizeChimeRow(row) {
       var r = row && typeof row === "object" ? row : {};
+      var src = r.source === "custom" ? "custom" : chimeVariantIdOf(r);
       return {
         enabled: !!r.enabled,
-        source: r.source === "custom" ? "custom" : "default",
+        source: src,
         file: typeof r.file === "string" ? r.file : "",
       };
     }
@@ -1101,20 +1103,47 @@ window.__ModuleLoader__.load({
     function applyChimeVolume() {
       if (chimeMaster && chimeCfg) chimeMaster.gain.value = chimeCfg.volume;
     }
-    /** 默认三音：程序合成（正弦振荡 + 指数衰减包络），不随包带音频文件。 */
-    var CHIME_SYNTH = {
-      work: { total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
-      done: { total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
-      ask: { total: 0.62, notes: [{ f: 880.0, t: 0, d: 0.2, g: 0.55 }, { f: 1108.73, t: 0.18, d: 0.36, g: 0.5 }] },
+    /** 内置音：每种三个变体（a=原来那版，采样一点没改；b/c 靠泛音与滑音区分）。
+     *  p = 泛音比例与增益；slide = 单音内部频率漂移（占比），用来做"上扬/下沉"。 */
+    var CHIME_VARIANTS = {
+      work: [
+        { id: "a", total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
+        { id: "b", total: 2.4, notes: [{ f: 1180, t: 0, d: 0.09, g: 0.42, p: [[1, 1], [2.4, 0.2]] }, { f: 880, t: 1.2, d: 0.1, g: 0.36, p: [[1, 1], [2.4, 0.2]] }] },
+        { id: "c", total: 2.4, notes: [{ f: 220, t: 0, d: 2.1, g: 0.3, slide: 0.04, p: [[1, 1], [2, 0.18]] }] },
+      ],
+      done: [
+        { id: "a", total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
+        { id: "b", total: 0.46, notes: [{ f: 660, t: 0, d: 0.4, g: 0.5, p: [[1, 1], [3, 0.32], [5, 0.1]] }] },
+        { id: "c", total: 0.88, notes: [{ f: 784, t: 0, d: 0.34, g: 0.46 }, { f: 988, t: 0.14, d: 0.34, g: 0.42 }, { f: 1174.66, t: 0.28, d: 0.55, g: 0.4 }] },
+      ],
+      ask: [
+        { id: "a", total: 0.62, notes: [{ f: 880.0, t: 0, d: 0.2, g: 0.55 }, { f: 1108.73, t: 0.18, d: 0.36, g: 0.5 }] },
+        { id: "b", total: 0.55, notes: [{ f: 587.33, t: 0, d: 0.24, g: 0.45, slide: 0.18 }, { f: 880.0, t: 0.2, d: 0.3, g: 0.45, slide: 0.22 }] },
+        { id: "c", total: 0.78, notes: [{ f: 987.77, t: 0, d: 0.22, g: 0.5 }, { f: 987.77, t: 0.26, d: 0.4, g: 0.2 }] },
+      ],
     };
-    function synthChimeBuffer(ctx, kind) {
-      var spec = CHIME_SYNTH[kind] || CHIME_SYNTH.done;
+    /** 取某类音的某个变体（找不到就回落到第一个）。 */
+    function chimeVariantOf(kind, id) {
+      var list = CHIME_VARIANTS[kind] || CHIME_VARIANTS.done;
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+      return list[0];
+    }
+    /** 下拉里的三个内置变体（名字在 i18n 里；不出现"程序合成"这类实现词）。 */
+    function chimeVariantOptions(kind) {
+      var list = CHIME_VARIANTS[kind] || [];
+      return list.map(function (v) {
+        return React.createElement("option", { key: v.id, value: v.id }, t("chime.variant." + kind + "." + v.id));
+      });
+    }
+    function synthChimeBuffer(ctx, kind, variantId) {
+      var spec = chimeVariantOf(kind, variantId);
       var rate = ctx.sampleRate || 44100;
       var len = Math.max(1, Math.round(spec.total * rate));
       var buffer = ctx.createBuffer(1, len, rate);
       var data = buffer.getChannelData(0);
       for (var n = 0; n < spec.notes.length; n++) {
         var note = spec.notes[n];
+        var partials = note.p || [[1, 1]];
         var start = Math.round(note.t * rate);
         var dur = Math.max(1, Math.round(note.d * rate));
         for (var i = 0; i < dur; i++) {
@@ -1123,13 +1152,16 @@ window.__ModuleLoader__.load({
           var t = i / rate;
           var env = Math.exp(-4.5 * (i / dur));          // 衰减包络
           var attack = Math.min(1, t / 0.004);           // 4ms 起音，避免爆音
-          data[idx] += Math.sin(2 * Math.PI * note.f * t) * env * attack * note.g;
+          var bend = 1 + (note.slide || 0) * (i / dur);  // 单音内部滑音
+          for (var k = 0; k < partials.length; k++) {
+            data[idx] += Math.sin(2 * Math.PI * note.f * partials[k][0] * bend * t) * env * attack * note.g * partials[k][1];
+          }
         }
       }
       var peak = 0;
-      var k;
-      for (k = 0; k < len; k++) { var a = Math.abs(data[k]); if (a > peak) peak = a; }
-      if (peak > 0.95) { var s = 0.95 / peak; for (k = 0; k < len; k++) data[k] *= s; }
+      var j;
+      for (j = 0; j < len; j++) { var a = Math.abs(data[j]); if (a > peak) peak = a; }
+      if (peak > 0.95) { var s = 0.95 / peak; for (j = 0; j < len; j++) data[j] *= s; }
       return buffer;
     }
     /** 取某类音的 AudioBuffer：默认音现场合成；自定义音 GET /voice/sounds/<file> 后解码。
@@ -1138,13 +1170,14 @@ window.__ModuleLoader__.load({
       var ctx = ensureChimeCtx();
       if (!ctx) return Promise.resolve(null);
       var file = chimeSourceOf(row);
-      var key = kind + "|" + (file || "default");
+      var variant = file ? "a" : chimeVariantIdOf(row);
+      var key = kind + "|" + (file || variant);
       if (chimeBuffers[key]) {
         if (file) delete chimeMissing[kind];
         return Promise.resolve(chimeBuffers[key]);
       }
       if (!file) {
-        chimeBuffers[key] = synthChimeBuffer(ctx, kind);
+        chimeBuffers[key] = synthChimeBuffer(ctx, kind, variant);
         return Promise.resolve(chimeBuffers[key]);
       }
       return fetch("/voice/sounds/" + encodeURIComponent(file), { cache: "no-store" }).then(function (res) {
@@ -1161,8 +1194,8 @@ window.__ModuleLoader__.load({
         return buffer;
       }).catch(function () {
         chimeMissing[kind] = file;
-        var fallback = synthChimeBuffer(ctx, kind);
-        chimeBuffers[kind + "|default"] = fallback;
+        var fallback = synthChimeBuffer(ctx, kind, "a");
+        chimeBuffers[kind + "|a"] = fallback;
         return fallback;
       });
     }
@@ -1860,10 +1893,10 @@ window.__ModuleLoader__.load({
             onChange: function (v) { props.onToggle(v); },
           }),
           row.enabled ? React.createElement(SelectInput, {
-            value: row.source === "custom" ? "custom" : "default",
+            value: row.source === "custom" ? "custom" : chimeVariantIdOf(row),
             onChange: function (v) { props.onSource(v); },
           },
-            React.createElement("option", { value: "default" }, t("chime.source.default")),
+            chimeVariantOptions(kind),
             React.createElement("option", { value: "custom" }, t("chime.source.custom"))) : null,
           row.enabled ? React.createElement("button", {
             className: "dsh-voice-read-btn",
@@ -1901,6 +1934,10 @@ window.__ModuleLoader__.load({
       const busyPair = React.useState(false);
       const busy = busyPair[0];
       const setBusy = busyPair[1];
+      // 试听是否正在响：决定底部那一个按钮是"试听"还是"停止"
+      const previewPair = React.useState(false);
+      const previewing = previewPair[0];
+      const setPreviewing = previewPair[1];
       const localMsgPair = React.useState("");
       const localCheckMsg = localMsgPair[0];
       const setLocalCheckMsg = localMsgPair[1];
@@ -2082,27 +2119,24 @@ window.__ModuleLoader__.load({
         const diff = diffPatch(JSON.parse(savedRef.current || "{}"), cfg);
         await saveNow(mergePatch(pending || {}, diff), false);
       }
-      async function onRefreshRoute() {
-        setBusy(true);
-        try {
-          const ri = await rpc("routeInfo", { provider: cfg.provider, model: cfg.model });
-          if (ri && ri.ok) { setInfo(ri); setMsg(t("settings.refreshed")); }
-        } catch (e) {}
-        setBusy(false);
-      }
       async function onPreview() {
+        // 一个按钮两态：没在响 = 试听；正在响 = 停止（试听很短，单独放停止按钮没必要）。
+        // 停止走 stopPlaybackOnly：同时清掉"朗读中"状态，并只中止本会话的 Host 管线。
+        if (previewing) { stopPlaybackOnly({ notifyHost: true }); setPreviewing(false); setMsg(""); return; }
         setBusy(true); setMsg("");
-        // 连点两次试听不能让两段叠着响：上一段（可能还是旧音色）先停掉，
-        // 否则验收时听到的仍是"旧的声音"，会误判成没修好。
-        if (currentAudio) { try { currentAudio.pause(); } catch (e) { /* 已结束：忽略 */ } currentAudio = null; }
-        if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+        // 正在播报消息时先停掉它，否则两路声音叠着响（试听要能替换掉当前声音，不是叠加）
+        if (currentAudio || playingMessageId || streamRunId) stopPlaybackOnly({ notifyHost: true });
         try {
           // 用页面当前草稿试听，不落盘：没点"保存"就不改配置（旧版会先静默写盘再合成）
           const res = await rpc("preview", { cfg: cfg });
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
-          else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser")); }
-          else if (res.audioUrl) {
-            playAudio(res.audioUrl, {});
+          else if (res.mode === "browser") {
+            setPreviewing(true);
+            speakText(res.text, res.speech, { onEnd: () => setPreviewing(false), onError: () => setPreviewing(false) });
+            setMsg(t("settings.previewBrowser"));
+          } else if (res.audioUrl) {
+            setPreviewing(true);
+            playAudio(res.audioUrl, { onEnd: () => setPreviewing(false), onError: () => setPreviewing(false) });
             // 标签由 Host 给：本地是音色名、豆包是语种；系统 TTS 没有标签（语种对它不生效）
             const label = res.voiceLabel || res.languageLabel || "";
             setMsg((ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")) + (label ? " · " + label : ""));
@@ -2221,7 +2255,6 @@ window.__ModuleLoader__.load({
         next.autoSpeakCloudTts = v === "volcengine";
         setCfg(next);
         setMsg("");
-        setL2Open(true); // 换引擎就把"当前引擎的声音"展开，省一次点击
         // 主开关不排队：立刻落盘，避免"以为切过去了，重启又回豆包"
         if (autoTimerRef.current) { clearTimeout(autoTimerRef.current); autoTimerRef.current = null; }
         editSeqRef.current++;
@@ -2287,7 +2320,6 @@ window.__ModuleLoader__.load({
         React.createElement("p", { className: "dsh-voice-dim dsh-voice-version" },
           "voice_for_dsh v" + ((m && m.pluginVersion) || "?")
           + " · " + t("settings.dshCompat") + " " + ((m && m.dshCompat) || "?")),
-        React.createElement("p", { className: "dsh-voice-dim" }, t("settings.intro")),
 
         // —— L1 常用：首屏只留引擎与自动播报，外加至多一行引擎/模型状态 ——
         React.createElement("div", { className: "dsh-voice-layer open" },
@@ -2363,7 +2395,6 @@ window.__ModuleLoader__.load({
                   React.createElement("option", { value: "zh" }, t("local.language.zh")),
                   React.createElement("option", { value: "en" }, t("local.language.en"))),
                 React.createElement("span", { className: "dsh-voice-dim" }, t("local.languageHint"))),
-              React.createElement("p", { className: "dsh-voice-dim" }, t("local.dialectHint")),
               (localStatus && localStatus.installed === false ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.notInstalled")) : null),
               React.createElement(Row, { label: t("settings.localCheck") },
                 React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckLocal, disabled: busy }, t("settings.localCheck")),
@@ -2389,6 +2420,14 @@ window.__ModuleLoader__.load({
             React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
               React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
             React.createElement("h4", null, t("group.pronounce")),
+            // 语种在上、音色在下：先定"说什么语言"，再看"谁来说"
+            React.createElement(Row, { label: t("row.language") },
+              React.createElement(SelectInput, { value: cfg.language, onChange: onLanguageChange },
+                shownLanguages.map((l) => React.createElement("option", { key: l.id, value: l.id },
+                  l.id === "en" ? t("language.enOption") : l.label))),
+              (curDialect
+                ? React.createElement("span", { className: "dsh-voice-dim" }, t("dialect.onlyVoices"))
+                : null)),
             React.createElement(Row, { label: t("row.speaker") },
               React.createElement(SelectInput, {
                 value: (speakerKnown ? cfg.tts.volcengine.speaker : VOICE_CUSTOM),
@@ -2400,18 +2439,7 @@ window.__ModuleLoader__.load({
                 value: cfg.tts.volcengine.speaker,
                 onChange: (v) => onSpeakerChange(v),
                 placeholder: "zh_female_vv_uranus_bigtts",
-              })),
-              React.createElement("span", { className: "dsh-voice-dim" }, t("speaker.hint"))),
-            React.createElement(Row, { label: t("row.language") },
-              React.createElement(SelectInput, { value: cfg.language, onChange: onLanguageChange },
-                shownLanguages.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.label))),
-              React.createElement("span", { className: "dsh-voice-dim" }, t("language.hint"))),
-            (curDialect
-              ? React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.onlyVoices"))
-              : null),
-            (curEn
-              ? React.createElement("p", { className: "dsh-voice-warn" }, t("language.enOnly"))
-              : null),
+              }))),
             React.createElement(Row, { label: t("row.rateLevel") },
               React.createElement(SliderInput, { value: cfg.tts.volcengine.rateLevel, onChange: (v) => setField("tts.volcengine.rateLevel", v), min: 0, max: 4, step: 1, format: (v) => rateStops[v] || String(v) }),
               React.createElement("span", { className: "dsh-voice-dim" }, " 数值 speech_rate 参数实现 / via numeric speech_rate")),
@@ -2533,9 +2561,9 @@ window.__ModuleLoader__.load({
         React.createElement("div", { className: "dsh-voice-actions" },
           // 没有「保存」按钮：改动即写盘。只有写失败（或没落盘）时才出现「重试保存」。
           saveFailed ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: onSave, disabled: saving }, t("settings.retrySave")) : null,
-          React.createElement("button", { className: "dsh-voice-read-btn", onClick: onRefreshRoute, disabled: busy }, t("settings.refresh")),
-          React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview, disabled: busy }, t("settings.preview")),
-          React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => stopAll() }, t("settings.stopAll"))),
+          // 试听按钮自带停止：正在响时点它=停（试听很短，不需要单独一个停止按钮）
+          React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview, disabled: busy && !previewing },
+            previewing ? t("settings.stopPreview") : t("settings.preview"))),
         React.createElement("p", { className: (dirty || !saveNote) ? "dsh-voice-warn" : "dsh-voice-msg" },
           saving ? t("settings.saving") : (saveNote || (dirty ? t("settings.dirty") : ""))),
         msg ? React.createElement("div", { className: "dsh-voice-msg" }, msg) : null);
