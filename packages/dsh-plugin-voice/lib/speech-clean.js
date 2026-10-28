@@ -34,3 +34,17 @@ export function sanitizeForSpeech(text) {
   t = t.replace(/\n{3,}/g, '\n\n')
   return t.trim()
 }
+
+/** 中文全角句读：它们在 Kokoro 里会变成 ~430ms 的停顿，密集出现就是"大喘气"。
+ *  只处理中文标点，英文标点（. , ! ?）保留——英文靠它们断句，删了反而读错。 */
+const CJK_PUNCT = /[，。、；：！？…—～·]/
+
+/** 紧凑停顿（`tts.local.pauseStyle = tight`）：把中文句读从送合成文本里去掉，保留换行。
+ *  实测（scripts/local-tts-rhythm-probe.mjs）：同一段中文语速 4.7 → 5.9 字/秒、最长停顿 430ms → 270ms。 */
+export function tightenPause(text) {
+  let t = String(text == null ? '' : text)
+  if (!CJK_PUNCT.test(t)) return t
+  t = t.replace(/[，。、；：！？…—～·]/g, '')
+  t = t.replace(/[ \t]+/g, ' ')
+  return t
+}

@@ -64,6 +64,13 @@ window.__ModuleLoader__.load({
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
       "engine.browser": "系统 TTS（浏览器语音·免费）", "engine.volcengine": "豆包（付费）", "engine.local": "本地 Kokoro（中英·免费）",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
+      "row.localLanguage": "播报语种", "row.localPause": "停顿风格",
+      "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
+      "local.languageHint": " 选英文时会把口语稿改写成英文再念（转写关闭时不翻译，仍按原文）",
+      "local.pause.tight": "紧凑（推荐）", "local.pause.natural": "自然（保留句读）",
+      "local.pauseHint": " 紧凑=去掉中文句读：实测语速 4.7→5.9 字/秒、最长停顿 430→270ms",
+      "local.dialectHint": "模型只有中英两种语言、没有方言；「东北口音」这类感觉来自音色本身，换个 sid 试听即可；要方言请用豆包。",
+      "settings.retrySave": "重试保存",
       "row.localNumThreads": "合成线程数",
       "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
       "local.sidHint": " 模型只有数字音色编号（0–102），没有官方名字；下拉是精选几档，想换音色直接手填 sid 试听",
@@ -185,6 +192,13 @@ window.__ModuleLoader__.load({
       "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
       "engine.browser": "System TTS (browser voice · free)", "engine.volcengine": "Doubao (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
+      "row.localLanguage": "Spoken language", "row.localPause": "Pause style",
+      "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
+      "local.languageHint": " English rewrites the spoken script into English first (with transcription off, the source text is read as-is)",
+      "local.pause.tight": "Tight (recommended)", "local.pause.natural": "Natural (keep punctuation)",
+      "local.pauseHint": " Tight drops Chinese punctuation before synthesis: 4.7 → 5.9 chars/s, longest pause 430 → 270ms in our probe",
+      "local.dialectHint": "The model supports Chinese and English only — no dialects. A regional accent you hear comes from the voice itself; try another sid. For dialects, use Doubao.",
+      "settings.retrySave": "Retry save",
       "row.localNumThreads": "Synthesis threads",
       "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
       "local.sidHint": " The model only exposes numeric voice ids (0-102) with no official names; the dropdown lists a few picks, type any sid to audition more",
@@ -1905,6 +1919,10 @@ window.__ModuleLoader__.load({
       const savingPair = React.useState(false);
       const saving = savingPair[0];
       const setSaving = savingPair[1];
+      // 保存失败时才出现「重试保存」；成功就收起来（平时没有保存按钮，改动即写盘）
+      const saveFailPair = React.useState(false);
+      const saveFailed = saveFailPair[0];
+      const setSaveFailed = saveFailPair[1];
       // 已落盘配置的指纹 + 防抖计时器 + 并发闸（自动保存与手动保存不互相插队）
       const savedRef = React.useRef("");
       const autoTimerRef = React.useRef(null);
@@ -1997,16 +2015,19 @@ window.__ModuleLoader__.load({
             if (res.config && res.config.chime) applyChimeConfig(res.config.chime);
             // Host 会读回 profile patch 核对；对不上就明说，不假装保存成功
             setSaveNote(res.persisted === false ? t("settings.saveUnverified") : t("settings.savedNow"));
+            setSaveFailed(res.persisted === false);
             if (res.persisted === false) setMsg(t("settings.saveUnverified"));
             if (editSeqRef.current === seq) setDirty(false);
           } else {
             const text = t("settings.saveFail") + (res && res.error ? String(res.error) : "unknown");
             setSaveNote(text);
+            setSaveFailed(true);
             setMsg(text);
           }
         } catch (e) {
           const text = t("settings.saveFail") + String(e && e.message || e);
           setSaveNote(text);
+          setSaveFailed(true);
           setMsg(text);
         }
         savingRef.current = false;
@@ -2308,6 +2329,19 @@ window.__ModuleLoader__.load({
                 React.createElement("span", { className: "dsh-voice-dim" }, t("local.sidHint"))),
               React.createElement(Row, { label: t("row.localSpeed") },
                 React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
+              // 本地模型没有"语种参数"：它按文稿语言发音，所以这里控制的是"让转写稿写成哪种语言"
+              React.createElement(Row, { label: t("row.localLanguage") },
+                React.createElement(SelectInput, { value: cfg.tts.local.language || "auto", onChange: (v) => setField("tts.local.language", v) },
+                  React.createElement("option", { value: "auto" }, t("local.language.auto")),
+                  React.createElement("option", { value: "zh" }, t("local.language.zh")),
+                  React.createElement("option", { value: "en" }, t("local.language.en"))),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("local.languageHint"))),
+              React.createElement(Row, { label: t("row.localPause") },
+                React.createElement(SelectInput, { value: cfg.tts.local.pauseStyle || "tight", onChange: (v) => setField("tts.local.pauseStyle", v) },
+                  React.createElement("option", { value: "tight" }, t("local.pause.tight")),
+                  React.createElement("option", { value: "natural" }, t("local.pause.natural"))),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("local.pauseHint"))),
+              React.createElement("p", { className: "dsh-voice-dim" }, t("local.dialectHint")),
               (localStatus && localStatus.installed === false ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.notInstalled")) : null),
               React.createElement(Row, { label: t("settings.localCheck") },
                 React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckLocal, disabled: busy }, t("settings.localCheck")),
@@ -2475,8 +2509,8 @@ window.__ModuleLoader__.load({
             }))) : null),
 
         React.createElement("div", { className: "dsh-voice-actions" },
-          // 保存不再因 busy 静默失效：改动本来就会自动写，按钮只是"立刻写一次"
-          React.createElement("button", { className: "dsh-voice-read-btn on", onClick: onSave, disabled: saving }, t("settings.save")),
+          // 没有「保存」按钮：改动即写盘。只有写失败（或没落盘）时才出现「重试保存」。
+          saveFailed ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: onSave, disabled: saving }, t("settings.retrySave")) : null,
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: onRefreshRoute, disabled: busy }, t("settings.refresh")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview, disabled: busy }, t("settings.preview")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => stopAll() }, t("settings.stopAll"))),

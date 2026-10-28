@@ -309,6 +309,18 @@ tree = await flush()
 check('试听状态行显示 Host 给的音色名（本地引擎）', allText(tree).includes('中文男声 · 中（sid 75）'), allText(tree).slice(-160))
 check('试听不写盘（不触发 setConfig）', saveCalls.length === savesBeforePreview, saveCalls.length - savesBeforePreview)
 
+// 保存按钮退役 + 本地新增两个设置
+check('设置页没有「保存」按钮（改动即写盘）', !byType(tree, 'button').some((n) => texts(n).join('').trim() === '保存'))
+check('本地：有「播报语种」「停顿风格」两个下拉', allText(tree).includes('播报语种') && allText(tree).includes('停顿风格'), allText(tree).slice(-260))
+check('本地：方言说明在位（模型只有中英、没有方言）', allText(tree).includes('没有方言'))
+saveCalls = []
+const langSelect = byType(tree, 'select').find((n) => flatten(n).some((c) => c.kind === 'element' && c.type === 'option' && c.props.value === 'auto'))
+langSelect.props.onChange({ target: { value: 'en' } })
+await new Promise((r) => setTimeout(r, 450))
+tree = await flush()
+check('改播报语种 → 自动保存 tts.local.language=en',
+  saveCalls.some((p) => p.tts && p.tts.local && p.tts.local.language === 'en'), saveCalls)
+
 // 6) 引擎切换走组件自己的 onChange：系统 TTS → 本地，本地参数随之出现
 saveCalls = []
 tree = await mount(CaseBrowser)

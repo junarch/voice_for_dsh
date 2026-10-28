@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
-import { sanitizeForSpeech } from './speech-clean.js'
+import { sanitizeForSpeech, tightenPause } from './speech-clean.js'
 import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
 import { createModelInstaller } from './model-installer.js'
 import {
@@ -432,18 +432,20 @@ const Config = z.object({
       // 本地 Kokoro v1.1（进程内 sherpa-onnx，中英跟随原文，免费；docs/local-tts.md）
       sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，无官方名字表）；设置页下拉 + 手填
       speed: z.number().default(1),            // 语速 [0.5, 2]
+      language: z.union([z.const('auto'), z.const('zh'), z.const('en')]).default('auto'), // 播报语种：auto=跟随原文；zh/en=让转写稿用该语言（本地按文本语言发音）
+      pauseStyle: z.union([z.const('natural'), z.const('tight')]).default('tight'), // 停顿风格：tight=合成前去掉中文句读（更连贯）；natural=保留原标点
       numThreads: z.number().default(4),       // 合成线程数（1–16；线程多首声更快、更吃 CPU）
       modelDir: z.string().default(''),        // 模型目录覆盖；空=自动解析（无 UI，高级；测试用 env 亦可）
       timeoutMs: z.number().default(30000),    // 单次整段合成超时；失败 → ttsError，客户端降级系统 TTS
       streaming: z.boolean().default(true),    // 分句流式：按句切段逐段合成，首声 ≤1s（关=整段合成，等待长）
       segmentChars: z.number().default(220),   // 分句流式的每段目标字符数（无 UI，高级）
       segmentTimeoutMs: z.number().default(30000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
-    }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
+    }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', pauseStyle: 'tight', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
-    local: { sid: LOCAL_DEFAULT_SID, speed: 1, numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
+    local: { sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', pauseStyle: 'tight', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
   // 提示音（设置页第五层）：默认全关；三种音各自可换自定义素材。
@@ -770,6 +772,15 @@ function apply(ctx, config) {
       base += '\n附加要求：无论原文是什么语言，口播稿必须用' + lang.instruct + '输出'
         + (lang.dialect ? '（用字保持中文书写习惯，语汇贴近该方言的口语）' : '') + '。'
     }
+    // 本地引擎按"文本语言"发音（模型没有语种参数）：要它说明一种语言，就得让转写稿写成那种语言。
+    // 这是与豆包 explicit_language 等价的出口，区别只在于落在文本上。
+    if (provider === 'local') {
+      const l = cfg.tts && cfg.tts.local ? cfg.tts.local.language : 'auto'
+      if (l === 'zh' || l === 'en') {
+        base += '\n附加要求：无论原文是什么语言，口播稿必须用' + (l === 'en' ? '英文' : '中文') + '输出'
+          + '（本地语音按文稿语言发音，不做二次翻译）。'
+      }
+    }
     return base
   }
 
@@ -939,8 +950,9 @@ function apply(ctx, config) {
    */
   async function synthesizeLocal(text, cfg) {
     const v = cfg.tts.local || {}
+    const spoken = v.pauseStyle === 'tight' ? tightenPause(text) : text
     const wav = await localRuntime.synthesizeWav({
-      text,
+      text: (spoken && spoken.trim()) ? spoken : text,
       timeoutMs: v.timeoutMs || 30000,
       voice: { sid: v.sid, speed: v.speed },
     })
@@ -1610,7 +1622,10 @@ function apply(ctx, config) {
     if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（本地 TTS）')
 
     // 2) 分句切段 → 3) 逐段合成入队
-    const segments = splitForStream(transcript, v.segmentChars)
+    // 停顿风格：tight 把中文句读从句读处去掉（实测语速 4.7→5.9 字/秒、最长停顿 430→270ms）。
+    // 只影响送合成的文本，转写稿本身（run.transcript / 缓存）保持原样。
+    const spokenForTts = v.pauseStyle === 'tight' ? tightenPause(transcript) : transcript
+    const segments = splitForStream((spokenForTts && spokenForTts.trim()) ? spokenForTts : transcript, v.segmentChars)
     if (segments.length > 1) console.log('[voice] local stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
     await ensureLocalReady()
     // 入队粒度：约 0.5s 音频（pcm 16bit mono = 采样率×2 字节/秒）。合成每吐一块就落一段，
@@ -2050,10 +2065,13 @@ function apply(ctx, config) {
         let text = PREVIEW_SAMPLE
         let label = languageLabel
         if (ttsProviderOf(cfg) === 'local') {
-          // 本地引擎按音色自己的中/英归属选样例（语种行对本地是隐藏的，不能再拿它决定说什么语言）
+          // 语种设置优先；auto 时按音色自己的中/英归属选样例（本地按文本语言发音）
           const voice = localVoiceOf(cfg.tts.local && cfg.tts.local.sid)
-          text = voice && voice.lang === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
-          label = voice ? voice.name : 'sid ' + String((cfg.tts.local && cfg.tts.local.sid) || '')
+          const want = (cfg.tts.local && cfg.tts.local.language) || 'auto'
+          const en = want === 'en' || (want === 'auto' && !!voice && voice.lang === 'en')
+          text = en ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+          label = (voice ? voice.name : 'sid ' + String((cfg.tts.local && cfg.tts.local.sid) || ''))
+            + (want === 'auto' ? '' : ' · ' + (want === 'en' ? 'English' : '中文'))
         } else if (cfg.language === 'en') {
           // 豆包：固定 en → 英文样例；方言用中文稿（方言靠音色发音体现，不改文稿）
           text = PREVIEW_SAMPLE_EN

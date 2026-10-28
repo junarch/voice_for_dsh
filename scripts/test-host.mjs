@@ -1300,7 +1300,9 @@ check('转写稿保持原文语言（中文不被改成英文）', r20.transcrip
 check('零情感指令 LLM 调用（本地引擎没有 context_texts 通道）', llmState.streamOpts.filter((o) => String(o.system).includes('演绎指令')).length === instrCount20)
 check('LLM 只调 1 次（转写；重播零新增由 T3/T18 保证）', llmState.calls.length === calls20 + 1, llmState.calls.length - calls20)
 check('进程内合成被调用一次，带 sid/speed', engineState.calls.length === 1 && engineState.calls[0].sid === 48 && engineState.calls[0].speed === 1, engineState.calls)
-check('送合成的是转写稿本身（中文，未经英文改写）', engineState.calls[0].text === '本地中文转写稿，保持中文。', engineState.calls[0].text)
+// 默认 pauseStyle=tight 会去掉中文句读，所以比较时忽略标点（内容与顺序必须一致）
+check('送合成的是转写稿本身（中文，未经英文改写）',
+  String(engineState.calls[0].text).replace(/[，。、；：！？]/g, '') === '本地中文转写稿保持中文', engineState.calls[0].text)
 check('引擎配置接线：model/voices/tokens/espeak-ng-data 指向模型目录', !!engineState.config
   && String(engineState.config.model.kokoro.model).endsWith('model.onnx')
   && String(engineState.config.model.kokoro.voices).endsWith('voices.bin')
@@ -1380,6 +1382,41 @@ await rpc('preview')
 check('本地：英文音色（sid 0）→ 英文样例',
   engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hi, this is a preview'), engineState.calls[0] && engineState.calls[0].text)
 await rpc('setConfig', localCfg())
+
+// —— 本地语种与停顿（0.4.x 新增两个设置）——
+await rpc('setConfig', localCfg({ language: 'en' }))
+engineState.calls = []
+const pvEnCfg = (await rpc('getConfig')).config
+await rpc('preview', { cfg: pvEnCfg })
+check('本地语言=en：试听改用英文样例',
+  engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hi, this is a preview'), engineState.calls[0] && engineState.calls[0].text)
+await rpc('setConfig', localCfg({ language: 'zh' }))
+engineState.calls = []
+await rpc('preview', { cfg: (await rpc('getConfig')).config })
+check('本地语言=zh：中文样例', engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('你好'), engineState.calls[0] && engineState.calls[0].text)
+
+// 停顿风格：tight 去掉中文句读；natural 保留
+await rpc('setConfig', localCfg({ pauseStyle: 'tight' }))
+engineState.calls = []
+await rpc('preview')
+check('pauseStyle=tight：送合成文本里没有中文句读',
+  engineState.calls.length === 1 && !/[，。、；：！？]/.test(String(engineState.calls[0].text)), engineState.calls[0] && engineState.calls[0].text)
+await rpc('setConfig', localCfg({ pauseStyle: 'natural' }))
+engineState.calls = []
+await rpc('preview')
+check('pauseStyle=natural：保留中文句读',
+  engineState.calls.length === 1 && /[，。、；：！？]/.test(String(engineState.calls[0].text)), engineState.calls[0] && engineState.calls[0].text)
+
+// 语种进的是转写 prompt（本地模型按文稿语言发音）
+sessionEvents.push(msgEvent('m30', 40, '本地英文播报测试'))
+await rpc('setConfig', localCfg({ language: 'en' }))
+llmState.responses = [{ text: 'Hello, this is the local English readout.', finish: 'stop' }]
+engineState.calls = []
+const r30 = await rpc('speak', { sessionId: 's1', messageId: 'm30' })
+const sys30 = llmState.streamOpts[llmState.streamOpts.length - 1] && llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('本地语言=en：转写 prompt 要求英文输出', !!sys30 && sys30.includes('口播稿必须用英文输出'), sys30 && sys30.slice(-80))
+check('本地语言=en：送去合成的就是英文稿', r30.ok === true && engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hello'), engineState.calls[0] && engineState.calls[0].text)
+await rpc('setConfig', localCfg({ language: 'auto' }))
 await rpc('setConfig', { patch: { language: 'auto' } })
 
 // —— 模型未安装：一条明确的"模型未安装"，不静默失败 ——
