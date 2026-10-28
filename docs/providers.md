@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | `browser`（默认） | 客户端 `speechSynthesis` | 免费、离线 | 无 | 浏览器直接读文本 |
 | `volcengine` | 豆包语音合成 2.0（双向流 WS 默认 + HTTP 单向兜底） | 付费、按字符 | `X-Api-Key` | Host 合成 → `/voice/audio/<id>` |
-| `local` | 本地 Kokoro-82M v1.0（英文播报，OpenAI 兼容 `/v1/audio/speech`） | 免费、离线 | 无（本机回环） | Host 合成 WAV → `/voice/audio/<id>` |
+| `local` | 本地 Kokoro v1.1（中英，进程内 sherpa-onnx，无服务/无端口） | 免费、离线 | 无 | Host 进程内合成 → `/voice/audio/<id>` |
 
 **归一铁律**：provider 语义统一由 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）归一——
 `volcengine`=付费云 TTS（受成本门控）、`local`=本地免费 TTS、其余任何值（含旧值
@@ -60,8 +60,8 @@
 
 ## 4. 本地 TTS 模型接入（隐私最好的一条路）
 
-已落地：`local` provider（Kokoro-82M v1.0，英文播报），实现与部署见 `docs/local-tts.md`、
-`docs/pipeline.md` §4.3。接入下一个本地 TTS（其他模型 / 本地 TTS 网关）的特别约定：
+已落地：`local` provider（Kokoro v1.1，中英，**进程内** sherpa-onnx 合成），实现与部署见
+`docs/local-tts.md`、`docs/pipeline.md` §4.3。接入下一个本地 TTS 的特别约定：
 
 - **隐私卖点**：内容不出本机（可写进 README）。它通常也是一个 HTTP/WS 服务，实现方式与云 provider
   相同（第 3 节），只是 endpoint 指向 `localhost`（OpenAI 兼容 `/v1/audio/speech` 子集可直换 baseUrl 复用）。

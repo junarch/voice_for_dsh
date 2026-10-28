@@ -3,7 +3,7 @@
 > 本文描述**当前实现**的语音播报管线：一轮 DeepSeek 输出结束后，先口语化转写，再交给 TTS 播报。
 > 源码：`packages/dsh-plugin-voice/lib/index.js`（Host 半，主实现）、
 > `lib/volcengine-ws.js`（豆包双向流 WS 客户端）、`lib/speech-clean.js`（净化）、
-> `lib/voice-compat.js`（音色↔语种归一）、`lib/local-supervisor.js`（本地服务托管）、
+> `lib/voice-compat.js`（音色↔语种归一）、`lib/local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro）、
 > `lib/client.js`（Client 半）。
 
 ## 核心原则
@@ -16,13 +16,11 @@
 ```
 [assistant/message 文本块]                          (每轮最终消息的 text 块拼接)
    → Host 转写：ctx.llm.prepareCall + stream（独立辅助调用，不入会话历史）
-        └ 输出：口语文稿（纯文本）
-   → 语音演绎指令 + 情感 + 强度（内容驱动，LLM 三行输出；豆包走 context_texts、CosyVoice 走 instruct）
+   → 语音演绎指令 + 情感 + 强度（内容驱动，LLM 三行输出；只有豆包有 context_texts 这条通道）
    → TTS：browser(客户端 speechSynthesis) | volcengine(双向流 WS 默认 / HTTP 单向兜底)
-        | local(本地 Kokoro，OpenAI 兼容 /v1/audio/speech，英文播报)
-        | local-cosyvoice(本地 Fun-CosyVoice3，同协议，中文播报 + 情绪指令)
-        └ local 合成：ensure 服务（探 /health → 已在跑则复用，否则经 ctx.subprocess 拉起）
-                      → 分句切段（splitForStream）→ 逐段 pcm16 合成 → 边收边按 ~0.5s 音频切块入队
+        | local(本地 Kokoro v1.1，进程内 sherpa-onnx，中英跟随原文)
+        └ local 合成：懒加载模型 → 分句切段（splitForStream）→ 逐段进程内合成
+                      → Float32→Int16 → 边出边按 ~0.5s 音频切块入队
    → 音频：/voice/audio/<id> 一次性路由 → 客户端 <audio>/Web Audio 播报
 ```
 
@@ -37,7 +35,7 @@
 
 - **手动**：每条消息的"朗读"按钮（`conversation.chat.assistant-actions` 槽），对当条消息转写。
 - **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；
-  豆包（付费）自动播报还需 `autoSpeakCloudTts=true`（成本门控）；本地引擎（Kokoro/CosyVoice）免费，不受门控。
+  豆包（付费）自动播报还需 `autoSpeakCloudTts=true`（成本门控）；本地引擎（Kokoro）免费，不受门控。
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
 - **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).snapshotEvents()` 按 messageId 定位。
 
@@ -60,9 +58,8 @@
 
 附加：`voice.language` 固定语种/方言时，`resolvePrompt` 追加"必须用 X 输出"（仅豆包 TTS 生效）。
 
-**local provider 英文不变式**：`tts.provider=local` 时转写稿**固定用英文口语输出**
-（无论原文语言，`resolvePrompt` 追加"必须用 English 输出"）——local 定位为"英文播报"引擎
-（中文内容转写为地道英文口语后由 Kokoro-82M 朗读，帮助理解、缓解长文阅读疲劳）；
+**local provider 跟随原文语言**：`tts.provider=local` 时**不追加任何语言要求**——中文原文出中文
+口播稿、英文原文出英文、混合内容跟随主体语言（Kokoro v1.1 中英都能读，§4.3）。
 `voice.language` 的音色↔语种联动仍只作用于豆包（见 §4.2），对 local 无效。
 
 ### 2.3 请求参数
@@ -175,97 +172,44 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 统一经 `normalizeVoiceConfig` 归一 → UI 显示 = 实际发声；设置页交互为"后改字段胜出"双向纠错。
 （1.0 方言/多情感专属音色一律不接，本插件只适配 2.0。）
 
-### 4.3 local / local-cosyvoice（本地 TTS：Kokoro 英文 / Fun-CosyVoice3 中文）
+### 4.3 local（本地 Kokoro v1.1，进程内合成，中英跟随原文）
 
-> 两个本地引擎共用同一套 OpenAI 兼容协议、同一个 supervisor 托管框架（按 engine 分派
-> 脚本/venv/端口/就绪时限），共用"分句流式 + 段队列 + 失败分档 + 免费不受成本门控"。
+> 定位：免费、离线、数据不出本机的**中英**播报引擎。合成在 Host 进程内完成（`sherpa-onnx-node`
+> 原生模块），没有子进程、没有端口、不需要 Python。模型与音色见 `docs/local-tts.md`。
 
-#### 4.3.1 local（本地 Kokoro-82M v1.0，英文播报）
-
-> 定位：免费、离线、数据不出本机的**英文**播报引擎。中文回复的转写稿先转写为英文口语
-> （§2.2 英文不变式），再交本地服务合成。模型与协议选型依据（TTS Arena 小模型英文第一、
-> CPU 实时、Apache-2.0）见 `docs/local-tts.md`。
-
-- **接口**：OpenAI 兼容 `POST /v1/audio/speech`（JSON：`model`/`input`/`voice`/`speed`/
-  `response_format`），端点默认 `http://127.0.0.1:8880/v1/audio/speech`（`voice.tts.local.baseUrl` 可改；
-  允许 http——仅本机回环、无密钥，不适用豆包 custom 网关的 https 强制）。两种响应形态：
-  - `response_format:'pcm16'` → **裸 PCM**（16bit 小端 mono，无容器头，`audio/pcm`）——分句流式的默认路径；
-  - `response_format:'wav'`（缺省）→ 完整 WAV 容器（`audio/wav`）——整段合成路径。
-  两者都带 `X-Sample-Rate` 响应头（采样率唯一事实源；缺头回落 24000）。
-- **服务实现**：仓库自带 `scripts/local-tts-server.py`（Python + kokoro-onnx + FastAPI，
-  ~120 行，零第三方 TTS 适配器依赖）；同样协议的现成服务（如 remsky/Kokoro-FastAPI，
-  同端口 8880）可直接替换。**第三方服务若不认 `pcm16`，首段失败即自动降级整段 WAV**，不报死。
-  部署见 `docs/local-tts.md`。
-- **服务生命周期（Host 托管）**：`lib/local-supervisor.js` 在每次 local 合成前 ensure 服务——
-  探 `GET <baseUrl origin>/health`（1.2s 超时）：通 → 复用；不通且 `voice.tts.local.autoStart`
-  （默认开）→ 经 `ctx.subprocess` 拉起 `scripts/local-tts-server.py` 并轮询 `/health` 直到就绪
-  （30s 上限），**该子进程归 dsh 托管，插件卸载与 dsh 退出时被回收**（不留孤儿、不撞端口）。
-  解释器与脚本路径按插件真实位置（`realpathSync`，穿透 profile 的 junction）推导，
-  `voice.tts.local.pythonPath` 可覆盖；`ctx.subprocess` 缺失时报"子进程服务不可用"而不抛错。
-- **分句流式（默认开，`streaming`）**：这是 local 的主播报路径，解决"整段合成要等几十秒"的固有延迟。
-  - 切分：`splitForStream(transcript, segmentChars)`（默认 220 字符）——从 target 处**向前**找第一个
-    句末标点成段（句长不足则自然更长，不硬凑到 2×target）；窗口内无标点退化为找空白，再不行硬切；
-    各段拼接与原文一致（只丢段间空白）。
-  - 合成：逐段 `POST response_format:'pcm16'` → `storeAudio(buf,'audio/pcm')` → 入 `run.queue`
-    （复用豆包那套段队列 + 客户端预取 3 段 + Web Audio lookahead 无缝播，客户端零新增代码）。
-  - 超时语义：**单段停顿时限** `segmentTimeoutMs`（默认 30s，无数据即中止该段），不再是整段死线。
-  - 实测（本机 CPU，`af_sarah`，3606 字符稿 → 12 段）：首段约 240 字符、~2.5s 就绪；
-    全篇合成 ~43s 而音频总长 ~220s（合成快于播放，播放不断粮）。
-  - 失败分档：首段失败 → 降级整段 WAV 兜底（用户仍能听到，warn 说明）；中途第 N 段失败 →
-    保留已播段 + `warn` 记录"第 N/M 段起未播报" + 保留 `ttsErrorKind`；`streaming:false` → 直接整段合成。
-- **失败分类（`ttsErrorKind`）**：`unavailable`（服务不可达/没部署/autoStart 关/子进程服务缺失）、
-  `timeout`（段级或整段 abort 超时）、`http`（服务返回非 2xx 或空音频）；客户端按此选 toast 文案
-  （`toast.ttsUnavailable` / `toast.ttsTimeout` / `toast.ttsHttp`，无 kind 时退回 `toast.fallback`）。
-  豆包路径的非 2xx 与帧错误同样标 `http`，故该字段对所有 provider 都可用。
-- **音频回传**：段或整段 Buffer 挂 `/voice/audio/<id>` 一次性路由（§4.4），客户端 PCM 直接建 AudioBuffer。
-- **不走的通道**（与豆包的差异，全部省 LLM/复杂度）：
-  - 无情感指令（context_texts 是豆包专属，§3 的 LLM 指令生成对 Kokoro 跳过）；
+- **运行时（`lib/local-runtime.js`）**：`sherpa-onnx-node@1.13.8`（锁版本；2.x 去掉 espeak 回退，
+  数字与词典外词会被静默跳过）。`OfflineTts.createAsync(config)` **懒加载**，一个插件实例一份实例；
+  改 `modelDir` 会作废已加载实例并按新目录重载。
+- **模型目录解析**：`voice.tts.local.modelDir`（显式）> `VOICE_LOCAL_MODEL_DIR`（显式）>
+  `<DSH_HOME>/voice/models/kokoro-multi-lang-v1_1` > `<仓库>/local/models/kokoro-multi-lang-v1_1`。
+  前两项是显式指定，**不静默回落到别的目录**（否则用户设了目录却听到另一个模型）。
+- **合成**：`generateAsync({ text, generationConfig: { sid, speed }, onProgress })`；模型输出
+  **Float32 单声道 24kHz**，Host 侧 `float32ToInt16Pcm` 转 **16bit 小端裸 PCM**（客户端只认这个格式），
+  整段路径再套 44 字节 WAV 头。`onProgress` 是唯一中断点：超时/停止后返回 0，sherpa 自行收尾。
+- **分句流式（默认开，`streaming`）**：`splitForStream(transcript, segmentChars)`（默认 220 字符）
+  → 逐段 `streamPcm`（边出边入队，约 0.5s 音频一段）→ `run.queue`（复用豆包那套段队列 + 客户端预取）。
+  - 实测（本机 Intel Core Ultra 9 285H）：模型加载 2.8s；首声约 0.6s（4 线程）；RTF 0.32–0.36（4 线程）/
+    0.25（8 线程）；常驻内存约 0.5–0.6GB。
+  - 失败分档：首段失败 → 降级整段合成兜底（用户仍能听到，`warn` 说明）；第 N 段失败 → 保留已播段 +
+    `warn` "第 N/M 段起未播报" + 保留 `ttsErrorKind`；`streaming:false` → 直接整段合成。
+  - 单段超时 `segmentTimeoutMs`（默认 30s），整段超时 `timeoutMs`（默认 30s）。
+- **失败分类（`ttsErrorKind`）**：`model-missing`（模型未安装/目录被删/显式目录指错）、
+  `load-failed`（原生模块或模型加载失败，日志只报一次）、`synth-failed`（合成抛错/sid 越界）、
+  `timeout`（段级或整段超时）；客户端按此选 toast（`toast.ttsModelMissing` / `toast.ttsLoadFailed` /
+  `toast.ttsSynthFailed` / `toast.ttsTimeout`，无 kind 退回 `toast.fallback`）。
+  豆包路径的非 2xx 与帧错误仍标 `http`。
+- **自检**：`/voice/api/localStatus` → 模型目录、来源、是否已加载、音色数、采样率、线程数、加载耗时；
+  模型已装时顺带加载一次（设置页「🔌 运行时自检」按钮触发，不随设置页打开自动跑）。
+- **音色**：模型只暴露数字 `sid`（0–102，无官方名字表）；设置页精选 9 个 + 「手填 sid」。
+  超范围明确报错，不静默改音色。
+- **不走的通道**（与豆包的差异，全为省 LLM/复杂度）：
+  - 无情感指令：`context_texts` 是豆包专属，§3 的 LLM 指令生成对 local 跳过 = 零额外 LLM；
   - 无服务端缓存（§4.5 是豆包语义，本地合成零边际成本，重播直接重合成）；
-  - 无 WS 双向流（豆包专属；本地引擎是"HTTP 分句流式"，见上）；
+  - 无 WS 双向流（豆包专属；本地是"进程内分块流式"，见上）；
   - 不参与成本门控：`autoSpeakCloudTts` 只拦豆包（付费），本地免费，自动播报不拦。
-- **已知限制**：分句流式的段长受句长影响（超长单句仍会拉长首段；把 `segmentChars` 调小可缓解）；
-  单段 PCM 整段驻留内存（受 audioStore TTL/容量上限约束）；
-  音色/语速等参数语义与豆包独立（`KOKORO_VOICES` 精选清单，不经 voice-compat 归一）。
+- **转写关闭时的行为**：直读稿直接送本地合成（中英都能读），**不再回退系统朗读**，也没有 `notice`。
+- **语言**：转写稿跟随原文语言（不套英文不变式）；中英混读由模型自己切音素。
 - **不变式**：发给 local 的 text 同样不得含 `[#`（§7.1 的净化在 provider 之前，天然满足）。
-- **转写关闭时的行为**：直读稿是原文（可能是中文），不送 local（英文模型硬读中文是乱音），
-  回退客户端系统 TTS 朗读中文，响应带 `notice`（客户端 toast 提示"需开启转写"）；
-  设置页选 local 且转写开关关闭时同步显示警告。
-
-#### 4.3.2 local-cosyvoice（本地 Fun-CosyVoice3-0.5B，中文播报 + 情绪指令）
-
-> 定位：免费、离线、数据不出本机的**中文**播报引擎，带内容驱动的情绪指令
-> （阿里 FunAudioLLM，Apache-2.0，RL 版权重；选型与部署见 `docs/local-tts-cosyvoice.md`）。
-
-- **接口**：与 Kokoro 同协议（OpenAI 兼容子集），多一个扩展字段 `instruct`（情绪/风格自然语言指令，
-  非空走 `inference_instruct2`，空走 `inference_zero_shot`）；`model` 固定 `fun-cosyvoice3`；
-  端点默认 `http://127.0.0.1:8882/v1/audio/speech`（`voice.tts.localCosyvoice.baseUrl`）。
-- **服务实现**：仓库自带 `scripts/local-tts-server-cosyvoice.py`（Python + cosyvoice + FastAPI，
-  CPU 推理）；服务启动时把仓库 `asset/zero_shot_prompt.wav` 注册为固定音色 `dsh_default`
-  （注册文本必须带 `<|endofprompt|>`，服务启动时对缺标记的旧注册自动重注册）。
-  部署：`pwsh scripts/setup-local-tts-cosyvoice.ps1`（venv-cosyvoice + 模型 ~4.4GB，见
-  `docs/local-tts-cosyvoice.md`）。
-- **服务生命周期**：同一 supervisor 框架，engine='local-cosyvoice' 分派
-  `scripts/local-tts-server-cosyvoice.py` + `local/venv-cosyvoice` + 端口 8882；
-  **就绪时限 180s**（CPU 冷启动加载 2GB+ 权重约 10-60s，远超 Kokoro 的 30s）。
-- **转写语言**：**不套英文不变式**——转写稿跟随原文语言（中文回复 → 中文口播稿），
-  `resolvePrompt` 对 local-cosyvoice 不追加英文要求；转写关闭时中文原文直读也能合成
-  （区别于 Kokoro 的回退系统 TTS，这里恒走 Host 合成）。
-- **情绪指令（instruct 通道）**：与豆包 §3 同一条内容驱动管线（LLM 三行输出），
-  `voice.tts.localCosyvoice.emotionEnabled`（默认开）控制；优先级：
-  稿内 `[#指令]` > LLM 生成（`composeContextText` 织入情感+强度）> 固定 `instruct` > 风格预设机械指令；
-  结果随转写稿缓存（重播零 LLM）。流式路径为**消息级**生成一次指令、逐段透传（HTTP 逐段请求）。
-- **分句流式**：与 Kokoro 同一套切分/入队/失败分档，但入队粒度是**边收边切**——服务端每推一块
-  PCM 就按 ~0.5s 音频（`采样率×2×0.5` 字节）落一段入队，播放器不必等整段合成完（§7 不变式 14）。
-  CPU 上 RTF≈4-8（1 秒语音需 4-8 秒合成），默认 `segmentChars: 120`、首段目标 40 字
-  （`splitForStream` 的 firstChars）、`segmentTimeoutMs: 120000`（见 §6 schema）。
-  首段失败降级整段、中途失败保留已播段——与 §7 不变式 13 一致。
-- **客户端断开即停（不变式 15）**：服务端 `infer` 是 async 生成器，每产出一块前后检查
-  `request.is_disconnected()`；客户端超时/点停止/重新点击后，推理在下一个检查点退出并释放推理锁。
-  同步生成器 + `list(...)` 的写法做不到这点：abort 只断 HTTP，服务端会把整段（乃至整篇）算完
-  并一直占着锁，后续请求全部排队超时——表现为"CPU 满载、一点声音都没有"。
-- **试听/自检**：设置页 CosyVoice 区块有「🔌 本地服务自检」（`/voice/api/cosyvoiceStatus`，只读探测）；
-  试听样例固定中文。
-
 ### 4.4 音频回传与播放
 
 - Host 合成得音频 Buffer → `ctx.webServer` 临时路由 `/voice/audio/<id>`（一次性，取一次即删；audioStore）。
@@ -358,7 +302,7 @@ voice:
     contextTurns: 2           # 引用上文：固定 2 轮（最多往前读两轮）；设置页无 UI
     timeoutMs: 60000          # 单次转写超时；超时/失败降级为直读
   tts:
-    provider: browser         # browser | volcengine | local | local-cosyvoice（存量旧值 openai-compatible 归一为 browser）
+    provider: browser         # browser | volcengine | local（已退役的 local-cosyvoice 归一到 local；其余旧值归一为 browser）
     browser: { rate: 1.0, pitch: 1.0, voice: "" }
     volcengine:
       apiKey: ""              # 火山方舟专属 API Key（明文存在目标 profile 的 cordis.patch.yml，注意保管，别提交）
@@ -380,28 +324,16 @@ voice:
       useSectionId: true      # section_id（跨次合成语气连续）（无 UI）
       expressive: false       # req_params.model=seed-tts-2.0-expressive（表现力增强）（无 UI）
     local:
-      baseUrl: http://127.0.0.1:8880/v1/audio/speech  # OpenAI 兼容端点（部署见 docs/local-tts.md；允许 http=仅本机回环无密钥）
-      voice: af_heart          # Kokoro v1.0 音色（KOKORO_VOICES 精选清单）
-      speed: 1.0               # 语速 [0.5, 2]
-      timeoutMs: 30000         # 单次合成超时（整段合成路径/兜底）；失败 → ttsError(+ttsErrorKind)
-      autoStart: true          # 合成前自动确保本地服务在跑（未跑则由 dsh 拉起，dsh 退出即回收）
-      pythonPath: ""           # 解释器路径；空=按仓库 local/venv 自动推导（无 UI，高级）
-      streaming: true          # 分句流式：按句切段逐段合成，首声约 2.5s（关=整段合成）
+      sid: 48                  # 音色编号 0–102（模型无官方名字表；设置页精选 9 个 + 手填）
+      speed: 1.0               # 语速 [0.5, 2]（模型原生参数，不是变速播放）
+      numThreads: 4            # 合成线程数 1–16（线程多首声更快、更吃 CPU）
+      modelDir: ""             # 模型目录覆盖；空=自动找（配置 > env > 用户目录 > 仓库 local/models）
+      timeoutMs: 30000         # 整段合成超时；失败 → ttsError(+ttsErrorKind)
+      streaming: true          # 分句流式：按句切段逐段合成，首声约 0.6s（关=整段合成）
       segmentChars: 220        # 分句流式的每段目标字符数（无 UI，高级）
-      segmentTimeoutMs: 30000  # 单个音频段的停顿时限（流式路径；替代整段死线）
-    localCosyvoice:
-      baseUrl: http://127.0.0.1:8882/v1/audio/speech  # OpenAI 兼容端点（部署见 docs/local-tts-cosyvoice.md；允许 http=仅本机回环无密钥）
-      voice: dsh_default       # 服务启动时注册的固定音色（COSYVOICE_VOICES 精选清单 + 自定义）
-      speed: 1.0               # 语速 [0.5, 2]（模型原生参数）
-      sampleRate: 24000        # 服务输出采样率（客户端建 AudioBuffer 用；无 UI）
-      timeoutMs: 120000        # 整段合成超时（CPU 上 RTF≈4-7，给足余量）
-      autoStart: true          # 合成前自动确保本地服务在跑（dsh 拉起并回收）
-      pythonPath: ""           # 解释器路径；空=按仓库 local/venv-cosyvoice 自动推导（无 UI，高级）
-      streaming: true          # 分句流式：按句切段逐段合成（CPU 慢，段更短）
-      segmentChars: 120        # 每段目标字符数（CPU 慢：~120 字符一段约 20-30s 合成；无 UI，高级）
-      segmentTimeoutMs: 120000 # 单个音频段的停顿时限（流式路径；CPU 慢，默认已放宽）
-      emotionEnabled: true     # 内容驱动情绪指令（LLM 生成 → instruct 通道；关=只用固定/预设指令）
-      instruct: ""             # 固定情绪/风格指令（如"用温柔的语气说"；生成失败/关闭时兜底）
+      segmentTimeoutMs: 30000  # 单个音频段的超时（流式路径；替代整段死线）
+      # 历史字段 baseUrl / voice / autoStart / pythonPath 已随 Python 服务退役：
+      #   读到也不再生效（schema 里已删），存量配置里的值会被忽略、下次保存时被清掉。
   stopOnNewTurn: true
 ```
 
@@ -426,25 +358,22 @@ voice:
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
 9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
    付费调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
-10. **本地引擎语义分叉**——`local`（Kokoro）固定英文播报且零额外 LLM：转写稿必须英文输出
-    （§2.2）、不生成情感指令、转写关闭时回退系统 TTS（带 notice）；
-    `local-cosyvoice`（Fun-CosyVoice3）中文播报：转写跟随原文语言、`emotionEnabled` 时生成
-    情绪指令走 instruct 通道、转写关闭时中文直读仍可合成；两者都不下发服务端缓存（§4.5 跳过）、
-    不受 `autoSpeakCloudTts` 门控（免费引擎）。
-11. **本地服务归 dsh 托管**——local 合成前必须先确保服务可用（探 /health → 复用或拉起）；
-    拉起的子进程必须经 `ctx.subprocess`（受管范围，dsh 退出即回收），**不得用 shell 工具/后台任务拉起**
-    （那些实例随会话被回收，会留"服务不可达"的坑）；`ctx.subprocess` 缺失时只报错，不绕道。
-12. **失败必须可分类**——TTS 失败一律带 `ttsErrorKind`（unavailable/timeout/http），
-    客户端据此给专用文案，不得让"服务没启动"与"合成失败"共用一句笼统提示。
+10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、
+    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
+    不受 `autoSpeakCloudTts` 门控（免费引擎）；转写关闭时**直接本地合成**（中英都能读），
+    不得回退系统朗读、不得再带"需开启转写"的 notice。
+11. **本地合成必须在 Host 进程内**——`sherpa-onnx-node` 直接加载（`OfflineTts.createAsync`），
+    **不得**再引入 Python 子进程、服务端口或 `ctx.subprocess`；引擎懒加载、失败只报一次日志。
+12. **失败必须可分类**——TTS 失败一律带 `ttsErrorKind`（model-missing/load-failed/synth-failed/
+    timeout/http），客户端据此给专用文案，不得让"模型没装"与"合成失败"共用一句笼统提示。
 13. **分句流式不得丢字、不得整条报错**——`splitForStream` 各段拼接必须与转写稿一致（只允许丢段间空白）；
     首段失败 → 降级整段兜底；中途失败 → 保留已播段 + warn 注明从第几段起缺失，绝不把"半篇已播"报成整条失败。
-14. **本地分句流式必须边收边入队**——服务端返回的是流式 PCM，Host 收到一块就按 ~0.5s 音频切一段入队，
-    **不得攒完整段再入队**（那等于把流式丢掉：首声从"首个分块"退化成"整段合成时长"）。
-15. **本地服务必须能在客户端断开后停止合成**——`local-tts-server*.py` 的推理循环每块检查
-    `request.is_disconnected()`，断连即退出并释放推理锁。否则被中止的请求会继续烧满 CPU 并长期占锁，
-    把后续请求全部拖成超时（症状：点了没声音、CPU 一直满载、越点越没反应）。
+14. **本地分句流式必须边出边入队**——`onProgress` 每回一块就按 ~0.5s 音频切一段入队，
+    **不得攒完整段再入队**（那等于把流式丢掉：首声从"首块算完"退化成"整段合成时长"）。
+15. **本地合成必须可中断**——停止播报/超时时，`onProgress` 返回 0 让 sherpa 收尾，
+    不得让被中止的合成继续烧满 CPU（客户端感知：点停止后 CPU 很快回落）。
 16. **播放链路必须可观测**——客户端把播放各步（起播模式/AudioContext 状态/取段/解码/排程/结束）
-    上报 Host（`/voice/api/clientDiag` → `clientDiagDump`）：慢引擎首声几十秒，
+    上报 Host（`/voice/api/clientDiag` → `clientDiagDump`）：
     "还没算完"与"解码失败/没排上播放"必须能区分，不能只靠耳朵判断。
 17. **停止播报必须同时收尾状态**——停音频时清掉该消息的 `spokenState`，并通知订阅者重渲染；
     否则徽标永远停在"朗读中…"（浏览器中断播放不会回调 onend）。"朗读中"点击 = 停止，
@@ -465,8 +394,9 @@ voice:
   local 免费引擎不在门控之列。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - 自研 TTS 适配层（不引第三方库）：无现成 JS 库支持火山 v3；HTTP 单向协议极简（~150 行零依赖）；避免供应链与失维护风险。
-- local 自带 server 脚本而非引 Node 依赖：kokoro-onnx 是 Python 生态，Host 半零新增 npm 依赖；
-  仓库只存"方法"（server 脚本 + setup 脚本），模型/二进制不入库（AGENTS.md 依赖管理约定）。
+- local 换掉了 Python 子进程服务，改为进程内 `sherpa-onnx-node`：用户不必装 Python、不必管端口与
+  子进程生命周期；代价是原生模块进了 Host 进程（崩溃域变大）、模型常驻内存约 0.5–0.6GB。
+  仓库只存"方法"（依赖声明 + 文档），模型/二进制不入库（AGENTS.md 依赖管理约定）。
 - UI 只占 additive 小槽位（assistant-actions / input.left / turnTail / settings.section / shell.overlay），不碰 `root`/`conversation.session`。
 
 ## 9. 参考（源码位置）
@@ -476,13 +406,9 @@ voice:
   TTS `synthesizeVolcengine`/`buildVolcReqParams`；双向流 `streamSpeak`；
   服务端缓存 `serverCacheAllowed`/`serverCacheMark`/`ttsFpOf`。
 - `volcengine-ws.js`：双向流协议（帧编解码 / 事件 / 连接管理器）。
-- `local-supervisor.js`：本地服务托管——`resolveLaunch`（解释器/脚本路径推导）、`healthUrlOf`/`portOf`、
-  `createLocalSupervisor`（`ensure` 复用或拉起 / `status` 只读自检 / `terminate` 回收）、`speakError`（带 kind 的错误）。
-- `index.js` 的 `splitForStream`（导出，纯函数）：分句切段（§4.3），供 Host 流式与测试共用。
-- 本地 TTS：`scripts/local-tts-server.py`（Kokoro 合成服务）、`scripts/local-tts-server-cosyvoice.py`
-  （Fun-CosyVoice3 合成服务）、`scripts/setup-local-tts.ps1` / `scripts/setup-local-tts-cosyvoice.ps1`
-  （部署脚本）、`scripts/start-local-tts.bat` / `scripts/start-local-tts-cosyvoice.bat`（手动启动器）、
-  `docs/local-tts.md` / `docs/local-tts-cosyvoice.md`（部署/对接文档）。
+- `local-runtime.js`：本地合成运行时——`resolveModelDir`（模型目录解析）/ `inspectModelDir`（缺什么）、
+  `createLocalRuntime`（`ensureLoaded` 懒加载 / `streamPcm` 分块合成 / `synthesizeWav` 整段 / `status` 自检）、
+  `float32ToInt16Pcm` / `pcmToWav`（Float32→16bit 小端）、`speakError`（带 kind 的错误）。
 - `speech-clean.js`：`sanitizeForSpeech`（净化）。
 - `voice-compat.js`：`LANGUAGE_OPTIONS` / `normalizeVoiceConfig` / `correctSpeakerForLanguage` /
   `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——配置兼容/归一单一事实源；

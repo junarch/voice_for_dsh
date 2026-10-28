@@ -33,7 +33,7 @@
 3. **关键服务（Host）**：`ctx.sessions`（会话事件 `session/event`，事件含 `assistant/message`、
    `turn/end` 等）、`ctx.llm`（`prepareCall` + `stream` 做独立辅助 LLM 调用=口语化转写）、
    `ctx.settings`（写入走 `update('voice', patch)`；配置 schema 由插件导出的 `Config` 声明）、
-   `ctx.webServer`（可选 TTS 音频路由）、`ctx.subprocess`（拉起本地 TTS 服务）。
+   `ctx.webServer`（可选 TTS 音频路由）、`ctx.subprocess`（本插件已不再使用：本地合成在 Host 进程内）。
 4. **关键槽位（Client）**：`conversation.chat.assistant-actions`（每条消息的操作行 → "朗读"按钮）、
    `conversation.input.left`（自动播报开关）、`conversation.chat.turnTail`（播报状态徽标）、
    `settings.section`（语音设置页）、`shell.overlay`（toast）。**只做 additive 小槽位**，
@@ -86,8 +86,8 @@ voice_for_dsh/
 ├── AGENTS.md                  # 本文件
 ├── docs/                      # architecture / pipeline / development / testing / release
 ├── scripts/                   # 测试与真实外呼探针（test-host.mjs 零成本；tts-*.mjs 花几分钱）
-│                              #   本地 TTS：local-tts-server.py(合成服务) / setup-local-tts.ps1(部署，
-│                              #   模型下载到 local/，不入库) / dsh-read-session.mjs(会话日志读取)
+│                              #   本地 TTS 模型不入库（下载/安装归 docs/local-tts.md）/
+│                              #   dsh-read-session.mjs(会话日志读取)
 │                              #   工具：dsh-inspect-extract.mjs(只读导出 app.asar 里的上游源码) /
 │                              #        migrate-voice-config.mjs(settings.yaml → profile patch 迁移) /
 │                              #        verify-installed.mjs(重启后自检：Client 半进没进 boot 图)
@@ -95,6 +95,7 @@ voice_for_dsh/
     └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
         │                    #   index.js=Host 半 / client.js=Client 半 /
+        │                    #   local-runtime.js(本地合成运行时：sherpa-onnx + Kokoro) /
         │                    #   speech-clean.js(文本净化) / voice-compat.js(音色↔语种+兼容/归一) /
         │                    #   volcengine-ws.js(豆包双向流)
         └── src/             # 仅结构占位（host/index.ts、client/index.ts 桩，无实际逻辑；

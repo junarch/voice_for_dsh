@@ -16,13 +16,12 @@
   把发现的差异记进 `docs/platform-notes.md`（新建），README"平台支持"随之更新。
 
 ### 2. 更多 TTS 供应商
-- **状态**：本地 TTS 已落地（v0.3.0：`local` provider，Kokoro-82M v1.0，英文播报，
-  部署见 `docs/local-tts.md`）；更多供应商（如中文本地模型、其他云服务）规划中。
+- **状态**：本地 TTS 已落地（`local` provider：进程内 sherpa-onnx + Kokoro v1.1，中英，
+  部署见 `docs/local-tts.md`）；更多供应商（其他本地模型、其他云服务）规划中。
 - **为什么**：豆包是付费云服务；本地 TTS 可免费、离线、隐私最好（内容不出本机）。
 - **现状**：provider 适配层已覆盖 `browser` / `volcengine` / `local`（归一逻辑在
   `lib/voice-compat.js` 的 `ttsProviderOf`）；新供应商的接入规范见 `docs/providers.md`。
-- **待办**：按 `docs/providers.md` 的契约接入下一个供应商并写探针；
-  local 的长文整段合成可考虑分段（见 `docs/pipeline.md` §4.3 已知限制）。
+- **待办**：按 `docs/providers.md` 的契约接入下一个供应商并写探针。
 
 ### 3. Client 半（`lib/client.js`）测试覆盖
 - **状态**：规划中。

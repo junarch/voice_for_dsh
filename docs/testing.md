@@ -64,8 +64,9 @@ curl.exe -s -X POST http://127.0.0.1:19387/voice/api/clientDiagDump   # 读回�
 对火山 TTS 做受控实验（读目标 profile `cordis.patch.yml` 里 `voice.tts.volcengine.apiKey`）。时长对比只能证明"标签被照读/数值参数生效"这类强信号；
 **语气、音色、方言这类只有人耳能判断的效果，必须听音频**。怀疑任何外部接口行为时，先跑探针再改代码。
 
-本地服务另有两个零成本探针：`scripts/local-autostart-probe.mjs --stream`（真拉起服务 + 真切分合成计时）
-与 `scripts/local-tts-cancel-probe.mjs`（中止/取消后服务端是否停下、推理锁是否被泄漏）。
+本地引擎是进程内合成（没有服务、没有端口），实测走 `scripts/test-host.mjs` 的 T23 段：设
+`VOICE_LOCAL_MODEL_DIR` 指向解包好的 `kokoro-multi-lang-v1_1` 后会真加载模型、合成中英各一句，
+并打印首声/RTF 读数；不设则跳过（不把"没装模型"当失败）。
 
 ### 第 4 层：手动验收（最贵，只测前三层测不到的）
 浏览器里：设置页渲染、下拉/滑块交互、朗读按钮状态机、自动播报节奏、方言试听。只在这一层测"人能感知"的东西。

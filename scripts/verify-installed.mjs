@@ -137,13 +137,16 @@ if (c) {
   }
 }
 
-// 4) 本地引擎：环境推导（从链接安装的路径反推仓库位置，最容易断的一环）
+// 4) 本地引擎：进程内运行时自检（模型在哪、装没装、加载没加载）
 const local = await post('localStatus', {})
-const cosy = await post('cosyvoiceStatus', {})
-check('local（Kokoro）环境可推导', !!(local.json && local.json.ok),
-  local.json && local.json.ok ? 'venvFound=' + local.json.venvFound + ' running=' + local.json.running + ' subprocess=' + local.json.subprocessAvailable : String(local.json && local.json.error))
-check('local-cosyvoice 环境可推导', !!(cosy.json && cosy.json.ok),
-  cosy.json && cosy.json.ok ? 'venvFound=' + cosy.json.venvFound + ' running=' + cosy.json.running : String(cosy.json && cosy.json.error))
+check('local（Kokoro）运行时可用（接口在）', !!(local.json && local.json.ok),
+  local.json && local.json.ok
+    ? 'installed=' + local.json.installed + ' dir=' + local.json.modelDir + ' loaded=' + local.json.loaded
+      + (local.json.installed ? '' : ' error=' + String(local.json.error || '').slice(0, 120))
+    : String(local.json && local.json.error))
+if (local.json && local.json.ok && local.json.installed === false) {
+  console.log('  --   模型未安装（本地引擎现在会报"模型未安装"）：装法见 docs/local-tts.md')
+}
 
 // 5) 可选：真实合成（花几分钱）
 if (paid) {

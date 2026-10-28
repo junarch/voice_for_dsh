@@ -13,10 +13,8 @@
  *  - TTS Provider 适配层：browser（Client speechSynthesis 透传）/ volcengine
  *    （HTTP 单向 chunked JSON 行；语速/音调走数值 speech_rate/pitch 参数，
  *    text 一律剥离 [#...] 指令标签--该接口不解析会照读，探针实测，见
- *    docs/pipeline.md §7 与 scripts/tts-probe.mjs）/ local（本地 Kokoro-82M v1.0，
- *    OpenAI 兼容 /v1/audio/speech，英文播报不变式，见 docs/pipeline.md §4.3）/
- *    local-cosyvoice（本地 Fun-CosyVoice3-0.5B，中文播报 + 情绪指令 instruct 通道，
- *    见 docs/pipeline.md §4.3 与 docs/local-tts-cosyvoice.md）
+ *    docs/pipeline.md §7 与 scripts/tts-probe.mjs）/ local（进程内 sherpa-onnx +
+ *    Kokoro v1.1 多语言模型，中英跟随原文，见 docs/pipeline.md §4.3 与 docs/local-tts.md）
  *  - 经 ctx.webServer 暴露 /voice/api/* JSON RPC 与 /voice/audio/<id> 音频一次性路由
  *
  * 实测要点（docs/testing.md §1）：
@@ -31,11 +29,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
 import { sanitizeForSpeech } from './speech-clean.js'
-import { createLocalSupervisor, speakError } from './local-supervisor.js'
+import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE } from './local-runtime.js'
 import {
   VV_SPEAKER, LANGUAGE_OPTIONS,
   dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
-  isLocalProvider, localBlockKeyOf,
+  isLocalProvider,
 } from './voice-compat.js'
 
 /** 转写基线 system prompt（docs/pipeline.md §2.2；可被 voice.transcribe.prompt 覆盖）
@@ -66,7 +64,7 @@ function toPlainSpoken(text) {
  * 窗口内无标点就退化为找空白；再没有才硬切在 maxChars（宁可句中断开，也不让整篇等待）；
  * 各段拼接回去与原文一致（只可能丢失段间空白）。
  * firstChars（可选，须 ≤ target）：仅用于**第一段**的切分目标——首段更短 = 首声更快
- * （慢引擎如 CPU CosyVoice 用；Kokoro 不传保持原行为）。
+ * （首段更短 = 首声更快；不传则首段与后续同长）。
  * 纯函数、不依赖闭包 —— 导出供 scripts/test-host.mjs 直接单测。
  */
 function splitForStream(text, targetChars, firstChars) {
@@ -135,25 +133,27 @@ const VOLC_VOICES = [
   { id: 'en_female_stokie_uranus_bigtts', name: 'Stokie（英·女）' },
 ]
 
-/** 本地 Kokoro-82M v1.0 精选音色（af=美式女/男、bf/bm=英式女/男；全英文）。
- * 设置页下拉 + 允许自定义输入；完整 26 音色清单见 hexgrad/Kokoro-82M VOICES.md。 */
-const KOKORO_VOICES = [
-  { id: 'af_heart', name: 'Heart（美·女）' },
-  { id: 'af_bella', name: 'Bella（美·女）' },
-  { id: 'af_nicole', name: 'Nicole（美·女）' },
-  { id: 'af_sarah', name: 'Sarah（美·女）' },
-  { id: 'am_adam', name: 'Adam（美·男）' },
-  { id: 'am_fenrir', name: 'Fenrir（美·男）' },
-  { id: 'am_michael', name: 'Michael（美·男）' },
-  { id: 'bf_emma', name: 'Emma（英·女）' },
-  { id: 'bm_george', name: 'George（英·男）' },
+/** 本地 Kokoro v1.1 精选音色（设置页下拉 + 「手填 sid」兜底）。
+ *
+ * 模型只暴露数字 sid（0–102），上游没有随包发名字表，所以这里不写"谁是谁"，
+ * 只写能复现的三种事实：① sid ② 语种/性别归属（按枚举实测的基频分段：
+ * 0–2 = 英文，3–57 女声，58–102 男声）③ 同一句中文实测的基频高低（高/中/低）。
+ * 名字里的"高/中/低"就是这个基频档，不代表音质好坏；想换音色直接手填 sid 逐个试。
+ * 英文三个音色对应上游 hexgrad/Kokoro-82M-v1.1-zh 的 Maple（美·女）、Sol（美·女）、
+ * Vale（英·女，年长），顺序即 voices.bin 的 0/1/2。 */
+const LOCAL_VOICES = [
+  { id: '48', name: '中文女声 · 中高（sid 48）' }, // 实测基频 ~261Hz
+  { id: '40', name: '中文女声 · 高（sid 40）' },   // ~289Hz
+  { id: '14', name: '中文女声 · 中（sid 14）' },   // ~233Hz
+  { id: '8', name: '中文女声 · 低（sid 8）' },     // ~173Hz
+  { id: '66', name: '中文男声 · 高（sid 66）' },   // ~202Hz
+  { id: '75', name: '中文男声 · 中（sid 75）' },   // ~186Hz
+  { id: '81', name: '中文男声 · 低（sid 81）' },   // ~102Hz
+  { id: '0', name: '英文女声 · Maple（sid 0）' },
+  { id: '2', name: '英文女声 · Vale（sid 2）' },
 ]
-
-/** 本地 Fun-CosyVoice3-0.5B 音色：服务启动时把仓库 asset/zero_shot_prompt.wav
- * 注册为固定音色 dsh_default（中文，支持情绪指令）；自定义音色需在服务侧注册。 */
-const COSYVOICE_VOICES = [
-  { id: 'dsh_default', name: '默认音色（中文）' },
-]
+/** 默认音色（中文女声；与 Config 默认值一致）。 */
+const LOCAL_DEFAULT_SID = 48
 
 /**
  * 语种/方言选项、英文音色前缀、方言集合与音色↔语种归一逻辑统一维护在
@@ -347,39 +347,21 @@ const Config = z.object({
       expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强；无 UI，默认关）
     }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
     local: z.object({
-      // 本地 Kokoro-82M v1.0（英文播报，免费；docs/pipeline.md §4.3 / docs/local-tts.md）
-      baseUrl: z.string().default('http://127.0.0.1:8880/v1/audio/speech'), // OpenAI 兼容端点（允许 http：仅本机回环、无密钥）
-      voice: z.string().default('af_heart'),   // KOKORO_VOICES 精选清单 + 允许自定义
+      // 本地 Kokoro v1.1（进程内 sherpa-onnx，中英跟随原文，免费；docs/local-tts.md）
+      sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，无官方名字表）；设置页下拉 + 手填
       speed: z.number().default(1),            // 语速 [0.5, 2]
-      timeoutMs: z.number().default(30000),    // 单次合成超时；失败 → ttsError，客户端降级系统 TTS
-      autoStart: z.boolean().default(true),    // 播报前自动确保本地服务在跑（未跑则由 dsh 拉起，dsh 退出即回收）
-      pythonPath: z.string().default(''),      // 解释器路径；空=按仓库 local/venv 自动推导（无 UI，高级）
-      streaming: z.boolean().default(true),    // 分句流式：按句切段逐段合成，首声约 3s（关=整段合成，等待长）
-      segmentChars: z.number().default(220),   // 分句流式的每段目标字符数（实测 ~220 字符首声约 2.5s；无 UI，高级）
+      numThreads: z.number().default(4),       // 合成线程数（1–16；线程多首声更快、更吃 CPU）
+      modelDir: z.string().default(''),        // 模型目录覆盖；空=自动解析（无 UI，高级；测试用 env 亦可）
+      timeoutMs: z.number().default(30000),    // 单次整段合成超时；失败 → ttsError，客户端降级系统 TTS
+      streaming: z.boolean().default(true),    // 分句流式：按句切段逐段合成，首声 ≤1s（关=整段合成，等待长）
+      segmentChars: z.number().default(220),   // 分句流式的每段目标字符数（无 UI，高级）
       segmentTimeoutMs: z.number().default(30000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
-    }).default({ baseUrl: 'http://127.0.0.1:8880/v1/audio/speech', voice: 'af_heart', speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
-    localCosyvoice: z.object({
-      // 本地 Fun-CosyVoice3-0.5B（中文播报 + 情绪指令，免费；docs/pipeline.md §4.3 / docs/local-tts-cosyvoice.md）
-      baseUrl: z.string().default('http://127.0.0.1:8882/v1/audio/speech'),
-      voice: z.string().default('dsh_default'),   // 服务启动时注册的固定音色（COSYVOICE_VOICES + 自定义）
-      speed: z.number().default(1),               // 语速 [0.5, 2]，模型原生参数
-      sampleRate: z.number().default(24000),      // 服务输出采样率（客户端建 AudioBuffer 用）
-      timeoutMs: z.number().default(600000),      // 整段合成超时（CPU 上 RTF≈4-7；整段路径长稿需数分钟）
-      autoStart: z.boolean().default(true),       // 播报前自动确保服务在跑（dsh 拉起并回收）
-      pythonPath: z.string().default(''),         // 解释器路径；空=按仓库 local/venv-cosyvoice 自动推导（无 UI，高级）
-      streaming: z.boolean().default(true),       // 分句流式：按句切段逐段合成（CPU 慢，段更短）
-      segmentChars: z.number().default(120),      // 每段目标字符数（CPU 慢：~120 字符一段约 20-30s 合成）
-      segmentTimeoutMs: z.number().default(120000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
-      emotionEnabled: z.boolean().default(true),  // 内容驱动情绪指令（LLM 生成 → instruct 通道）
-      instruct: z.string().default(''),           // 固定情绪/风格指令（生成失败/关闭时兜底；可留空）
-      flowSteps: z.number().default(4),           // flow 流匹配 ODE 步数（源码默认 10）：越小越快、音质越平
-    }).default({ baseUrl: 'http://127.0.0.1:8882/v1/audio/speech', voice: 'dsh_default', speed: 1, sampleRate: 24000, timeoutMs: 600000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 120, segmentTimeoutMs: 120000, emotionEnabled: true, instruct: '', flowSteps: 4 }),
+    }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
-    local: { baseUrl: 'http://127.0.0.1:8880/v1/audio/speech', voice: 'af_heart', speed: 1, timeoutMs: 30000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
-    localCosyvoice: { baseUrl: 'http://127.0.0.1:8882/v1/audio/speech', voice: 'dsh_default', speed: 1, sampleRate: 24000, timeoutMs: 600000, autoStart: true, pythonPath: '', streaming: true, segmentChars: 120, segmentTimeoutMs: 120000, emotionEnabled: true, instruct: '', flowSteps: 4 },
+    local: { sid: LOCAL_DEFAULT_SID, speed: 1, numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
 })
@@ -409,12 +391,10 @@ function apply(ctx, config) {
     }
   }
 
-  // 本地 TTS 服务托管（docs/pipeline.md §4.3）：播报前确保服务在跑，由 dsh 拉起并回收。
-  // 软依赖 ctx.subprocess：缺失时只报"子进程服务不可用"，手动启动仍是兜底路径。
-  // 两个本地引擎各一个 supervisor（Kokoro 英文 8880 / Fun-CosyVoice3 中文 8882）。
-  const localSupervisor = createLocalSupervisor({ ctx, getConfig: () => readConfig(), pluginUrl: import.meta.url, engine: 'local' })
-  const cosyvoiceSupervisor = createLocalSupervisor({ ctx, getConfig: () => readConfig(), pluginUrl: import.meta.url, engine: 'local-cosyvoice' })
-  ctx.effect(() => () => { localSupervisor.terminate(); cosyvoiceSupervisor.terminate() }, 'voice: local tts supervisor')
+  // 本地 TTS 运行时（docs/pipeline.md §4.3、docs/local-tts.md）：进程内 sherpa-onnx +
+  // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
+  // 不需要 Python。运行时随 Host 进程一起释放，没有需要回收的句柄。
+  const localRuntime = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => readConfig() })
 
   // ---- session/event：信封结构，payload 在 event.data ------------------------
   function payloadOf(event) {
@@ -584,13 +564,8 @@ function apply(ctx, config) {
     else { const hit = STYLE_PRESETS.find((p) => p.id === preset); base = (hit && hit.prompt) || TRANSCRIBE_SYSTEM }
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
     const provider = ttsProviderOf(cfg)
-    // local 英文不变式（docs/pipeline.md §2.2/§4.3）：无论原文语言，转写稿固定英文口语。
-    // local 定位为"英文播报"引擎；voice.language 的音色联动只作用于豆包，对 local 不生效。
-    if (provider === 'local') {
-      base += '\n附加要求（最高优先级）：无论原文是什么语言，口播稿必须用英文（English）输出——中文内容也要转写为地道、自然的英文口语，完整保留关键信息与结论，不得输出中文。'
-      return base
-    }
-    // 语种/方言属于豆包发音专属：仅豆包 TTS 时叠加转写语言要求（系统 TTS 按原文即可）
+    // local 跟随原文语言（Kokoro v1.1 中英混读）：不做语言改写，转写稿保持原文语言。
+    // 语种/方言属于豆包发音专属：仅豆包 TTS 时叠加转写语言要求（系统 TTS / 本地按原文即可）
     if (lang && lang.id !== 'auto' && provider === 'volcengine') {
       base += '\n附加要求：无论原文是什么语言，口播稿必须用' + lang.instruct + '输出'
         + (lang.dialect ? '（用字保持中文书写习惯，语汇贴近该方言的口语）' : '') + '。'
@@ -750,80 +725,26 @@ function apply(ctx, config) {
   }
 
   /**
-   * 本地 TTS 合成（OpenAI 兼容 /v1/audio/speech，docs/pipeline.md §4.3）。
-   * 两个引擎共用本函数，按 provider 分派：
-   *   local（Kokoro）：只接英文转写稿（英文不变式，§2.2）；
-   *   local-cosyvoice（Fun-CosyVoice3）：中文转写稿，opts.instruct 透传情绪指令。
-   * 返回完整 WAV Buffer；允许 http：仅本机回环、无密钥（不适用豆包 custom 网关的 https 强制）。
-   * 合成前先确保服务在跑（对应 supervisor：复用已在跑的实例，未跑则拉起）；
-   * 失败统一抛带 kind 的错误，客户端据此选 toast 文案（unavailable / timeout / http）。
+   * 本地 TTS 合成（进程内 sherpa-onnx + Kokoro v1.1，docs/pipeline.md §4.3）。
+   * 返回完整 WAV Buffer（客户端音频元素直接能播）；中英均由模型自己处理，不做语言改写。
+   * 失败统一抛带 kind 的错误（model-missing / load-failed / synth-failed / timeout），
+   * 客户端据此选 toast 文案；"没装模型"与"合成失败"必须可区分，不许静默失败。
    */
-  async function synthesizeLocal(text, cfg, opts = {}) {
-    const prov = ttsProviderOf(cfg)
-    const isCosy = prov === 'local-cosyvoice'
-    const blockKey = localBlockKeyOf(prov)
-    const v = cfg.tts[blockKey]
-    if (!v || !v.baseUrl) throw speakError('unavailable', 'local tts baseUrl 未配置（voice.tts.' + blockKey + '.baseUrl，部署见 docs/local-tts' + (isCosy ? '-cosyvoice' : '') + '.md）')
-    await ensureLocalReady(prov)
-    const timeoutMs = v.timeoutMs || 120000
-    const ac = new AbortController()
-    const timer = setTimeout(() => ac.abort(), timeoutMs)
-    try {
-      const body = {
-        model: isCosy ? 'fun-cosyvoice3' : 'kokoro',
-        input: text,
-        voice: v.voice || (isCosy ? 'dsh_default' : 'af_heart'),
-        speed: v.speed ?? 1,
-        response_format: 'wav',
-      }
-      if (isCosy) body.instruct = opts.instruct || ''
-      // flow 步数：越小越快（4=推荐，源码默认 10）；只在 CosyVoice 上透传。
-      // 老 settings.yaml 没有该字段时按 schema 默认 4 下发，保证 UI 显示与实际发声一致。
-      if (isCosy) body.flow_steps = Math.max(1, Math.min(50, Math.round(v.flowSteps || 4)))
-      const res = await fetch(v.baseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      })
-      if (!res.ok) throw speakError('http', 'local tts http ' + res.status + ' ' + (await res.text().catch(() => '')).slice(0, 200))
-      const buf = Buffer.from(await res.arrayBuffer())
-      if (!buf.length) throw speakError('http', 'local tts returned no audio')
-      return buf
-    } catch (error) {
-      if (error && error.name === 'AbortError') throw speakError('timeout', 'local tts timeout after ' + timeoutMs + 'ms（本地服务未响应或合成超时，见 docs/local-tts' + (isCosy ? '-cosyvoice' : '') + '.md）')
-      throw error
-    } finally {
-      clearTimeout(timer)
-    }
+  async function synthesizeLocal(text, cfg) {
+    const v = cfg.tts.local || {}
+    const wav = await localRuntime.synthesizeWav({
+      text,
+      timeoutMs: v.timeoutMs || 30000,
+    })
+    return wav
   }
 
-  /**
-   * CosyVoice 情绪指令组装（instruct 通道，本地合成零成本、不涉及豆包 context_texts 计费语义）。
-   * 优先级：稿内 [#指令] > LLM 内容驱动指令（含情感+强度织入）> 固定 instruct > 风格预设机械指令。
-   */
-  function buildCosyInstruct(cfg, v, extractedCmd, generated) {
-    let cmd = extractedCmd || (generated && generated.instruction) || (v && v.instruct) || ''
-    if (!cmd) {
-      const preset = STYLE_PRESETS.find((p) => p.id === cfg.transcribe.stylePreset)
-      if (preset && preset.instruct) cmd = preset.instruct
-    }
-    if (generated && generated.emotion && generated.emotion !== '中性') {
-      const composed = composeContextText(cmd, generated.emotion, generated.intensity)
-      if (composed) return composed
-    }
-    return cmd
-  }
-
-  /** 合成并挂一次性音频路由；返回 '/voice/audio/<id>'。cmd = 已组装的完整语音指令（豆包 / CosyVoice 用）。 */
+  /** 合成并挂一次性音频路由；返回 '/voice/audio/<id>'。cmd = 已组装的完整语音指令（豆包用）。 */
   async function synthToRoute(text, cfg, cmd, opts = {}) {
     const prov = ttsProviderOf(cfg)
     let buf, mime
     if (prov === 'local') {
       buf = await synthesizeLocal(text, cfg)
-      mime = 'audio/wav'
-    } else if (prov === 'local-cosyvoice') {
-      buf = await synthesizeLocal(text, cfg, { instruct: cmd })
       mime = 'audio/wav'
     } else {
       buf = await synthesizeVolcengine(text, cfg, cmd, opts)
@@ -1424,100 +1345,42 @@ function apply(ctx, config) {
     // custom 网关只填了 httpUrl 时不允许流式（否则会静默直连官方 plan WS，custom 不生效）
     return ttsProviderOf(cfg) === 'volcengine' && v.interface === 'bidirection' && v.streaming !== false && (v.gateway !== 'custom' || !!v.wsUrl)
   }
-  /** 是否走分句流式播报（本地 Kokoro / Fun-CosyVoice3）：按句切段逐段合成（§4.3）。
-   * Kokoro 转写关闭时不流式（直读稿可能是中文，不送英文引擎）；CosyVoice 中文引擎
-   * 直读中文原文也能合成，不受转写开关限制。 */
+  /** 是否走分句流式播报（本地 Kokoro v1.1）：按句切段逐段合成（§4.3）。
+   * 本地引擎中英都能读，转写开关不影响是否流式（直读原文也能合成）。 */
   function isStreamingLocal(cfg) {
-    const prov = ttsProviderOf(cfg)
-    if (prov === 'local') return cfg.transcribe.enabled !== false && cfg.tts.local.streaming !== false
-    if (prov === 'local-cosyvoice') return cfg.tts.localCosyvoice.streaming !== false
-    return false
+    return ttsProviderOf(cfg) === 'local' && cfg.tts.local.streaming !== false
   }
-  /** 本地服务就绪（复用或拉起）；按引擎分派对应 supervisor；失败抛带 kind 的错误（unavailable）。 */
-  async function ensureLocalReady(engine) {
-    const sup = engine === 'local-cosyvoice' ? cosyvoiceSupervisor : localSupervisor
-    const ready = await sup.ensure()
-    if (!ready.running) throw speakError('unavailable', ready.error + (ready.detail ? '（' + ready.detail + '）' : ''))
-  }
-  /** 单段合成的分块流：POST 裸 PCM（response_format=pcm16），**边收边吐字节**，
-   * 每块 yield { bytes, sampleRate }——服务端 20 余秒就推出第一块，播放器不必等整段算完。
-   * 按"无数据间隔"计时（每收到一块就重置），超时即中止该段。
-   * opts.instruct：CosyVoice 的情绪指令（每段请求透传）。 */
-  async function* synthesizeLocalSegmentChunks(text, v, signal, opts = {}) {
-    const isCosy = opts.engine === 'local-cosyvoice'
-    const ac = new AbortController()
-    const abortOuter = () => { try { ac.abort() } catch { /* 已中止 */ } }
-    if (signal) {
-      if (signal.aborted) abortOuter()
-      else signal.addEventListener('abort', abortOuter, { once: true })
-    }
-    let timedOut = false
-    const idleMs = v.segmentTimeoutMs || v.timeoutMs || 120000
-    let timer = null
-    const arm = () => {
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { timedOut = true; try { ac.abort() } catch { /* 已中止 */ } }, idleMs)
-    }
+  /** 本地运行时就绪（懒加载模型）；失败抛带 kind 的错误（model-missing / load-failed）。 */
+  async function ensureLocalReady() {
     try {
-      arm()
-      const body = {
-        model: isCosy ? 'fun-cosyvoice3' : 'kokoro',
-        input: text,
-        voice: v.voice || (isCosy ? 'dsh_default' : 'af_heart'),
-        speed: v.speed ?? 1,
-        response_format: 'pcm16',
-      }
-      if (isCosy) body.instruct = opts.instruct || ''
-      // flow 步数：越小越快（4=推荐，源码默认 10）；只在 CosyVoice 上透传。
-      // 老 settings.yaml 没有该字段时按 schema 默认 4 下发，保证 UI 显示与实际发声一致。
-      if (isCosy) body.flow_steps = Math.max(1, Math.min(50, Math.round(v.flowSteps || 4)))
-      const res = await fetch(v.baseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      })
-      if (!res.ok) {
-        const rbody = await res.text().catch(() => '')
-        throw speakError('http', 'local tts http ' + res.status + ' ' + String(rbody).slice(0, 160))
-      }
-      const headerRate = res.headers && res.headers.get ? Number(res.headers.get('X-Sample-Rate')) : 0
-      const sampleRate = Number.isFinite(headerRate) && headerRate > 0 ? headerRate : 0
-      let received = 0
-      const reader = res.body.getReader()
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (value && value.length) { received += value.length; arm(); yield { bytes: Buffer.from(value), sampleRate } }
-      }
-      if (!received) throw speakError('http', 'local tts returned no audio')
+      await localRuntime.ensureLoaded()
     } catch (error) {
-      if (timedOut) throw speakError('timeout', 'local tts segment timeout after ' + idleMs + 'ms（本地服务未响应，见 docs/local-tts' + (isCosy ? '-cosyvoice' : '') + '.md）')
-      if (error && error.name === 'AbortError') throw speakError('timeout', '本地播报已中止')
-      throw error
-    } finally {
-      if (timer) clearTimeout(timer)
-      if (signal) signal.removeEventListener('abort', abortOuter)
+      if (error && error.kind) throw error
+      throw speakError('load-failed', String(error && error.message || error))
     }
   }
-  /** 本地分句流式：转写稿 → 按句切段 → 逐段请求裸 PCM → 边收边按 ~0.5s 音频切块入队。
-   * 首段算完即可出声；长稿不再等整篇、也不受整段超时限制。
-   * CosyVoice 引擎额外在消息级生成一次情绪指令（instruct），逐段透传。 */
+  /** 单段合成的分块流：runtime 每算出一块音频就 yield 一段 16bit 小端 PCM，
+   * 播放器不必等整段算完（首声 = 第一块算完，而不是整段）。 */
+  async function* synthesizeLocalSegmentChunks(text, v, signal) {
+    yield* localRuntime.streamPcm({
+      text,
+      signal,
+      timeoutMs: v.segmentTimeoutMs || v.timeoutMs || 30000,
+    })
+  }
+  /** 本地分句流式：转写稿 → 按句切段 → 逐段合成 → 边出边按 ~0.5s 音频切块入队。
+   * 首段算完即可出声；长稿不再等整篇、也不受整段超时限制。 */
   async function streamSpeakLocal(run, found, cfg, route) {
-    const prov = ttsProviderOf(cfg)
-    const isCosy = prov === 'local-cosyvoice'
-    const v = cfg.tts[localBlockKeyOf(prov)]
+    const v = cfg.tts.local || {}
     const promptUsed = resolvePrompt(cfg)
     const effortUsed = cfg.transcribe.reasoningEffort || ''
     const ctxRef = buildContext(run.sessionId, found.turn || 0, cfg.transcribe.contextTurns)
-    run.sampleRate = v.sampleRate || run.sampleRate || 24000
+    run.sampleRate = LOCAL_SAMPLE_RATE
     const ac = new AbortController()
     run.abort = ac
 
     // 1) 转写稿（与豆包流式同一套缓存规则：缓存命中零 LLM；完整跑完才写缓存，防脏稿）
     let transcript = ''
-    let generated = null // CosyVoice 消息级情绪指令（1.5 步生成；此处先声明供缓存写入使用）
-    let cacheEntryWritten = false
     const cached = !run.force ? cachedTranscriptFor(run.messageId, route, promptUsed, effortUsed) : null
     if (cached && cached.transcript) {
       transcript = cached.transcript
@@ -1530,52 +1393,29 @@ function apply(ctx, config) {
         if (delta) parts.push(delta)
       }
       transcript = parts.join('')
-      // 完整跑完（未中断、未抛错）才写缓存：与 WS 失败不污染缓存同一条不变式；
-      // 情绪指令字段在 1.5 步生成后回填（先写转写，指令到了再补写一次）
+      // 完整跑完（未中断、未抛错）才写缓存：与 WS 失败不污染缓存同一条不变式
       if (transcript && !run.stopped) {
         transcriptCache.set(String(run.messageId), {
           transcript, provider: route.provider, model: route.model,
           prompt: promptUsed, effort: effortUsed,
           sourceChars: found.text.length, at: Date.now(),
         })
-        cacheEntryWritten = true
         saveTranscriptCache(transcriptCache)
       }
     }
-    // 1.5) CosyVoice 情绪指令：消息级生成一次（LLM 三行输出 → 自然语言指令），
-    //      缓存命中重播时复用缓存的指令（零额外 LLM，重播零重新生成不变式）。
-    let instruct = ''
-    if (isCosy) {
-      if (cached && cached.transcript && cached.instruction) {
-        generated = { instruction: cached.instruction, emotion: cached.emotion || '', intensity: cached.intensity || 4 }
-      } else if (cfg.transcribe.enabled !== false && v.emotionEnabled !== false) {
-        generated = await generateVoiceInstruction(route, cfg, transcript)
-      }
-      instruct = buildCosyInstruct(cfg, v, '', generated)
-      // 初次生成的指令回填缓存（重播零 LLM）
-      if (generated && cacheEntryWritten) {
-        const entry = transcriptCache.get(String(run.messageId))
-        if (entry) {
-          entry.instruction = generated.instruction
-          entry.emotion = generated.emotion || ''
-          entry.intensity = generated.intensity || 4
-          saveTranscriptCache(transcriptCache)
-        }
-      }
-    }
+    // 1.5) 本地引擎没有独立的情绪指令通道（豆包的 context_texts 是豆包专属），
+    //      风格只靠转写 prompt 落进文字；这里不额外调 LLM = 本地播报零额外 token。
     run.transcript = transcript
     if (run.stopped) return
-    if (!transcript.trim()) throw speakError('unavailable', '转写稿为空，无法合成（本地 TTS）')
+    if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（本地 TTS）')
 
     // 2) 分句切段 → 3) 逐段合成入队
-    // CosyVoice：首段目标 40 字符（首段短 → 更早进入第 2 段，管线更早连贯）；
-    // Kokoro 不传 firstChars 保持原行为（首段 ~240 字符、~2.5s 就绪）。
-    const segments = splitForStream(transcript, v.segmentChars, isCosy ? 40 : undefined)
+    const segments = splitForStream(transcript, v.segmentChars)
     if (segments.length > 1) console.log('[voice] local stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
-    await ensureLocalReady(prov)
-    // 入队粒度：约 0.5s 音频（pcm 16bit mono = 采样率×2 字节/秒）。服务端每推一块就落一段，
+    await ensureLocalReady()
+    // 入队粒度：约 0.5s 音频（pcm 16bit mono = 采样率×2 字节/秒）。合成每吐一块就落一段，
     // 播放器不必等整段算完——这是"首声从整段时长降到首个分块"的关键。
-    const flushBytes = Math.max(8192, Math.round((run.sampleRate || 24000) * 0.5) * 2)
+    const flushBytes = Math.max(8192, Math.round((run.sampleRate || LOCAL_SAMPLE_RATE) * 0.5) * 2)
     let hadError = false
     for (let i = 0; i < segments.length; i++) {
       if (run.stopped) return
@@ -1590,18 +1430,17 @@ function apply(ctx, config) {
         run.segments++
       }
       try {
-        for await (const piece of synthesizeLocalSegmentChunks(segments[i], v, ac.signal, { engine: prov, instruct })) {
+        for await (const pcm of synthesizeLocalSegmentChunks(segments[i], v, ac.signal)) {
           if (run.stopped) return
-          if (piece.sampleRate) run.sampleRate = piece.sampleRate
-          pending.push(piece.bytes)
-          pendingBytes += piece.bytes.length
+          pending.push(pcm)
+          pendingBytes += pcm.length
           flush(false)
         }
         flush(true)
       } catch (error) {
         if (run.stopped) return
         flush(true) // 已收到的半段也交给客户端（能播多少播多少）
-        const kind = (error && error.kind) || 'http'
+        const kind = (error && error.kind) || 'synth-failed'
         const detail = String(error && error.message || error)
         if (run.segments === 0) {
           // 首段就失败（一个字节都没收到）：整段兜底交给 runPipeline（降级后可播完，用户无感）
@@ -1626,26 +1465,25 @@ function apply(ctx, config) {
     const effortUsed = cfg.transcribe.reasoningEffort || ''
     const ctxRef = buildContext(sessionId, found.turn || 0, cfg.transcribe.contextTurns)
 
-    // 关转写（transcribe.enabled=false）：不调任何模型，直接读原文（去 Markdown），跳过缓存/指令
+    // 关转写（transcribe.enabled=false）：不调任何模型，直接读原文（去 Markdown），跳过缓存/指令。
+    // 本地引擎中英都能读 → 中文也直接本地合成，不再回退系统朗读；豆包照旧走云端合成。
     if (cfg.transcribe.enabled === false) {
       const plain = toPlainSpoken(found.text)
       if (!plain) return { ok: false, error: 'message text empty' }
       const v = cfg.tts.volcengine
       const prov = ttsProviderOf(cfg)
-      let audioUrl, ttsError
-      if (prov === 'volcengine') {
-        try {
+      let audioUrl, ttsError, ttsErrorKind
+      try {
+        if (prov === 'volcengine') {
           audioUrl = await synthToRoute(plain, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
-        } catch (error) { ttsError = String(error && error.message || error) }
-      } else if (prov === 'local-cosyvoice') {
-        // CosyVoice 中文引擎：直读中文原文即可合成（不经转写），固定/预设指令走兜底
-        try {
-          audioUrl = await synthToRoute(plain, cfg, buildCosyInstruct(cfg, cfg.tts.localCosyvoice, '', null), {})
-        } catch (error) { ttsError = String(error && error.message || error) }
+        } else if (prov === 'local') {
+          audioUrl = await synthToRoute(plain, cfg, '')
+        }
+      } catch (error) {
+        ttsError = String(error && error.message || error)
+        ttsErrorKind = (error && error.kind) || ''
       }
-      // 回退对用户可见：Kokoro 英文引擎 + 转写关闭 = 系统朗读中文原文，需明确提示（否则用户以为 local 没生效）
-      const notice = prov === 'local' ? '本地 Kokoro 固定英文播报，需开启「需要转写模型」；已回退系统朗读（读中文原文）' : ''
-      return { ok: true, transcript: plain, degraded: false, audioUrl, ttsError, notice, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
+      return { ok: true, transcript: plain, degraded: false, audioUrl, ttsError, ttsErrorKind, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
     }
 
     // 缓存命中：同一条消息 + 同一路由 + 同一 prompt/effort → 直接复用转写稿（regen/force 跳过，重新生成）
@@ -1784,14 +1622,13 @@ function apply(ctx, config) {
     transcript = sanitizeForSpeech(cleanTranscript)
     const extractedCmd = cmds.length ? cmds[0] : '' // 官方仅第一个值有效
 
-    // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：豆包走 context_texts（专属通道）、
-    // CosyVoice 走 instruct（本地零成本，emotionEnabled 控制）；Kokoro 无此通道，跳过 = 零额外 LLM。
+    // 内容驱动的语音演绎指令 + 情感 + 强度（LLM 三行输出）：只有豆包有 context_texts 这条通道，
+    // 本地引擎没有对应的表达参数 → 跳过 = 零额外 LLM。
     // 仅当 转写开启 + 非降级；结果随转写稿一起缓存：同一消息重播零额外 LLM 调用（指令完全用缓存，
     // 绝不再生成；缓存缺指令=初次本就没生成，重播同样不补——"重播不重新生成任何东西"）。
     let generated = null // { instruction, emotion, intensity } | null
     const provNow = ttsProviderOf(cfg)
-    const cosyEmotionOn = provNow === 'local-cosyvoice' && cfg.tts.localCosyvoice.emotionEnabled !== false
-    if (route && (provNow === 'volcengine' || cosyEmotionOn) && cfg.transcribe.enabled !== false && !degraded) {
+    if (route && provNow === 'volcengine' && cfg.transcribe.enabled !== false && !degraded) {
       if (fromCache && cached) {
         generated = (typeof cached.instruction === 'string' && cached.instruction)
           ? { instruction: cached.instruction, emotion: cached.emotion || '', intensity: cached.intensity || 4 }
@@ -1814,9 +1651,7 @@ function apply(ctx, config) {
         }
       }
     }
-    const voiceInstruction = provNow === 'local-cosyvoice'
-      ? buildCosyInstruct(cfg, cfg.tts.localCosyvoice, extractedCmd, generated)
-      : buildVoiceInstruction(cfg, extractedCmd, generated)
+    const voiceInstruction = buildVoiceInstruction(cfg, extractedCmd, generated)
 
     // 服务端缓存（cache_config）：豆包语义（§4.5）；local 本地合成零边际成本，直接跳过。
     // 初次合成写入（供 1h 内重播命中免费）；重播仅参数指纹未变才命中（防串音）；regen 绝不。
@@ -1827,13 +1662,9 @@ function apply(ctx, config) {
         : serverCacheAllowed(transcript, curFp))
 
     // TTS：browser 透传 Client speechSynthesis；豆包/本地在 Host 合成后挂一次性音频路由。
-    // Kokoro 只合成英文转写稿（§4.3）：降级直读稿是原文（可能是中文）→ 不送 local，
-    // audioUrl 留空让客户端走系统 TTS 兜底（中文可正常朗读）。
-    // CosyVoice 中文引擎：转写开启/关闭、降级直读都能合成（中文原文可读），恒走 Host TTS。
+    // 本地引擎中英都能读（含降级直读稿），恒走 Host TTS；只有系统引擎才回落到浏览器语音。
     const provTts = ttsProviderOf(cfg)
-    const wantHostTts = provTts === 'volcengine'
-      || (provTts === 'local' && cfg.transcribe.enabled !== false && !degraded)
-      || provTts === 'local-cosyvoice'
+    const wantHostTts = provTts === 'volcengine' || provTts === 'local'
     let audioUrl
     let ttsError
     let ttsErrorKind
@@ -1849,7 +1680,7 @@ function apply(ctx, config) {
       } catch (error) {
         console.error('[voice] tts synthesis failed:', error)
         ttsError = String(error && error.message || error) // Client 端降级 speechSynthesis
-        ttsErrorKind = (error && error.kind) || ''         // unavailable | timeout | http（客户端选 toast 文案）
+        ttsErrorKind = (error && error.kind) || ''         // model-missing | load-failed | synth-failed | timeout（客户端选 toast 文案）
       }
     }
 
@@ -1878,25 +1709,16 @@ function apply(ctx, config) {
     meta: async () => ({
       ok: true,
       voices: VOLC_VOICES,
-      kokoroVoices: KOKORO_VOICES,
-      cosyvoiceVoices: COSYVOICE_VOICES,
+      kokoroVoices: LOCAL_VOICES,
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
     }),
     localStatus: async () => {
-      // 只读自检（不拉起服务）：设置页「本地服务自检」+ 排查用
+      // 运行时自检：模型目录/有没有加载/音色数/采样率/线程数（模型已装则顺手加载一次，
+      // 把真实读数带回去；这不是"拉起服务"，进程内本来就没有服务）。
       try {
-        const s = await localSupervisor.status()
-        return { ok: true, ...s }
-      } catch (error) {
-        return { ok: false, error: String(error && error.message || error) }
-      }
-    },
-    cosyvoiceStatus: async () => {
-      // 只读自检（不拉起服务）：设置页 CosyVoice「本地服务自检」+ 排查用
-      try {
-        const s = await cosyvoiceSupervisor.status()
+        const s = await localRuntime.status()
         return { ok: true, ...s }
       } catch (error) {
         return { ok: false, error: String(error && error.message || error) }
@@ -1963,17 +1785,13 @@ function apply(ctx, config) {
         return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
       }
       try {
-        // 试听样例语言：Kokoro 固定英文播报 → 英文样例；CosyVoice 中文 → 中文样例；
-        // 豆包跟随 voice.language（固定 en → 英文）
+        // 试听样例语言：跟随 voice.language（固定 en → 英文样例）；本地引擎中英都能读，用中文样例即可
         const provPrev = ttsProviderOf(cfg)
-        const text = provPrev === 'local' ? PREVIEW_SAMPLE_EN
-          : (provPrev === 'local-cosyvoice' ? PREVIEW_SAMPLE
-            : ((LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).id === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE))
-        const instruct = provPrev === 'local-cosyvoice' ? buildCosyInstruct(cfg, cfg.tts.localCosyvoice, '', null) : ''
-        const audioUrl = await synthToRoute(text, cfg, instruct, { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
+        const text = (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).id === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+        const audioUrl = await synthToRoute(text, cfg, '', { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
         return { ok: true, mode: 'audio', audioUrl }
       } catch (error) {
-        return { ok: false, error: String(error && error.message || error) }
+        return { ok: false, error: String(error && error.message || error), errorKind: (error && error.kind) || '' }
       }
     },
     stop: async () => {
@@ -2009,7 +1827,7 @@ function apply(ctx, config) {
         runPipeline(run, found, cfg)
         const provSpeak = ttsProviderOf(cfg)
         const sampleRate = isLocalProvider(cfg)
-          ? ((cfg.tts[localBlockKeyOf(provSpeak)] || {}).sampleRate || 24000)
+          ? LOCAL_SAMPLE_RATE
           : (cfg.tts.volcengine.sampleRate || 24000)
         return { ok: true, mode: 'stream', runId: run.id, sessionId: sid, messageId: mid, sampleRate, engine: provSpeak, warn: run.warn || undefined }
       }

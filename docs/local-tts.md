@@ -1,124 +1,184 @@
-# 本地英文 TTS（Kokoro-82M v1.0）部署与对接
+# 本地 TTS（Kokoro v1.1，进程内合成）
 
-> 目标：在 `http://127.0.0.1:8880` 起一个 OpenAI 兼容的本地合成服务，插件 `voice.tts.provider=local`
-> 时把英文转写稿交给它合成（免费、离线、数据不出本机）。中文播报仍可用豆包云 TTS，两者并存。
+插件自带一个免费、离线、中英混读的本地引擎：**合成在 dsh 进程内完成**，不需要 Python、不需要
+启动服务、不监听端口、不需要联网。本文写它怎么跑、怎么配、出问题怎么查。
 
-## 1. 为什么选 Kokoro-82M v1.0
+模型文件的**下载与校验**是另一块工作（见 ROADMAP），当前需要手动解包（下面 §2）。
 
-- 小模型里英文质量第一（TTS Arena 榜首档），26 个英文音色，语速自然。
-- ONNX 推理 CPU 实时（约等于或快于语音时长），无需 GPU。
-- 协议 Apache-2.0，模型可自由分发使用。
-- 对比：MeloTTS 英文偏机器感；Piper 质量明显低一档；CosyVoice 3 / IndexTTS2 / Qwen3-TTS
-  质量高但需 GPU + 数 GB 模型，不符合"占用性能不多"的要求。
+---
 
-## 2. 一键部署（Windows，推荐）
+## 1. 运行方式（和旧版最大的区别）
+
+| | 旧版（≤0.4.0） | 现在 |
+|---|---|---|
+| 合成在哪 | 独立的 Python 服务进程（venv + espeak 动态库） | **dsh 进程内**（N-API 原生模块） |
+| 用户要先装什么 | Python 3.10+、venv、pip 依赖、模型 | **只要模型文件** |
+| 谁来拉起/回收 | 插件用 `ctx.subprocess` 拉起 Python，退出时回收 | 不需要：随 dsh 进程加载与释放 |
+| 端口 | 127.0.0.1:8880（Kokoro）/ 8882（CosyVoice） | 无 |
+| 声音 | 只读英文（中文先转写成英文） | **中英都读**，跟随原文语言 |
+
+运行时是 `sherpa-onnx-node@1.13.8`（锁死这个版本）：
+
+- 它是 N-API 包，预编译下发，装包约 22MB，在桌面端的 Electron / Node 里直接加载，不需要对齐版本。
+- **不能用 2.x**：2.0 起不再用 espeak 回退，英文只查词典，词典外的词和数字会被**静默跳过**
+  （实测 `%` 直接丢）。1.x 带 espeak 回退，数字与词典外词都能读。
+- 模型输出是 **Float32 单声道 24kHz**；客户端只认 **16bit 小端裸 PCM**，所以 Host 侧会转
+  （`lib/local-runtime.js` 的 `float32ToInt16Pcm`）。整段播报走 WAV 头 + 同一份 PCM。
+
+加载是**懒的**：第一次点朗读（或点设置页「🔌 运行时自检」）才把模型读进内存，之后常驻复用。
+改 `modelDir` 会作废已加载的实例、按新目录重新加载。
+
+**代价（实测，本机 Intel Core Ultra 9 285H / Windows）**：
+
+| 读数 | 值 |
+|---|---|
+| 模型加载（fp32，冷启动一次） | 约 2.8–2.9s |
+| 首声（模型已加载，4 线程） | 约 0.6s |
+| 合成速度 RTF（4 线程 / 8 线程） | 0.32–0.36 / 0.25 |
+| 常驻内存（加载后 / 合成后） | 约 510MB / 600MB |
+
+RTF = 合成耗时 ÷ 音频时长，越小越快；0.3 表示 10 秒音频算 3 秒。
+
+---
+
+## 2. 模型
+
+### 2.1 用哪个包
+
+`kokoro-multi-lang-v1_1`（fp32），解包后约 **407MB**（388MiB）：
+
+| 文件 | 作用 |
+|---|---|
+| `model.onnx` | 声学模型（fp32，约 325MB）。也认 `model.int8.onnx` |
+| `voices.bin` | 103 个音色的声纹（约 54MB） |
+| `tokens.txt` | 音素表 |
+| `espeak-ng-data/` | espeak 回退数据（词典外词、数字读法的关键，17MB） |
+| `lexicon-us-en.txt` / `lexicon-zh.txt` | 中英词典（把词转音素） |
+| `date-zh.fst` / `number-zh.fst` / `phone-zh.fst` | 中文日期/数字/电话号码正则化（**缺了数字会退化成逐字读**） |
+
+**别选 int8 包**：体积小一半，但实测**反而慢约 4 倍**（RTF 1.0 以上，已经慢于实时），
+而且 fp32 在这台机器上 RTF 只有 0.3 左右。
+
+### 2.2 放哪（解析顺序）
+
+按下面顺序找，**先命中先用**；前两项是"显式指定"，指定了就**不会**再回落到别的目录：
+
+1. `voice.tts.local.modelDir`（设置页「模型目录」，或 profile patch 里手写）
+2. 环境变量 `VOICE_LOCAL_MODEL_DIR`（临时试验/排障用）
+3. `<DSH_HOME>/voice/models/kokoro-multi-lang-v1_1`（正式位置；`DSH_HOME` 默认 `~/.dsh`）
+4. `<仓库>/local/models/kokoro-multi-lang-v1_1`（开发机上的老位置，兼容用）
+
+给的是"父目录"也行：如果该目录下没有 `model.onnx`/`model.int8.onnx`，会自动再看它的
+`kokoro-multi-lang-v1_1/` 子目录。
+
+### 2.3 怎么装（手动，临时）
+
+把下载到的 `kokoro-multi-lang-v1_1.tar.bz2`（约 348MB）解包到上面的正式位置即可：
 
 ```powershell
-# 在仓库根目录执行：建 venv → 装依赖 → 下载模型（约 350MB）
-pwsh scripts/setup-local-tts.ps1
-# 可选轻量版（169MB，fp16，音质几乎无差）：pwsh scripts/setup-local-tts.ps1 -Variant fp16
+# 例：解到用户目录（DSH_HOME 默认 ~/.dsh）
+$dest = "$HOME\.dsh\voice\models"
+New-Item -ItemType Directory -Force $dest | Out-Null
+tar -xjf .\kokoro-multi-lang-v1_1.tar.bz2 -C $dest
+# 解完应看到 $dest\kokoro-multi-lang-v1_1\model.onnx
 ```
 
-然后 dsh 设置页 → 语音播报 → 播报引擎选"本地 Kokoro（英文）"即可。
-自动播报无需任何成本开关（local 免费，不受豆包的 `autoSpeakCloudTts` 成本门控）。
+解包后**重启 dsh**（模型是随进程加载的），设置页 → 语音播报 → 引擎选「本地 Kokoro（中英·免费）」，
+点「🔌 运行时自检」应看到 `已就绪 … 103 音色 · 24000Hz · 4 线程`。
 
-### 2.1 服务的启动与生命周期（默认交给 dsh）
+---
 
-**无需手动启动服务。** `voice.tts.local.autoStart`（默认 `true`）开启时，Host 在每次本地合成前先探
-`GET <baseUrl 的 origin>/health`：
+## 3. 配置（`voice.tts.local`）
 
-- 已在跑 → 直接复用，不再拉起第二个实例；
-- 没在跑 → 经 `ctx.subprocess` 拉起 `scripts/local-tts-server.py`，轮询 `/health` 直到就绪（模型加载约 3–5s）；
-- **dsh 退出时该子进程被一并回收**（受管子进程范围，正常卸载与宿主退出两个阶段都会终止），不留孤儿；
-- 失败分类可见：服务不可达 → `ttsErrorKind=unavailable`，合成超时 → `timeout`，服务返回错误 → `http`；
-  客户端 toast 按分类给文案，`unavailable` 附带部署文档指引。
-
-设置页 local 区块提供「自动启动本地服务」开关与「🔌 本地服务自检」按钮（只读探测，不拉起服务）。
-
-**何时需要手动启动**：关掉 `autoStart`、要用非本仓库脚本的服务、或想在不启动 dsh 时先跑起来测试。
-
-### 2.2 手动启动（可选/排查用）
-
-```powershell
-# 启动服务（保持窗口开着；首次加载模型需数秒）
-local\venv\Scripts\python.exe scripts\local-tts-server.py
-# 自检：浏览器打开 http://127.0.0.1:8880/health 返回 {"ok":true} 即就绪
-```
-
-也可直接双击 `scripts/start-local-tts.bat`（等价，省去记命令；服务退出时窗口不会立刻消失，便于看报错）。
-
-手动启动的服务是**独立常驻进程**：dsh 重启不影响它，关掉窗口/关机才停。此时 `autoStart` 的探针会命中，
-不会重复拉起。**不要**在 dsh 会话内用 `Start-Process`、`Start-Job`、后台任务拉起——那些实例会随会话结束被回收，
-要用就开一个独立终端窗口；需要常驻可交给登录自启/计划任务，或改用同协议的现成服务（如
-[remsky/Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) 的 Docker 容器，支持 auto-restart）。
-
-## 3. 模型文件（货物不入库）
-
-| 文件 | 大小 | 来源（Apache-2.0 / MIT） |
+| 字段 | 默认 | 说明 |
 |---|---|---|
-| `local/models/kokoro-v1.0.onnx` | 325MB | [kokoro-onnx release model-files-v1.0](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0) |
-| `local/models/voices-v1.0.bin` | 27MB | 同上（26 个音色风格向量） |
-| `local/venv/` | — | Python 虚拟环境（kokoro-onnx 0.4.x + fastapi + uvicorn） |
+| `sid` | `48` | 音色编号（0–102）。设置页下拉是精选清单，也可手填任意数字试听 |
+| `speed` | `1` | 语速 0.5–2（模型原生参数，不是变速播放） |
+| `numThreads` | `4` | 合成线程数 1–16。线程多首声更快，但更吃 CPU |
+| `modelDir` | `''` | 模型目录覆盖；空 = 按 §2.2 自动找 |
+| `streaming` | `true` | 分句流式：按句切段、合成一段播一段（关掉=整段合成完才播） |
+| `segmentChars` | `220` | 流式每段的目标字符数（会向前找句末标点，最多 2 倍） |
+| `timeoutMs` | `30000` | 整段合成的超时 |
+| `segmentTimeoutMs` | `30000` | 流式时单个音频段的超时 |
 
-- `local/` 已在 `.gitignore` 排除——git 仓库只存"清单和方法"（AGENTS.md 依赖管理约定）。
-- espeak-ng 音素数据由 `espeakng-loader` 包内置，无需单独下载。
-- fp16/int8 量化版同地址可选（169MB/88MB），CPU 无 GPU 时 int8 提速明显、音质略降。
+`streaming` 关掉时，长稿要等整篇算完（RTF 0.3 意味着 1 分钟音频等 18 秒），不建议关。
 
-## 4. 对接协议（插件 ↔ 本地服务）
+---
 
-`POST /v1/audio/speech`，JSON 请求：
+## 4. 音色（只有数字 sid）
 
-```json
-{ "model": "kokoro", "input": "spoken transcript text", "voice": "af_heart", "speed": 1.0, "response_format": "pcm16" }
+模型只暴露数字编号 **0–102**，上游没有随包发名字表，插件也不编造"谁是谁"。能确定的事实：
+
+- `0` / `1` / `2` 是英文音色（`af_maple` / `af_sol` / `bf_vale`：前两个美式女声，
+  `bf_vale` 是英式年长女声）——这三个是上游 `voices/` 目录里仅有的英文音色；
+- `3`–`57` 是中文女声，`58`–`102` 是中文男声（按枚举实测的基频分段，本机 103 个音色逐个测过）。
+
+设置页精选了 9 个，名字里的"高/中/低"是**同一句中文的实测基频档**，不代表音质好坏：
+
+| sid | 名字 | 备注 |
+|---|---|---|
+| 48 | 中文女声 · 中高 | 默认 |
+| 40 | 中文女声 · 高 | |
+| 14 | 中文女声 · 中 | |
+| 8 | 中文女声 · 低 | |
+| 66 | 中文男声 · 高 | |
+| 75 | 中文男声 · 中 | |
+| 81 | 中文男声 · 低 | 最低沉 |
+| 0 | 英文女声 · Maple | 读英文最自然 |
+| 2 | 英文女声 · Vale | 英式 |
+
+想换别的：设置页「音色 sid」下拉选「自定义」，直接填 0–102 之间的数字。超出范围会明确报错
+（`音色 sid 超出范围`），不会静默换成别的音色。
+
+中英混读用同一个 sid 即可：模型会自动按语言切音素，中文 sid 也能读英文句子（口音偏中文）。
+
+---
+
+## 5. 排障
+
+先点设置页「🔌 运行时自检」，它会打印模型目录、是否已加载、音色数、采样率、线程数与加载耗时。
+错误在客户端统一分四类（toast 文案跟着变）：
+
+| kind | 文案 | 常见原因 | 怎么查 |
+|---|---|---|---|
+| `model-missing` | 本地模型未安装 | 模型没解包、解到别处、目录被删、`modelDir` 指错 | 自检里的"模型目录"那一行；该目录下有没有 `model.onnx` + `voices.bin` + `espeak-ng-data/` |
+| `load-failed` | 本地模型加载失败 | 原生模块没装上（`npm install` 没跑）、模型文件损坏、加载超时 | dsh 日志里 `[voice] local tts load failed: …`；`packages/dsh-plugin-voice/node_modules/sherpa-onnx-node` 在不在 |
+| `synth-failed` | 本地合成失败 | 文本异常、sid 越界、模型内部报错 | toast 后面的原始错误；sid 是否 0–102 |
+| `timeout` | TTS 合成超时 | 机器太慢、线程数太低、超时设太小 | 把 `numThreads` 调到 6–8，或把 `timeoutMs` 加到 60000 |
+
+其它排查点：
+
+- **数字被读成一串单字 / 被跳过**：模型目录缺 `number-zh.fst`（或 `date-zh.fst` / `phone-zh.fst`），
+  解包不完整；重新解一份完整的。
+- **第一次朗读慢、之后正常**：正常。第一次要把 407MB 模型读进内存（约 3s）。
+- **播放没声音但日志没有报错**：不是本地引擎的问题，看 `docs/pipeline.md` 的播放层说明；
+  可先点「▶ 试听」确认是不是整条播放链路的问题。
+- **想确认到底有没有出声**：Host 侧 `clientDiagDump` 会记录客户端每一步（取段、建 buffer、播放），
+  静音与"还没算完"能区分开。
+- **升级后首次朗读报"模型未安装"**：模型目录换了（旧版在仓库 `local/models`，新版在用户目录），
+  把 `kokoro-multi-lang-v1_1` 挪到 `<DSH_HOME>/voice/models/` 即可，或在设置页把「模型目录」
+  直接指向旧目录。
+
+### 5.1 清掉旧版残留（可选）
+
+从 Python 版升级上来时，仓库 `local/` 下可能还留着这些东西，**都不再被使用了**，可以整个删掉
+（插件不会再读写它们）：
+
+```
+local\venv\               # 旧 Kokoro 服务的 Python 环境
+local\venv-cosyvoice\     # 旧 CosyVoice 服务的 Python 环境
+local\cosyvoice-src\      # CosyVoice 源码
+local\cosyvoice-model\    # CosyVoice 权重（约 4.4GB）
+local\models\             # 旧 Kokoro 英文模型（v1.0）
+local\tmp\                # 旧服务的临时文件
 ```
 
-响应按 `response_format` 分两种（都带 `X-Sample-Rate` 响应头，采样率唯一事实源）：
+端口 `8880` / `8882` 也不再被占用；如果还有旧的 Python 服务在跑，直接结束进程即可。
 
-| response_format | 响应体 | 用途 |
-|---|---|---|
-| `pcm16` | **裸 PCM**（16bit 小端 mono，无容器头，`audio/pcm`） | 分句流式（默认）：客户端 Int16→Float32 直接建 AudioBuffer，零解码延迟 |
-| `wav`（缺省） | 完整 WAV 容器（`audio/wav`） | 整段合成（`streaming:false`）与首段失败后的兜底 |
+---
 
-### 4.1 分句流式（为什么一句一请求）
+## 6. 隐私与成本
 
-本地 Kokoro 是"整段算完才出声"：3606 字符的稿子整段合成要 40s（且会撞整段超时）。插件的做法是
-**按句切成 ~220 字符的段、逐段请求**，首段算完即可播放。实测（本机 CPU，`af_sarah`）：
-
-| 稿长 3606 字符 | 段数 | 首段 | 首声延迟 | 全部合成 | 音频总长 |
-|---|---|---|---|---|---|
-| 整段合成（旧） | 1 | 3606 字符 | 40.1s（>30s 超时 → 失败） | 40.1s | 35s |
-| 分句流式（现） | 12 | ~240 字符 | **2.5s** | ~43s | ~220s |
-
-"总合成时间更长"不影响听感：合成速度（约 5 倍实时）始终快于播放，播放不会断粮。
-复现手段：`node scripts/local-autostart-probe.mjs --stream`（真实拉起 + 真实切分 + 真实合成计时）。
-
-插件侧配置（`voice.tts.local`）：`baseUrl` / `voice` / `speed` / `timeoutMs` / `autoStart` / `pythonPath` /
-`streaming` / `segmentChars` / `segmentTimeoutMs`，见 `docs/pipeline.md` §6。
-健康端点 `GET /health` 由 Host 用于"复用或拉起"的判定。
-
-该协议与 OpenAI TTS API 兼容（子集，`wav` 形态），**现成服务可直接替换**本仓库 server 脚本，例如
-[remsky/Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI)（Docker，默认端口同为 8880，
-`response_format: wav`）。只要端点接受 `input/voice/speed` 并返回 WAV 字节即可；
-**若对方不认 `pcm16`（返回 4xx/5xx），插件首段失败后会自动降级整段 WAV**，功能不丢、只是等待变长。
-
-## 5. 系统要求与故障排查
-
-- Python 3.10–3.12（`python --version`）；Windows 需已装 [Python 官方包](https://www.python.org/downloads/)并勾选"Add to PATH"。
-- 内存：加载模型后约 600MB；CPU 空闲时占用接近 0（合成期间才吃满一核）。
-- 常见问题：
-  - **toast 提示"本地 TTS 服务不可达"** → 自动启动没成功：没部署（按提示跑 `setup-local-tts.ps1`）、
-    `autoStart` 被关、端口被别的程序占用，或 dsh 的 `ctx.subprocess` 不可用（罕见，`/voice/api/localStatus` 可见
-    `subprocessAvailable`）。设置页「🔌 本地服务自检」会显示具体原因与运行环境路径。
-  - **toast 提示"合成失败（服务返回错误）"** → 服务在跑但合成报错（如 `synth` 500），看服务窗口输出或
-    `/voice/api/localStatus`；常见根因见下一条。
-  - **报错含 `local tts http 500 ... Permission denied: ...\Temp\dsh-*\tmp*\espeak-ng.dll`**
-    → 服务是从受限文件沙箱环境（如 dsh 会话里的 shell）启动的：espeak 后端每建一个实例都要在系统临时目录
-    下新建子目录并复制 `espeak-ng.dll`，沙箱不允许写该子目录，合成因此 500。
-    **正常路径（Host 自动启动）不受影响**，因为它不经过 shell 沙箱；若手动启动，请在普通 PowerShell 窗口跑，
-    `local-tts-server.py` 也内置了兜底——系统临时目录不可写时自动改用仓库内 `local/tmp/`，
-    并用普通 `mkdir` 替代 `tempfile.mkdtemp`。
-  - **toast 提示"TTS 合成超时"** → 单个音频段在 `segmentTimeoutMs`（默认 30s）内没返回：
-    服务卡死或机器极慢；把 `segmentTimeoutMs` 调大，或把 `segmentChars` 调小（段更短更快出）。
-    注意流式路径不会因为"稿子长"而超时——超时只按段算。
-  - **首次合成很慢** → 模型加载 + 首次推理预热，属正常（自动启动也含这一步，约 3–5s）；之后每段为实时速。
-  - **长文等待久** → 已由分句流式解决（首声 ~2.5s）；若仍偏慢，把 `segmentChars` 调小（如 150）。
+- 合成在本机进程内完成，文本与音频都不出本机（转写是否走云端由「需要转写模型」开关决定）。
+- 本地合成零成本，不受「云TTS」成本门控；把转写关掉就是完全离线的朗读。
+- 磁盘：模型约 407MB；内存：加载后常驻约 0.5–0.6GB。

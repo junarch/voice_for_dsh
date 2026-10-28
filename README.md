@@ -10,8 +10,8 @@
 
 > **项目定位**：这是一个**个人项目**，围绕作者自己的使用习惯设计，不一定适合所有人。两种"进阶"引擎的定位不同：
 > - **豆包云 TTS（付费）**：情感化朗读——方言、多音色、情绪演绎，提供有趣的声音体验；
-> - **本地英文 TTS（免费）**：把中文回复**先转写成英文口语再朗读**——用"听英文"替代"读中文"，
->   换一种信息通道接收同样的内容，长文工作后节省认知资源、缓解困倦（这是本项目的核心动机）。
+> - **本地 TTS（免费）**：进程内合成、离线、数据不出本机，中英都按原文读——
+>   适合不想把内容发给云端、又想要稳定音质的场景。
 >
 > 只想给 dsh 加个"普通朗读"的话，默认的浏览器 TTS 开箱即用、零配置；不认同上述思路也可随时切回。
 
@@ -28,8 +28,8 @@
   - `volcengine`：豆包语音合成 2.0（双向流 WebSocket 默认 + HTTP 单向兜底），
     8 种方言、中英文音色、情感演绎指令；网关可配（`plan` 智能体套餐 /
     `standard` 标准付费 / `custom` 自定义端点，仅端点路径不同，鉴权一致）；
-  - `local`：本地 Kokoro-82M v1.0（免费、离线、数据不出本机；**英文播报**——
-    中文回复先转写为英文口语再朗读，部署见 [`docs/local-tts.md`](docs/local-tts.md)）。
+  - `local`：本地 Kokoro v1.1（免费、离线、数据不出本机、**不需要 Python**；中英都按原文读，
+    合成在 dsh 进程内完成，需先放模型文件，见 [`docs/local-tts.md`](docs/local-tts.md)）。
 - **省钱设计**（详见下方"成本与隐私"）：
   - 同一消息重复朗读 → 转写缓存命中，**零新增 LLM 调用**；
   - 重播同一消息 1h 内 → 豆包**服务端缓存命中，免重合成、不重复计费**；
@@ -89,26 +89,17 @@ node scripts/migrate-voice-config.mjs
 > 提示：`dsh plugin add` 的相对路径锚定到**执行命令时的当前目录**；若解析失败，直接给绝对路径
 > （如 `link:C:\path\to\voice_for_dsh\packages\dsh-plugin-voice`）。
 
-### 本地英文 TTS（可选，免费）
+### 本地 TTS（可选，免费，中英都能读）
 
-默认引擎是浏览器 TTS，装完插件就能用。想启用"英文播报"（本地 Kokoro-82M），需额外下载模型
-（约 350MB，只存本机、不入 git）：
+默认引擎是浏览器 TTS，装完插件就能用。想离线朗读（本地 Kokoro v1.1，中英混读），需额外下载模型
+（约 407MB，只存本机、不入 git）：把 `kokoro-multi-lang-v1_1` 解包到模型目录即可，不需要 Python、
+不需要启动服务——合成在 dsh 进程内完成。
 
-```powershell
-# 在仓库根目录执行（Windows）：自动创建虚拟环境 + 下载模型，首次约 350MB、视网络数分钟
-pwsh scripts/setup-local-tts.ps1
-```
+然后**重启 dsh**，设置页 → 语音播报 → 播报引擎选 **本地 Kokoro（中英·免费）**。
+模型目录、音色 sid、排障见 [`docs/local-tts.md`](docs/local-tts.md)；设置页有「🔌 运行时自检」按钮，
+会显示模型目录、是否已加载、音色数与线程数。模型没装时点朗读会明确提示"模型未安装"，不会静默失败。
 
-然后**重启 dsh 并刷新浏览器**，设置页 → 语音播报 → 播报引擎选 **本地 Kokoro（英文·免费）**。
-无需再手动启动服务：**dsh 会在首次播报前自动拉起本地服务，并在自己退出时回收它**
-（设置页「自动启动本地服务」开关，默认开）。想手动管理或排查时可用
-`local\venv\Scripts\python.exe scripts\local-tts-server.py`（或双击 `scripts/start-local-tts.bat`），
-自检：浏览器打开 `http://127.0.0.1:8880/health` 返回 `{"ok":true}` 即就绪；设置页也有「🔌 本地服务自检」按钮。
-
-注意：本地引擎**固定英文播报**（中文回复先转写成英文再朗读），需保持"需要转写模型"开启；
-播报默认走**分句流式**（按句切段逐段合成，长稿首声约 2.5 秒，设置页「分句流式播报」可关）。
-Mac/Linux 不跑此脚本，可用同协议的现成服务替换（见 [`docs/local-tts.md`](docs/local-tts.md) §4）；
-换音色、模型文件说明与常见问题也都在该文档。
+播报默认走**分句流式**（按句切段逐段合成，首声约 0.6 秒，设置页「分句流式播报」可关）。
 
 ### 配置
 
@@ -149,7 +140,7 @@ node scripts/tts-cache-probe.mjs
 | 文档 | 内容 |
 |---|---|
 | [`docs/pipeline.md`](docs/pipeline.md) | 转写/TTS 管线行为 + `voice:` 配置 schema + 不变式 |
-| [`docs/local-tts.md`](docs/local-tts.md) | 本地英文 TTS 部署/对接/换音色/故障排查 |
+| [`docs/local-tts.md`](docs/local-tts.md) | 本地 TTS：模型放哪/配置/音色/排障 |
 | [`docs/architecture.md`](docs/architecture.md) | DSH 插件机制与关键决策 |
 | [`docs/development.md`](docs/development.md) | 开发循环 / 安装卸载 / 常见坑 |
 | [`docs/testing.md`](docs/testing.md) | 测试方法（含账单防御） |
