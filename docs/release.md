@@ -9,10 +9,10 @@
 | 位置 | 当前 | 说明 |
 |---|---|---|
 | 本仓库 | `0.4.0` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
-| GitHub main | `0.3.1` | 仍是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败；本地 main 领先它一批提交（`git rev-list --count origin/main..main` 现算），全部未推 |
-| npm | `0.2.5` | 早于本轮全部改动；本仓库没有 npm 发布 workflow |
+| GitHub main | `0.4.0` | 已发 Release `v0.4.0`（tag 指向 `6eb4764`）；更早的 `0.3.1` 是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
+| npm | 未发布 | npm 上的 `dsh-plugin-voice` 是另一个同名项目（不是本仓库），同名发布会 403；安装走 GitHub，见 §7 |
 
-发版就是把本仓库推上去、打 tag、把 `0.4.0` 写进 Release；npm 是否发布见 §7。
+发版＝推 main、打 tag、写 Release；安装走 GitHub（npm 同名不可用，见 §7）。
 
 ## 1. 自动化门槛（零成本，每次必跑）
 
@@ -91,6 +91,7 @@
 | 忽略规则 | `.gitignore` 仍覆盖 `node_modules/`、`local/`、`out/`、`*.key`、`*.pem`、`.env`、`tmp*/` | 下次会把模型或密钥提上去 |
 | 发版物 | `npm pack --dry-run` 的清单里没有模型／音频／测试／文档目录 | 装包体积失控或夹带本地文件 |
 | 体积基线 | 打印本机模型、提示音素材、转写缓存的体积与条目数 | 只用来对比"有没有异常增长" |
+| 提交历史 | 全部分支的新增行同样扫一遍，**只报告不判失败**（历史改不掉） | 有人曾经把 key 提交过；要处理得单独改写历史 |
 
 机器判不了、只能人看的四条：
 
@@ -103,12 +104,13 @@
 - [ ] **网络出口**：只有三个地方发请求——配置的转写 LLM、豆包 TTS、模型下载（GitHub Releases）。
       没有埋点、没有遥测、没有第三方字体或 CDN。
 
-## 7. 分发方式（发版前定一次）
+## 7. 分发方式
 
-两条路，二选一：
+**GitHub Release（当前唯一渠道）**：用户按 README 用 `dsh plugin --profile desktop add link:<仓库路径>/packages/dsh-plugin-voice` 安装。
 
-- **只发 GitHub Release（推荐先这样）**：用户按 README 用 `dsh plugin add <仓库路径>` 安装；省掉 npm 账号与 2FA 的发布风险，也避免 npm 上旧版本（0.2.5）与新版本并存造成的困惑。
-- **同时发 npm**：需要补一个发布 workflow（`npm publish --access public` + provenance），并决定是否废弃 npm 上的旧版本。
+**npm 同名走不通**：npm 上的 `dsh-plugin-voice` 属于另一个同名项目（不是本仓库），同名发布会 403，也不能替它标废弃。
+要走 npm 只能换包名（`@账号/dsh-plugin-voice` 或一个全新的名字）；换名要连带改 `cordis.patch.yml` 里的模块名、
+profile 里已装的条目与 README 的安装命令，属改名级别改动，需要重装一次插件。
 
 无论走哪条，发布前都要确认：`packages/dsh-plugin-voice/package.json` 的 `files` 只含 `lib/`、`cordis.patch.yml`、`README.md`（模型与测试不入包）。
 

@@ -17,9 +17,9 @@ jobs:
         # 所以最低 Node 22；顺带在 22.x 最新版上也跑一遍。
         node-version: [22]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm

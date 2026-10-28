@@ -2,7 +2,7 @@
 
 // 发版前的隐私与安全体检：零成本、不联网、不改任何文件。
 // 查四件事——
-//   1. 仓库里有没有密钥、令牌、本机绝对路径（含历史里不该出现的类型只查当前文件）；
+//   1. 仓库里有没有密钥、令牌、本机绝对路径（工作树按行判失败；提交历史另做只读报告，历史改不掉）；
 //   2. 发版物（npm pack 的内容）有没有夹带模型、测试或本机文件；
 //   3. 忽略规则有没有漏掉密钥目录、模型目录、产物目录；
 //   4. 本机 voice 目录的体积基线（模型/缓存/提示音素材），以及配置与密钥没被跟踪。
@@ -165,6 +165,26 @@ check('发版物只含源码与清单，不含模型', () => {
   return `${paths.length} 个文件 / ${Math.round(info.size / 1024)}KB`
 })
 
+// 提交历史里的密钥形态：只报告、不判失败——历史改不掉，能守的是"以后别再进"。
+// 命中条目不回显内容，只给 commit 与文件；看现场用 `git show <commit>`。
+function historySecretHits() {
+  const raw = execFileSync('git', ['log', '-p', '--all', '--unified=0', '--format=@@COMMIT@@%h'], {
+    cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+  })
+  const hits = []
+  let commit = ''
+  let file = ''
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('@@COMMIT@@')) { commit = line.slice('@@COMMIT@@'.length); continue }
+    if (line.startsWith('+++ b/')) { file = line.slice(6); continue }
+    if (!line.startsWith('+') || line.startsWith('+++')) continue
+    for (const rule of SECRET_RULES) {
+      if (rule.re.test(line)) { hits.push(`${commit} ${file}（${rule.id}）`); break }
+    }
+  }
+  return hits
+}
+
 // 本机体积基线：只报数，不判失败（换机器就会变）
 function dirSize(dir) {
   if (!existsSync(dir)) return 0
@@ -199,5 +219,18 @@ for (const item of results) {
 console.log('\n本机体积基线（不判失败）：')
 for (const [label, bytes] of baseline) console.log(`   ${label} ${mb(bytes)}`)
 console.log(`   转写缓存条目 ${cacheEntries}`)
+
+console.log('\n提交历史扫描（只报告，历史改不了）：')
+try {
+  const historyHits = historySecretHits()
+  if (!historyHits.length) console.log('   0 处')
+  else {
+    console.log(`   ${historyHits.length} 处`)
+    for (const hit of historyHits.slice(0, 5)) console.log('   - ' + hit)
+  }
+} catch (error) {
+  console.log('   跳过：' + String((error && error.message) || error))
+}
+
 console.log(`\n结果: ${results.length - failed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)
