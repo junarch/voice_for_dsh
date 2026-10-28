@@ -117,6 +117,12 @@ window.__ModuleLoader__.load({
       "toast.ttsTimeout": "TTS 合成超时",
       "toast.ttsHttp": "TTS 合成失败（服务返回错误）",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
+      "row.lengthLevel": "转写篇幅", "row.promptCloud": "豆包提示词", "row.promptLocal": "本地提示词",
+      "lengthLevel.hint": " 详细≈略短于原文；简单≈原文五到六成；极简≈三成（结论与下一步不省）",
+      "stylePreset.hint": " 只改语气；篇幅由上面的档位控制",
+      "prompt.engineOnly": "只对当前引擎生效，两个引擎各自独立",
+      "prompt.reset": "恢复默认",
+      "prompt.footnote": "留空 = 用内置默认；篇幅与语种要求由插件自动附加，不用写在这里",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
       "browser.voiceHint": " 留空=系统默认；名字对不上系统里的语音就按默认音播",
       "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
@@ -246,6 +252,12 @@ window.__ModuleLoader__.load({
       "toast.ttsTimeout": "TTS synthesis timed out",
       "toast.ttsHttp": "TTS synthesis failed (service error)",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
+      "row.lengthLevel": "Script length", "row.promptCloud": "Doubao prompt", "row.promptLocal": "Local prompt",
+      "lengthLevel.hint": " Detailed ≈ slightly shorter than source; Simple ≈ 50–60%; Minimal ≈ 30% (conclusion and next step always kept)",
+      "stylePreset.hint": " Tone only; length is controlled by the level above",
+      "prompt.engineOnly": "Applies to the current engine only; the two engines are independent",
+      "prompt.reset": "Reset to default",
+      "prompt.footnote": "Empty = built-in default. Length and language requirements are appended automatically — don't repeat them here.",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
       "browser.voiceHint": " Empty = system default; a name the system does not know falls back to the default voice",
       "row.apiKey": "apiKey", "row.speaker": "Speaker",
@@ -318,10 +330,14 @@ window.__ModuleLoader__.load({
         { id: "shaanxi", label: "陕西话" }, { id: "dongbei", label: "东北话" },
       ],
       stylePresets: [
-        { id: "standard", name: "标准", prompt: "" },
-        { id: "companion", name: "陪伴", prompt: "" },
-        { id: "playful", name: "俏皮", prompt: "" },
+        { id: "standard", name: "标准", tone: "" },
+        { id: "companion", name: "陪伴", tone: "" },
+        { id: "playful", name: "俏皮", tone: "" },
       ],
+      lengthLevels: [
+        { id: "full", name: "详细播报" }, { id: "brief", name: "简单播报" }, { id: "minimal", name: "极简播报" },
+      ],
+      promptDefaults: { cloud: "", local: "" },
       rateStops: ["很慢", "稍慢", "正常", "稍快", "很快"],
       // 只在 Host meta 取不到时兜底（裂脑/旧 Host）；正常路径用 meta.kokoroVoices 的全量表。
       kokoroVoices: [
@@ -2207,14 +2223,20 @@ window.__ModuleLoader__.load({
         } catch (e) { /* 静默失败，保留旧列表 */ }
       }
       const rateStops = m.rateStops || [];
-      const isCustom = cfg.transcribe.stylePreset === "custom";
-      // 旧预设值（ambiguous/default/energetic）回退到"标准"，避免下拉空值
-      const styleShown = ["standard", "companion", "playful", "custom"].indexOf(cfg.transcribe.stylePreset) >= 0
+      // 转写提示词按引擎各一份：用户字段为空 → 用该引擎的内置默认（meta.promptDefaults），
+      // 旧字段 transcribe.prompt 仅作兜底（老的自定义文本不丢）。
+      const cloudEngine = cfg.tts.provider === "volcengine";
+      const promptDefaults = m.promptDefaults || { cloud: "", local: "" };
+      const promptField = cloudEngine ? "transcribe.promptCloud" : "transcribe.promptLocal";
+      const promptUser = cloudEngine ? cfg.transcribe.promptCloud : cfg.transcribe.promptLocal;
+      const promptDefault = (cloudEngine ? promptDefaults.cloud : promptDefaults.local) || "";
+      const promptShown = promptUser || promptDefault || cfg.transcribe.prompt || "";
+      const lengthLevels = m.lengthLevels && m.lengthLevels.length ? m.lengthLevels : [
+        { id: "full", name: "详细播报" }, { id: "brief", name: "简单播报" }, { id: "minimal", name: "极简播报" },
+      ];
+      // 旧预设值（custom/ambiguous/default/energetic）一律回退到"标准"
+      const stylePresetShown = ["standard", "companion", "playful"].indexOf(cfg.transcribe.stylePreset) >= 0
         ? cfg.transcribe.stylePreset : "standard";
-      const presetHit = presets.find((p) => p.id === styleShown);
-      const promptShown = isCustom
-        ? cfg.transcribe.prompt
-        : (presetHit && presetHit.prompt ? presetHit.prompt : cfg.transcribe.prompt);
       // 音色能力过滤（数据来自 meta）：语种下拉只列当前音色能说的；方言只在能说的音色下出现，
       // 此时音色下拉也只列能说的音色。合法组合全部由下拉保证，不再"选完再偷偷改"。
       const curVoiceLangs = languagesOfVoice(voices, cfg.tts.volcengine.speaker);
@@ -2464,7 +2486,7 @@ window.__ModuleLoader__.load({
         },
           cfg.transcribe.enabled ? React.createElement(React.Fragment, null,
             React.createElement("p", { className: "dsh-voice-dim" }, t("hint.transcribe")),
-            React.createElement("div", { className: "dsh-voice-sub" },
+            React.createElement("div", { className: "dsh-voice-sub dsh-voice-sub-wide" },
               React.createElement(Row, { label: t("row.provider") },
                 providerList
                   ? React.createElement(SelectInput, {
@@ -2489,19 +2511,31 @@ window.__ModuleLoader__.load({
               React.createElement(Row, { label: t("row.temperature") },
                 React.createElement(SliderInput, { value: cfg.transcribe.temperature, onChange: (v) => setField("transcribe.temperature", v), min: 0, max: 2, step: 0.05 }),
                 React.createElement("span", { className: "dsh-voice-dim" }, t("temperature.hint"))),
-              React.createElement(Row, { label: t("row.stylePreset") },
-                React.createElement(SelectInput, { value: styleShown, onChange: (v) => setField("transcribe.stylePreset", v) },
-                  presets.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name)),
-                  React.createElement("option", { value: "custom" }, "自定义 / Custom")),
-                React.createElement("span", { className: "dsh-voice-dim" }, " 标准=高还原；陪伴/俏皮=摘要+情绪个性化 / standard=fidelity; companion/playful=summary+emotion")),
-              React.createElement(Row, { label: t("row.prompt") },
+              // 语气预设只对豆包有意义（本地没有情绪/演绎通道），本地不显示
+              cloudEngine ? React.createElement(Row, { label: t("row.stylePreset") },
+                React.createElement(SelectInput, { value: stylePresetShown, onChange: (v) => setField("transcribe.stylePreset", v) },
+                  presets.filter((p) => p.id !== "custom").map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name))),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("stylePreset.hint"))) : null,
+              React.createElement(Row, { label: t("row.lengthLevel") },
+                React.createElement(SelectInput, { value: cfg.transcribe.lengthLevel || "full", onChange: (v) => setField("transcribe.lengthLevel", v) },
+                  lengthLevels.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.name))),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("lengthLevel.hint"))),
+              // 提示词：一整行（label 在上、textarea 占满宽度），只显示当前引擎那一份
+              React.createElement("div", { className: "dsh-voice-prompt-block" },
+                React.createElement("div", { className: "dsh-voice-prompt-head" },
+                  React.createElement("span", { className: "dsh-voice-prompt-title" },
+                    t(cloudEngine ? "row.promptCloud" : "row.promptLocal")),
+                  React.createElement("span", { className: "dsh-voice-dim" }, t("prompt.engineOnly")),
+                  promptUser ? React.createElement("button", {
+                    className: "dsh-voice-read-btn",
+                    onClick: () => setField(promptField, ""),
+                  }, t("prompt.reset")) : null),
                 React.createElement("textarea", {
-                  className: "dsh-voice-textarea",
+                  className: "dsh-voice-textarea dsh-voice-textarea-wide",
                   value: promptShown,
-                  readOnly: !isCustom,
-                  placeholder: "自定义模式下在此编辑 / editable in Custom mode",
-                  onChange: (e) => isCustom && setField("transcribe.prompt", e.target.value),
-                })))) : null),
+                  onChange: (e) => setField(promptField, e.target.value),
+                }),
+                React.createElement("p", { className: "dsh-voice-dim" }, t("prompt.footnote"))))) : null),
 
         // —— L4 高级：本地合成细节（标题带当前值摘要）；三项都只对本地 Kokoro 生效，
         //    换到豆包/系统 TTS 时整层不出现，免得让人以为在线合成也吃 CPU 线程 ——
@@ -2626,6 +2660,12 @@ window.__ModuleLoader__.load({
           ".dsh-voice-slider input[type=range]{width:170px;accent-color:#2e8b57;}",
           ".dsh-voice-textarea{width:100%;min-height:120px;padding:6px 8px;border:1px solid rgba(127,127,127,.4);border-radius:6px;background:transparent;color:inherit;font:inherit;resize:vertical;}",
           ".dsh-voice-textarea[readonly]{opacity:.7;}",
+          // 转写层：整块去缩进、提示词行占满整行（只作用于 L3，L2 的安装块保持原样）
+          ".dsh-voice-sub-wide{margin-left:0;padding-left:0;border-left:none;}",
+          ".dsh-voice-prompt-block{display:flex;flex-direction:column;gap:4px;margin-top:6px;}",
+          ".dsh-voice-prompt-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
+          ".dsh-voice-prompt-title{font-size:13px;opacity:.85;}",
+          ".dsh-voice-textarea-wide{min-height:180px;}",
           ".dsh-voice-dim{opacity:.6;font-size:12px;}",
           ".dsh-voice-warn{margin:2px 0 0 120px;font-size:12px;color:#d97706;}",
           // 本地模型安装块：状态行 + 按钮 + 进度条 + 一行说明（来源/体积）

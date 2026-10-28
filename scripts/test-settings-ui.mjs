@@ -175,7 +175,9 @@ globalThis.fetch = async (url, init) => {
       voices: [{ id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', languages: ['zh', 'en', 'auto', 'yue'] }],
       kokoroVoices: [{ id: 48, name: 'Kokoro 48' }],
       languages: [{ id: 'zh', label: '普通话' }, { id: 'en', label: 'English' }, { id: 'auto', label: '自动' }, { id: 'yue', label: '粤语', dialect: true, dialectId: 'yue' }],
-      stylePresets: [{ id: 'standard', name: '标准', prompt: '' }],
+      stylePresets: [{ id: 'standard', name: '标准', tone: '' }, { id: 'companion', name: '陪伴', tone: '\n语气：温柔。' }],
+      lengthLevels: [{ id: 'full', name: '详细播报' }, { id: 'brief', name: '简单播报' }, { id: 'minimal', name: '极简播报' }],
+      promptDefaults: { cloud: '你是"口播稿改写器"：豆包默认稿。', local: '你是"口播稿改写器"：本地默认稿。' },
       rateStops: ['很慢', '偏慢', '正常', '偏快', '很快'],
     })
   }
@@ -348,6 +350,43 @@ engineSelect(tree).props.onChange({ target: { value: 'volcengine' } })
 tree = await flush()
 check('再切回豆包：本地参数又消失', !allText(tree).includes('合成线程数') && !allText(tree).includes('高级'))
 check('每次切引擎都各自落盘（两次保存）', saveCalls.length === 2, saveCalls.length)
+
+// 7) 转写层：篇幅档位 + 按引擎的提示词 + 整行宽度
+tree = await expand(tree, '转写')
+check('转写层有「转写篇幅」三档', allText(tree).includes('转写篇幅')
+  && ['详细播报', '简单播报', '极简播报'].every((x) => allText(tree).includes(x)), allText(tree).slice(-300))
+check('豆包：有「风格预设」行', allText(tree).includes('风格预设'))
+check('豆包：提示词标题为「豆包提示词」', allText(tree).includes('豆包提示词'))
+{
+  const wide = flatten(tree).filter((n) => n.kind === 'element' && String(n.props.className || '').includes('dsh-voice-textarea-wide'))
+  check('提示词 textarea 占满整行（dsh-voice-textarea-wide）', wide.length === 1)
+  const subWide = flatten(tree).filter((n) => n.kind === 'element' && String(n.props.className || '').includes('dsh-voice-sub-wide'))
+  check('转写块去掉左缩进（dsh-voice-sub-wide）', subWide.length === 1)
+  check('提示词默认值来自 meta（含"口播稿改写器"）', String(wide[0].props.value).includes('口播稿改写器'), String(wide[0].props.value).slice(0, 30))
+}
+saveCalls = []
+{
+  const ta = flatten(tree).find((n) => n.kind === 'element' && String(n.props.className || '').includes('dsh-voice-textarea-wide'))
+  ta.props.onChange({ target: { value: '我的豆包自定义稿规' } })
+  await new Promise((r) => setTimeout(r, 450))
+  tree = await flush()
+  check('改豆包提示词 → 保存到 promptCloud（不碰 promptLocal）',
+    saveCalls.some((p) => p.transcribe && p.transcribe.promptCloud === '我的豆包自定义稿规' && !('promptLocal' in p.transcribe)), saveCalls)
+}
+check('改过之后出现「恢复默认」', byType(tree, 'button').some((n) => texts(n).join('').includes('恢复默认')))
+{
+  const resetBtn = byType(tree, 'button').find((n) => texts(n).join('').includes('恢复默认'))
+  saveCalls = []
+  resetBtn.props.onClick()
+  await new Promise((r) => setTimeout(r, 450))
+  tree = await flush()
+  check('点「恢复默认」→ 清空 promptCloud', saveCalls.some((p) => p.transcribe && p.transcribe.promptCloud === ''), saveCalls)
+}
+engineSelect(tree).props.onChange({ target: { value: 'local' } })
+tree = await flush()
+tree = await expand(tree, '转写')
+check('本地：不显示「风格预设」', !allText(tree).includes('风格预设'))
+check('本地：提示词标题为「本地提示词」', allText(tree).includes('本地提示词'))
 
 const failed = checks.filter((c) => !c.ok)
 console.log('\n结果: ' + (checks.length - failed.length) + ' passed, ' + failed.length + ' failed')

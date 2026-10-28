@@ -39,22 +39,35 @@
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
 - **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).snapshotEvents()` 按 messageId 定位。
 
-### 2.2 系统提示词（风格预设）
+### 2.2 系统提示词（按引擎分两份 + 篇幅档位）
 
-三档 + custom（`voice.transcribe.stylePreset`）：
+提示词**按引擎各一份、互不干扰**，都从同一份总则长出来（源码只有一份 `TRANSCRIBE_SHARED`）：
 
-- `standard` 标准：基线 `TRANSCRIBE_SYSTEM`，听感优先——结论为主、细节概括。
-- `companion` 陪伴：基线 + "温柔陪伴者"人设——捕捉用户情绪、允许摘要简写、保留关键信息。
-- `playful` 俏皮：基线 + "幽默开发搭子"人设——摘要 + 俏皮话。
-- `custom`：用 `voice.transcribe.prompt`。
+| 字段 | 用在 | 内容 |
+|---|---|---|
+| `transcribe.promptCloud` | 豆包 | 总则 + 豆包差异段（情绪写进措辞、不输出 `[#...]` 标签） |
+| `transcribe.promptLocal` | 本地 Kokoro / 系统 TTS | 总则 + 本地差异段（按字面念、英文术语不翻译、不写情绪提示） |
 
-取舍总原则（`TRANSCRIBE_SYSTEM` 开头，优先级最高）：**听众只用耳朵、只听一遍、无法回看**。
+留空 = 用该引擎的内置默认（`meta.promptDefaults`）；旧字段 `transcribe.prompt` 只在两个新字段都空时兜底，
+不再出现在界面。语气预设（`stylePreset`：标准/陪伴/俏皮）**只对豆包生效**，且只追加一句"语气"，
+不再自带篇幅指令。
+
+取舍总原则（总则开头，优先级最高）：**听众只用耳朵、只听一遍、无法回看**。
 判断一条内容读不读，不看"原文写了什么"，而看"听完这句，听众能否听懂全局并知道下一步"。
-凡是要靠眼睛对照才有意义的内容（精确数值、哈希/序列号/ID、版本号、逐项参数对比、表格里的成对数字）
-一律不逐个读出，用一句定性概括代替；数字只有在它本身就是结论或需要据此行动时才读，
-只保留必要的量级或比较。其余规则要点：代码块/表格 → 一两句概括作用与结论（单元格数值不读）；
-列表 → 挑要点用"第一/第二"；URL → 只说"给了一个链接"；剥 Markdown/代码/JSON 花括号；
-保留结论/建议/下一步/承载结论的关键数字；输出纯文本无任何标记；不准编造。
+规则要点：代码块/表格 → 一两句概括作用与结论（单元格数值不读）；URL → 只说"给了一个链接"；
+剥 Markdown/代码/JSON 花括号；输出纯文本无任何标记；关键数字只在它是结论或要据此行动时才读；
+不准编造。
+
+**篇幅档位**（`transcribe.lengthLevel`，只往 prompt 里加一句软目标，不截断、不动 `maxTokens`）：
+
+| 档位 | 目标 | 写进 prompt 的话 |
+|---|---|---|
+| `full` 详细播报 | 约原文九成 | "约原文的九成，略短于原文，保留结论与关键细节" |
+| `brief` 简单播报 | 原文 50–60% | "约原文的五到六成；宁短勿长，但结论、下一步、关键数字不得省略" |
+| `minimal` 极简播报 | 原文约 30% | "约原文的三成；压不到三成时以讲清结论为准，不要为凑比例删掉行动项" |
+
+为什么不截断：豆包双向流是"转写 delta 边出边喂 TTS"、本地是"分句流式"，按比例截断会把首声推迟到整篇转写完，
+也会把最后一句切成半句话（§7 不变式 13）。
 
 附加：`voice.language` 固定语种/方言时，`resolvePrompt` 追加"必须用 X 输出"（仅豆包 TTS 生效）。
 
@@ -343,10 +356,13 @@ voice:
     enabled: true             # 主开关：关=不调模型，直接读原文（去 Markdown/跳过表格代码）
     maxTokens: 8192           # 转写长度上限（设置页无 UI）；撞顶空稿自动按 4 倍额度重试一次
     temperature: 0.3
-    prompt: ""                # stylePreset=custom 时生效
+    prompt: ""                # 旧字段：仅当 promptCloud/promptLocal 都空时兜底（界面已不提供）
+    promptCloud: ""           # 豆包转写提示词（留空=内置默认）
+    promptLocal: ""           # 本地转写提示词（留空=内置默认）
+    lengthLevel: full         # full(详细播报) | brief(简单播报) | minimal(极简播报)
     reasoningEffort: off      # 固定 off（转写不开启思考，省 token）；旧值仍走降级链；设置页无 UI
-    stylePreset: standard     # standard(标准) | companion(陪伴) | playful(俏皮) | custom
-                              #   旧值 ambiguous/default/energetic 自动回退 standard
+    stylePreset: standard     # standard(标准) | companion(陪伴) | playful(俏皮)——只对豆包生效
+                              #   旧值 custom/ambiguous/default/energetic 自动回退 standard
     contextTurns: 2           # 引用上文：固定 2 轮（最多往前读两轮）；设置页无 UI
     timeoutMs: 60000          # 单次转写超时；超时/失败降级为直读
   tts:
@@ -442,8 +458,7 @@ voice:
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
 9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
    付费调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
-10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、
-    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
+10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
     不受 `autoSpeakCloudTts` 门控（免费引擎）；转写关闭时**直接本地合成**（中英都能读），
     不得回退系统朗读、不得再带"需开启转写"的 notice。
 11. **本地合成必须在 Host 进程内**——`sherpa-onnx-node` 直接加载（`OfflineTts.createAsync`），
@@ -472,6 +487,11 @@ voice:
     完成音只按顶层会话；子代理结束不得响完成音。账本的 `running` 与 `top` 两组口径不得混用。
 22. **提示音素材只能落在 `<DSH_HOME>/voice/sounds`**——上传按魔数认格式（不信扩展名）、≤10MB、
     文件名白名单拒绝 `..` 与路径分隔符；GET 只读不删、拒绝路径穿越；未被配置引用且超过 1 天的文件在启动时清扫。
+23. **转写提示词按引擎分两份**——豆包那半可以有情绪/语气段，本地那半不得出现情绪、演绎指令或
+    `context_texts` 相关要求（本地没有这条通道，多写的规则只会让稿子变慢变怪）。两份都从
+    `TRANSCRIBE_SHARED` 长出来，改总则只改一处。
+24. **篇幅档位只加软目标，绝不截断**——不按比例裁文本、不按档位缩放 `maxTokens`；
+    截断会推迟首声并破坏"各段拼回等于全文"（不变式 13）。
 
 ## 8. 设计决策（为什么）
 

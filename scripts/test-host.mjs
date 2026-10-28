@@ -478,7 +478,7 @@ check('ok 且无 audioUrl（browser 透传）', r1.ok === true && r1.audioUrl ==
 check('LLM 输出的 [#...] 标签被剥离', r1.transcript === '温柔的转写结果', r1.transcript)
 check('转写了 1 次 LLM', llmState.calls.length === 1)
 const sysPrompt = llmState.streamOpts[0] && llmState.streamOpts[0].system
-check('系统 prompt 为陪伴预设且不含 [#', !!sysPrompt && sysPrompt.includes('陪伴者') && !sysPrompt.includes('[#'))
+check('系统 prompt 用内置默认（非豆包=本地那半）且不含 [#', !!sysPrompt && sysPrompt.includes('口播稿改写器') && !sysPrompt.includes('[#'))
 const r1b = await rpc('speak', { sessionId: 's1', messageId: 'm1' })
 check('第二次朗读命中缓存（cached=true）', r1b.cached === true)
 check('缓存命中后 LLM 调用数不变', llmState.calls.length === 1, llmState.calls.length)
@@ -790,8 +790,12 @@ const meta = await rpc('meta')
 check('meta ok', meta.ok === true)
 check('音色清单至少 4 项且含小何', Array.isArray(meta.voices) && meta.voices.length >= 4 && meta.voices.some((v) => v.id === 'zh_female_xiaohe_uranus_bigtts'))
 check('风格预设齐全（标准/陪伴/俏皮）', ['standard', 'companion', 'playful'].every((id) => meta.stylePresets.some((p) => p.id === id)))
-check('所有预设 prompt 均不含 [# 内嵌指令标签', meta.stylePresets.every((p) => !p.prompt.includes('[#')), meta.stylePresets.map((p) => p.prompt.slice(0, 20)))
-check('陪伴预设含人设规则', (meta.stylePresets.find((p) => p.id === 'companion') || {}).prompt.includes('陪伴者'))
+check('语气预设都不含 [# 内嵌指令标签', meta.stylePresets.every((p) => !String(p.tone || '').includes('[#')), meta.stylePresets.map((p) => String(p.tone || '').slice(0, 20)))
+check('陪伴预设带温柔语气段', String((meta.stylePresets.find((p) => p.id === 'companion') || {}).tone || '').includes('温柔'))
+check('meta 下发两份默认提示词（豆包/本地各一份）',
+  String(meta.promptDefaults.cloud).includes('情绪：把内容里的情绪信号')
+  && !String(meta.promptDefaults.local).includes('情绪：把内容里的情绪信号')
+  && String(meta.promptDefaults.local).includes('本地语音按文字发音'), Object.keys(meta.promptDefaults || {}))
 check('meta 不再含 1.0 多情感音色清单（emo 参数已淘汰）', meta.emoVoices === undefined)
 check('languages 含方言信息（dongbei 带 dialectId）', meta.languages.some((l) => l.id === 'dongbei' && l.dialectId === 'dongbei'))
 
@@ -1429,6 +1433,43 @@ check('本地语言=en：转写 prompt 要求英文输出', !!sys30 && sys30.inc
 check('本地语言=en：送去合成的就是英文稿', r30.ok === true && engineState.calls.length === 1 && String(engineState.calls[0].text).startsWith('Hello'), engineState.calls[0] && engineState.calls[0].text)
 await rpc('setConfig', localCfg({ language: 'auto' }))
 await rpc('setConfig', { patch: { language: 'auto' } })
+
+// —— 转写 prompt 按引擎分流 + 篇幅档位（豆包/本地互不干扰）——
+sessionEvents.push(msgEvent('m40', 41, '分流测试内容'))
+await rpc('setConfig', localCfg({ language: 'auto' }))
+await rpc('setConfig', { patch: { transcribe: { lengthLevel: 'minimal', promptLocal: '', promptCloud: '' } } })
+llmState.responses = [{ text: '本地极简稿', finish: 'stop' }]
+await rpc('speak', { sessionId: 's1', messageId: 'm40' })
+const sysLocal40 = llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('本地 prompt：带"本地按文字发音"段', sysLocal40.includes('本地语音按文字发音'))
+check('本地 prompt：不含豆包情绪段', !sysLocal40.includes('情绪：把内容里的情绪信号'))
+check('篇幅=极简：prompt 里带"三成"目标', sysLocal40.includes('三成'))
+await rpc('setConfig', { patch: { transcribe: { lengthLevel: 'brief' } } })
+llmState.responses = [{ text: '本地简单稿', finish: 'stop' }]
+await rpc('speak', { sessionId: 's1', messageId: 'm40' })
+const sysLedgerBrief = llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('篇幅=简单：prompt 里带"五到六成"', sysLedgerBrief.includes('五到六成'))
+// 自定义本地提示词：只影响本地，豆包那份不动
+await rpc('setConfig', { patch: { transcribe: { promptLocal: '这是我的本地自定义规则。' } } })
+llmState.responses = [{ text: '自定义稿', finish: 'stop' }]
+await rpc('speak', { sessionId: 's1', messageId: 'm40' })
+const sysCustom = llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('自定义本地提示词生效（整份替换）', sysCustom.startsWith('这是我的本地自定义规则。'), sysCustom.slice(0, 40))
+check('自定义本地提示词仍自动附加篇幅与语言', sysCustom.includes('五到六成') && sysCustom.includes('本地语音按文字发音') === false, sysCustom.slice(-60))
+// 豆包：带情绪段，且不出现本地的"按文字发音"
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine' }, transcribe: { promptLocal: '', lengthLevel: 'full' } } })
+// 豆包路径会多一次"演绎指令"调用，取最后一条转写 prompt（含"口播稿改写器"）
+const lastTranscribeSys = () => {
+  const hits = llmState.streamOpts.filter((o) => String(o.system || '').includes('口播稿改写器'))
+  return hits.length ? hits[hits.length - 1].system : ''
+}
+llmState.responses = [{ text: '豆包稿', finish: 'stop' }]
+await rpc('speak', { sessionId: 's1', messageId: 'm40' })
+const sysCloud40 = lastTranscribeSys()
+check('豆包 prompt：带情绪段、不含本地"按文字发音"',
+  sysCloud40.includes('情绪：把内容里的情绪信号') && !sysCloud40.includes('本地语音按文字发音'), sysCloud40.slice(-60))
+check('豆包 prompt：带"九成"的详细档', sysCloud40.includes('九成'))
+await rpc('setConfig', { patch: { tts: { provider: 'local' } } })
 
 // —— 模型未安装：一条明确的"模型未安装"，不静默失败 ——
 // 语义：模型目录被删/被指到空目录后，即使之前加载过也要按"未安装"报错（验收要求），
