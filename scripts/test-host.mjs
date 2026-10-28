@@ -78,7 +78,7 @@ const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/dsh-plug
 // 口播净化（speech-clean.js 纯函数）
 const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/speech-clean.js')
 // 音色 ↔ 语种/方言 兼容矩阵 + 配置归一（voice-compat.js 纯函数：归一/纠错/纠语言/引擎归一/音调）
-const { normalizeVoiceConfig, correctSpeakerForLanguage, correctLanguageForSpeaker, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
+const { normalizeVoiceConfig, effectiveVoiceOf, languagesForVoice, voiceSupportsLanguage, isDialectVoice, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
 // 本地运行时（local-runtime.js）：模型目录解析 / Float32→Int16 / WAV 封装 / 测试用引擎注入点
 const { setEngineLoaderForTest, float32ToInt16Pcm, pcmToWav, resolveModelDir, inspectModelDir, createLocalRuntime } = await import('../packages/dsh-plugin-voice/lib/local-runtime.js')
 // 模型安装器（model-installer.js）：下载/续传/校验/解包/删除；测试注入 fetch、解包与磁盘读数
@@ -689,12 +689,12 @@ const bodyOff = fetchState.calls[fetchState.calls.length - 1].body
 check('关转写：发给 TTS 的是纯文本（无代码块）', bodyOff && !String(bodyOff.req_params.text).includes('```'), bodyOff && bodyOff.req_params && bodyOff.req_params.text)
 await rpc('setConfig', { patch: { transcribe: { enabled: true } } })
 
-section('T12b 方言自动纠错：非 vv 音色 + 东北话 -> 强制 vv + explicit_dialect')
+section('T12b 方言按音色能力：小何说东北话（官方标注支持）-> 保留音色 + explicit_dialect')
 await rpc('setConfig', { patch: { language: 'dongbei', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } } })
 llmState.responses = [{ text: '自动纠错转写', finish: 'stop' }]
 await rpc('speak', { sessionId: 's1', messageId: 'm4' })
 const bodyD = fetchState.calls[fetchState.calls.length - 1].body
-check('请求 speaker 强制为 vv（无需用户手动改）', bodyD.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyD.req_params.speaker)
+check('请求 speaker 保持小何（能说方言就不换音色）', bodyD.req_params.speaker === 'zh_female_xiaohe_uranus_bigtts', bodyD.req_params.speaker)
 const addD = bodyD.req_params.additions ? JSON.parse(bodyD.req_params.additions) : {}
 check('explicit_dialect=dongbei 照常下发', addD.explicit_dialect === 'dongbei', addD)
 await rpc('setConfig', { patch: { language: 'auto', tts: { volcengine: { speaker: 'spk-1' } } } })
@@ -859,7 +859,7 @@ llmState.responses = [{ text: '天津话转写结果', finish: 'stop' }]
 await rpc('speak', { sessionId: 's1', messageId: 'm4' })
 const bodyT = fetchState.calls[fetchState.calls.length - 1].body
 const addT = bodyT.req_params.additions ? JSON.parse(bodyT.req_params.additions) : {}
-check('天津话：speaker 自动纠错为 vv', bodyT.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyT.req_params.speaker)
+check('天津话：小何音色保留（不再强改 vv）', bodyT.req_params.speaker === 'zh_female_xiaohe_uranus_bigtts', bodyT.req_params.speaker)
 check('天津话：explicit_dialect=tianjin 下发（不再按普通话）', addT.explicit_dialect === 'tianjin', addT)
 await rpc('setConfig', { patch: { language: 'auto', tts: { volcengine: { speaker: 'spk-1' } } } })
 
@@ -900,14 +900,14 @@ fetchState.nextOk = true
 check('ok 且带 ttsError（Client 走浏览器语音兜底）', r5.ok === true && /500/.test(String(r5.ttsError)), r5.ttsError)
 check('transcript 仍返回', r5.transcript === 'TTS 失败转写')
 
-section('T6e 语种联动：English -> 自动切英文音色 + explicit_language=en；试听用英文样本')
+section('T6e 语种：English -> explicit_language=en（音色不再被改）；方言按音色能力下发；试听用英文样本')
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { speaker: 'zh_female_vv_uranus_bigtts', apiKey: 'k-test', interface: 'http' } }, language: 'en' } })
 const callsBeforeE = fetchState.calls.length
 llmState.responses = [{ text: 'english transcript', finish: 'stop' }]
 const re = await rpc('speak', { sessionId: 's1', messageId: 'm4' })
 check('English 朗读 ok', re.ok === true && typeof re.audioUrl === 'string', re)
 const bodyE = fetchState.calls[fetchState.calls.length - 1].body
-check('English：speaker 自动切英文音色', bodyE.req_params.speaker.startsWith('en_'), bodyE.req_params.speaker)
+check('English：音色保持用户所选（中文音色能读英文）', bodyE.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyE.req_params.speaker)
 const addE = bodyE.req_params.additions ? JSON.parse(bodyE.req_params.additions) : {}
 check('English：explicit_language=en 下发', addE.explicit_language === 'en', addE)
 // 试听：English 下 preview 用英文样本文本
@@ -916,22 +916,22 @@ const pvE = await rpc('preview')
 check('English preview 返回 audioUrl', pvE.ok === true && pvE.mode === 'audio', pvE)
 const bodyPE = fetchState.calls[fetchState.calls.length - 1].body
 check('English preview 文本为英文样本（不再中文）', bodyPE.req_params.text && /[a-zA-Z]{4,}/.test(bodyPE.req_params.text) && !bodyPE.req_params.text.includes('你好'), bodyPE.req_params.text && bodyPE.req_params.text.slice(0, 40))
-check('English preview speaker 也是英文音色', bodyPE.req_params.speaker.startsWith('en_'), bodyPE.req_params.speaker)
+check('English preview speaker 与配置一致', bodyPE.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyPE.req_params.speaker)
 // 方言联动：非 vv 音色 + 天津话 -> vv + explicit_dialect=tianjin（与 T6c 同断言，双保险）
 await rpc('setConfig', { patch: { language: 'tianjin', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } } })
 llmState.responses = [{ text: 'tianjin transcript', finish: 'stop' }]
 await rpc('speak', { sessionId: 's1', messageId: 'm4' })
 const bodyT2 = fetchState.calls[fetchState.calls.length - 1].body
 const addT2 = bodyT2.req_params.additions ? JSON.parse(bodyT2.req_params.additions) : {}
-check('天津话：speaker 强制 vv（方言锁定）', bodyT2.req_params.speaker === 'zh_female_vv_uranus_bigtts', bodyT2.req_params.speaker)
+check('天津话：小何保留（官方标注支持方言，不再强改 vv）', bodyT2.req_params.speaker === 'zh_female_xiaohe_uranus_bigtts', bodyT2.req_params.speaker)
 check('天津话：explicit_dialect=tianjin', addT2.explicit_dialect === 'tianjin', addT2)
-// 配置自适应：setConfig 时归一化 speaker——language=en -> 英文音色；方言 -> vv
+// 配置不再静默改写：English + 中文音色 保持原样（中文音色能读英文）；方言 + 英文音色 -> 换成 Vivi（保住方言）
 await rpc('setConfig', { patch: { language: 'en', tts: { volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } } })
 const cfgEn = (await rpc('getConfig')).config
-check('保存 English：配置 speaker 自动归一化为英文音色（UI 与发声一致）', cfgEn.tts.volcengine.speaker.startsWith('en_'), cfgEn.tts.volcengine.speaker)
+check('保存 English：音色不被改写（UI 与发声都按用户选的）', cfgEn.tts.volcengine.speaker === 'zh_female_vv_uranus_bigtts', cfgEn.tts.volcengine.speaker)
 await rpc('setConfig', { patch: { language: 'tianjin', tts: { volcengine: { speaker: 'en_male_tim_uranus_bigtts' } } } })
 const cfgTj = (await rpc('getConfig')).config
-check('保存方言：配置 speaker 自动归一化为 vv（方言仅 vv）', cfgTj.tts.volcengine.speaker === 'zh_female_vv_uranus_bigtts', cfgTj.tts.volcengine.speaker)
+check('保存方言+英文音色：换成 Vivi（方言只对 4 个音色开放，保住方言意图）', cfgTj.tts.volcengine.speaker === 'zh_female_vv_uranus_bigtts' && cfgTj.language === 'tianjin', { s: cfgTj.tts.volcengine.speaker, l: cfgTj.language })
 await rpc('setConfig', { patch: { language: 'auto', tts: { provider: 'volcengine', volcengine: { speaker: 'spk-1' } } } })
 
 section('T7 一次性音频路由（接 T6 的 audioUrl）')
@@ -975,33 +975,65 @@ const r14 = await rpc('speak', { sessionId: 's1', messageId: 'm14' })
 check('speak 按 browser 透传（无 audioUrl）', r14.ok && r14.audioUrl === undefined, r14)
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine' } } })
 
-section('T16 音色↔语种归一（voice-compat：静态定序 + 交互纠错逻辑）')
-// —— normalizeVoiceConfig 静态定序（settings.yaml 直改冲突时的确定性结果）——
+section('T16 音色能力矩阵（voice-compat：方言按音色开放 + 旧配置软着陆）')
+// —— 能力矩阵：方言只在 4 个音色上开放；英文音色只给 English ——
+const vvLangs = languagesForVoice('zh_female_vv_uranus_bigtts')
+const xiaoheLangs = languagesForVoice('zh_female_xiaohe_uranus_bigtts')
+const plainLangs = languagesForVoice('zh_female_linjianvhai_uranus_bigtts')
+const enLangs = languagesForVoice('en_male_tim_uranus_bigtts')
+const unknownLangs = languagesForVoice('spk-1')
+check('能力：vv 支持 8 方言（11 项）', vvLangs.length === 11 && vvLangs.indexOf('yue') >= 0, vvLangs)
+check('能力：小何也支持方言（官方音色表）', xiaoheLangs.indexOf('henan') >= 0, xiaoheLangs)
+check('能力：普通中文音色只有 自动/中文/English', plainLangs.join(',') === 'auto,zh,en', plainLangs)
+check('能力：英文音色只给 English', enLangs.join(',') === 'en', enLangs)
+check('能力：表外音色不给方言', unknownLangs.indexOf('yue') < 0, unknownLangs)
+check('能力：方言判定只认那 4 个音色', isDialectVoice('zh_female_vv_uranus_bigtts') && !isDialectVoice('zh_female_gaolengyujie_uranus_bigtts'))
+check('能力：voiceSupportsLanguage 与 languagesForVoice 一致', voiceSupportsLanguage('zh_female_xiaohe_uranus_bigtts', 'beijing') === true && voiceSupportsLanguage('en_female_dacey_uranus_bigtts', 'zh') === false)
+// —— 有效发声参数（合成与指纹同源）——
+const eff1 = effectiveVoiceOf({ language: 'yue', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } })
+check('有效参数：小何+粤语 → 下发 explicit_dialect=yue', eff1.speaker === 'zh_female_xiaohe_uranus_bigtts' && eff1.dialectId === 'yue' && eff1.explicitLanguage === '', eff1)
+const eff2 = effectiveVoiceOf({ language: 'henan', tts: { volcengine: { speaker: 'zh_female_linjianvhai_uranus_bigtts' } } })
+check('有效参数：普通音色+河南话 → 不发方言（不静默改音色）', eff2.speaker === 'zh_female_linjianvhai_uranus_bigtts' && eff2.dialectId === '', eff2)
+const eff3 = effectiveVoiceOf({ language: 'en', tts: { volcengine: { speaker: 'en_male_tim_uranus_bigtts' } } })
+check('有效参数：英文音色+English → explicit_language=en', eff3.explicitLanguage === 'en' && eff3.dialectId === '', eff3)
+// —— normalizeVoiceConfig：页面产物恒等 + 旧配置软着陆 ——
 const n16a = normalizeVoiceConfig({ language: 'henan', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } })
-check('静态：henan+小何 → speaker 归一 vv（方言需 vv）', n16a.tts.volcengine.speaker === VV_SPEAKER, n16a.tts.volcengine.speaker)
+check('归一：小何+河南话 → 原样保留（不再强改 vv）', n16a.tts.volcengine.speaker === 'zh_female_xiaohe_uranus_bigtts' && n16a.language === 'henan', n16a)
 const n16b = normalizeVoiceConfig({ language: 'en', tts: { volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } })
-check('静态：en+vv → 英文音色 Tim', n16b.language === 'en' && n16b.tts.volcengine.speaker === EN_DEFAULT_SPEAKER, n16b.tts.volcengine.speaker)
+check('归一：中文音色+English → 保留（中文音色能读英文）', n16b.tts.volcengine.speaker === 'zh_female_vv_uranus_bigtts' && n16b.language === 'en', n16b)
 const n16c = normalizeVoiceConfig({ language: 'zh', tts: { volcengine: { speaker: 'en_male_tim_uranus_bigtts' } } })
-check('静态：zh+英文音色 → 原样保持（显式手动配置如实反映，不静默翻转）', n16c.language === 'zh' && n16c.tts.volcengine.speaker === 'en_male_tim_uranus_bigtts', n16c)
+check('归一：英文音色+中文 → 语种改 en（英文音色读中文无声）', n16c.tts.volcengine.speaker === 'en_male_tim_uranus_bigtts' && n16c.language === 'en', n16c)
 const n16d = normalizeVoiceConfig({ language: 'auto', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } })
-check('静态：auto+中文音色 → 不变', n16d.language === 'auto' && n16d.tts.volcengine.speaker === 'zh_female_xiaohe_uranus_bigtts')
-const n16e = normalizeVoiceConfig({ language: 'yue', tts: { volcengine: { speaker: VV_SPEAKER } } })
-check('静态：yue+vv → 保持（vv 支持方言）', n16e.language === 'yue' && n16e.tts.volcengine.speaker === VV_SPEAKER)
-// —— 交互纠错（后改字段胜出：改音色→纠语种；改语种→纠音色）——
-check('交互：henan 下选小何 → 语种改 zh', correctLanguageForSpeaker({ language: 'henan' }, 'zh_female_xiaohe_uranus_bigtts') === 'zh')
-check('交互：en 下选 Tim → 语种保持 en', correctLanguageForSpeaker({ language: 'en' }, 'en_male_tim_uranus_bigtts') === 'en')
-check('交互：en 下选 vv → 语种改 zh', correctLanguageForSpeaker({ language: 'en' }, VV_SPEAKER) === 'zh')
-check('交互：henan 下选 vv → 语种保持 henan', correctLanguageForSpeaker({ language: 'henan' }, VV_SPEAKER) === 'henan')
-check('交互：改 henan → 音色 vv', correctSpeakerForLanguage({ language: 'henan' }, 'zh_female_xiaohe_uranus_bigtts') === VV_SPEAKER)
-check('交互：改 en → 音色英文', correctSpeakerForLanguage({ language: 'en' }, VV_SPEAKER) === EN_DEFAULT_SPEAKER)
-check('交互：改 zh 且音色为英文 → 保持（如实反映用户选择）', correctSpeakerForLanguage({ language: 'zh' }, 'en_male_tim_uranus_bigtts') === 'en_male_tim_uranus_bigtts')
-// —— 集成（setConfig 保存 → getConfig 归一，UI 与实际发声一致）——
+check('归一：auto+中文音色 → 不变', n16d.language === 'auto' && n16d.tts.volcengine.speaker === 'zh_female_xiaohe_uranus_bigtts')
+const n16e = normalizeVoiceConfig({ language: 'yue', tts: { volcengine: { speaker: 'zh_female_gaolengyujie_uranus_bigtts' } } })
+check('归一：粤语+普通音色 → 换成 Vivi（保留方言意图）', n16e.language === 'yue' && n16e.tts.volcengine.speaker === VV_SPEAKER, n16e)
+const n16f = normalizeVoiceConfig({ language: 'yue', tts: { volcengine: { speaker: 'spk-custom-1' } } })
+check('归一：粤语+自定义 id → 语种降 zh，不改用户 id', n16f.language === 'zh' && n16f.tts.volcengine.speaker === 'spk-custom-1', n16f)
+const n16g = normalizeVoiceConfig({ language: 'klingon', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } })
+check('归一：未知语种 id → auto', n16g.language === 'auto', n16g.language)
+const n16h = normalizeVoiceConfig(n16c)
+check('归一：幂等（第二遍无变化）', JSON.stringify(n16h) === JSON.stringify(n16c))
+const n16i = normalizeVoiceConfig({ language: 'beijing', tts: { volcengine: { speaker: 'zh_male_taocheng_uranus_bigtts', pitchLevel: 4 } } })
+check('归一：旧 pitchLevel 映射成 pitch', typeof n16i.tts.volcengine.pitch === 'number' && n16i.tts.volcengine.pitch === 60 / 10 && n16i.language === 'beijing')
+// —— 页面能产出的组合恒等（下拉过滤后不该再被归一改写）——
+const uiPairs = [
+  { language: 'henan', tts: { volcengine: { speaker: 'zh_female_vv_uranus_bigtts' } } },
+  { language: 'en', tts: { volcengine: { speaker: 'en_female_dacey_uranus_bigtts' } } },
+  { language: 'zh', tts: { volcengine: { speaker: 'zh_female_linjianvhai_uranus_bigtts' } } },
+]
+check('归一：页面产物恒等（三种组合都原样）', uiPairs.every((x) => normalizeVoiceConfig(x) === x))
+// —— 集成（setConfig 不再静默改写；getConfig 只做视图归一）——
 await rpc('setConfig', { patch: { language: 'henan', tts: { volcengine: { speaker: 'zh_female_xiaohe_uranus_bigtts' } } } })
 const cfg16 = (await rpc('getConfig')).config
-check('集成：保存 henan+小何 → getConfig 为 henan+vv', cfg16.language === 'henan' && cfg16.tts.volcengine.speaker === VV_SPEAKER, { l: cfg16.language, s: cfg16.tts.volcengine.speaker })
-await rpc('setConfig', { patch: { language: 'en', tts: { volcengine: { speaker: VV_SPEAKER } } } })
+check('集成：保存 小何+河南话 → 读回仍是小何+河南话', cfg16.language === 'henan' && cfg16.tts.volcengine.speaker === 'zh_female_xiaohe_uranus_bigtts', { l: cfg16.language, s: cfg16.tts.volcengine.speaker })
+await rpc('setConfig', { patch: { language: 'zh', tts: { volcengine: { speaker: 'en_male_tim_uranus_bigtts' } } } })
 const cfg16b = (await rpc('getConfig')).config
-check('集成：保存 en+vv → getConfig 为 en+英文音色', cfg16b.language === 'en' && cfg16b.tts.volcengine.speaker.startsWith('en_'), { l: cfg16b.language, s: cfg16b.tts.volcengine.speaker })
+check('集成：脏配置 英文音色+中文 → 视图归一为 en', cfg16b.language === 'en' && cfg16b.tts.volcengine.speaker === 'en_male_tim_uranus_bigtts', { l: cfg16b.language, s: cfg16b.tts.volcengine.speaker })
+const meta16 = await rpc('meta')
+const metaVoices = (meta16 && meta16.voices) || []
+check('meta：每个音色都下发 languages', metaVoices.length > 0 && metaVoices.every((v) => Array.isArray(v.languages) && v.languages.length > 0))
+check('meta：英文音色 languages 只有 en', (metaVoices.filter((v) => v.id === 'en_male_tim_uranus_bigtts')[0] || {}).languages.join(',') === 'en')
+check('meta：方言音色带 8 方言', ((metaVoices.filter((v) => v.id === 'zh_female_vv_uranus_bigtts')[0] || {}).languages || []).length === 11)
 await rpc('setConfig', { patch: { language: 'auto', tts: { provider: 'volcengine', volcengine: { speaker: 'spk-1' } } } })
 
 section('T17 重新生成（regen：跳过转写缓存、覆盖旧条目、不膨胀）')

@@ -32,8 +32,8 @@ import { sanitizeForSpeech } from './speech-clean.js'
 import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
 import { createModelInstaller } from './model-installer.js'
 import {
-  VV_SPEAKER, LANGUAGE_OPTIONS,
-  dialectIdOf, correctSpeakerForLanguage, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
+  LANGUAGE_OPTIONS,
+  effectiveVoiceOf, languagesForVoice, normalizeVoiceConfig, pitchOf, RATE_VALUES, ttsProviderOf,
   isLocalProvider,
 } from './voice-compat.js'
 
@@ -828,6 +828,11 @@ function apply(ctx, config) {
     }
     return { http, ws }
   }
+  /** 资源 id：插件只适配豆包语音合成 2.0，plan/standard 恒发 seed-tts-2.0（设置页不再展示该字段）；
+   * 只有 custom 转接端点保留存量覆盖值（按 resource id 分流的自建网关才需要）。 */
+  function resourceIdOf(v) {
+    return v && v.gateway === 'custom' && v.resourceId ? v.resourceId : 'seed-tts-2.0'
+  }
 
   /**
    * 火山豆包单向 TTS。text 必须已剥离 [#...] 指令标签（该接口不解析会照读）；
@@ -841,7 +846,7 @@ function apply(ctx, config) {
     // 预览等场景没有生成指令时走预设回退
     const instruction = cmd || buildVoiceInstruction(cfg, '', '')
     const reqParams = buildVolcReqParams(cfg, v, {
-      instruction, emotionZh: opts.emotionZh || '', intensity: opts.intensity, dialect: dialectFor(cfg), sectionId: opts.sectionId || '',
+      instruction, emotionZh: opts.emotionZh || '', intensity: opts.intensity, sectionId: opts.sectionId || '',
       useServerCache: !!opts.useServerCache,
     })
     reqParams.text = text
@@ -850,7 +855,7 @@ function apply(ctx, config) {
       headers: {
         'Content-Type': 'application/json',
         'X-Api-Key': v.apiKey,
-        'X-Api-Resource-Id': v.resourceId || 'seed-tts-2.0',
+        'X-Api-Resource-Id': resourceIdOf(v),
         'X-Api-Request-Id': randomUUID(),
         'X-Control-Require-Usage-Tokens-Return': '*',
       },
@@ -923,10 +928,7 @@ function apply(ctx, config) {
     const b = h2.toString(16).padStart(8, '0')
     return a.slice(0, 8) + '-' + a.slice(4, 8) + '-4' + a.slice(1, 4) + '-' + b.slice(0, 4) + '-' + b.slice(0, 12)
   }
-  /** 方言 explicit_dialect（8 种方言统一走 vv 音色；实测全部生效）。 */
-  function dialectFor(cfg) {
-    return dialectIdOf(cfg.language)
-  }
+  /** 方言能力来自音色（voice-compat：只有 4 个 2.0 音色会说方言），不再按语种一刀切。 */
   /** 把 LLM 的语音指令 + 情感标签 + 强度织成一条自然语言情感指令（context_texts 通道。
    * 官方 docs/6561/1329505：所有豆包语音合成模型 2.0 音色生效、不计费、仅第一个值有效；
    * 中性/空情感不追加，保持指令原样）。 */
@@ -944,14 +946,14 @@ function apply(ctx, config) {
   }
   /** TTS 音频参数指纹（服务端缓存只按文本、不认方言/音色/情感；指纹一致才可命中，防串音）。
    * 指纹 = 影响听感的静态参数：音色/方言/语种/语速/音调/音量/表现力/采样率/比特率。
-   * 不含情感指令：初次每段动态写情感、重播复用缓存代表指令，两者本就不同；且缓存键=文本，指令不影响命中。 */
+   * 与 buildVolcReqParams 同源（effectiveVoiceOf）——两边算法必须一致，否则指纹过、声音不对。
+   * 前缀 v2：方言判定从"按语种"改成"按音色能力"后作废旧条目，避免升级后重播命中旧参数音频
+   *（转写缓存落盘：~/.dsh/voice-transcript-cache.json，条目里带指纹）。 */
   function ttsFpOf(cfg, v) {
-    const speaker = correctSpeakerForLanguage(cfg, v.speaker)
-    const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
-    const explicitLang = lang && !lang.dialect && lang.id === 'en' ? 'en' : ''
+    const eff = effectiveVoiceOf(cfg)
     const rate = Number.isInteger(v.rateLevel) ? RATE_VALUES[v.rateLevel] : undefined
     const pitch = pitchOf(v)
-    return JSON.stringify([speaker, dialectFor(cfg), explicitLang, rate ?? '', pitch ?? '',
+    return 'v2|' + JSON.stringify([eff.speaker, eff.dialectId, eff.explicitLanguage, rate ?? '', pitch ?? '',
       v.loudness ?? '', v.expressive ? 'ex' : '', v.sampleRate ?? '', v.bitRate ?? ''])
   }
   /** 服务端缓存记账（文本 → 上次写入的指纹 + 时间）：防止同文本换参数后 1h 内命中旧音频（串音，
@@ -976,10 +978,10 @@ function apply(ctx, config) {
   /** 组装 StartSession/TaskRequest 的 req_params（不含 text）。
    * 双向流（isStream）用 pcm（官方推荐：裸采样无帧/延迟，切段无缝）；HTTP 单向仍 mp3。 */
   function buildVolcReqParams(cfg, v, opts = {}) {
-    const speaker = correctSpeakerForLanguage(cfg, v.speaker) // 方言→vv / English→英文音色（voice-compat）
+    const eff = effectiveVoiceOf(cfg) // 音色/方言/显式语种：与 ttsFpOf 同源，不在这里二次改写用户选择
     const isStream = !!opts.isStream
     const format = isStream ? 'pcm' : 'mp3'
-    const reqParams = { speaker, audio_params: { format, sample_rate: v.sampleRate } }
+    const reqParams = { speaker: eff.speaker, audio_params: { format, sample_rate: v.sampleRate } }
     if (v.bitRate && !isStream) reqParams.audio_params.bit_rate = v.bitRate // bit_rate 仅 mp3 生效
     const rate = Number.isInteger(v.rateLevel) ? RATE_VALUES[v.rateLevel] : undefined
     if (rate) reqParams.audio_params.speech_rate = rate
@@ -992,11 +994,9 @@ function apply(ctx, config) {
     const additions = {}
     const ctxText = composeContextText(opts.instruction, emotionZh, opts.intensity)
     if (ctxText) additions.context_texts = [ctxText]
-    const dialect = opts.dialect || ''
-    if (dialect) additions.explicit_dialect = dialect
-    // explicit_language：仅固定英文下发（中文/方言不下发，避免与 explicit_dialect 冲突）
-    const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
-    if (lang && !lang.dialect && lang.id === 'en') additions.explicit_language = 'en'
+    if (eff.dialectId) additions.explicit_dialect = eff.dialectId
+    // explicit_language：仅"非英文音色 + 固定英文"下发（中文/方言不下发，避免与 explicit_dialect 冲突）
+    if (eff.explicitLanguage) additions.explicit_language = eff.explicitLanguage
     // 服务端缓存（cache_config）：只按文本、不认方言/音色/情感（探针实测 MD5 一致），
     // 故仅在"初次合成写入 + 参数指纹未变的重播命中"时下发；试听/重新生成绝不下发（防串音）。
     // 写缓存须带 cache_config；缓存键 = 会话整段文本（分片无关）；命中=免服务端重合成。
@@ -1149,7 +1149,7 @@ function apply(ctx, config) {
 
     const conn = createBidirectionClient({
       apiKey: v.apiKey,
-      resourceId: v.resourceId || 'seed-tts-2.0',
+      resourceId: resourceIdOf(v),
       url: volcEndpoints(v).ws,
       onAudio: (frame) => pushAudioFrame(run, frame),
       onFatal: (err) => { run.error = String(err && err.message || err); try { ac.abort() } catch {} },
@@ -1161,7 +1161,6 @@ function apply(ctx, config) {
     catch (err) { throw new Error('bidirection 连接失败: ' + String(err && err.message || err)) }
 
     const sectionId = v.useSectionId ? stableHashId(run.sessionId) : ''
-    const dialect = dialectFor(cfg)
     const dynamic = v.emotionGranularity === 'paragraph'
     const genInstr = cfg.transcribe.enabled !== false // 关转写=不调任何 LLM（含指令），仅预设
     // 指令链：段 0 用预设；段 N 用段 N-1 的文本生成（重叠，零延迟）。
@@ -1209,7 +1208,7 @@ function apply(ctx, config) {
     }
 
     async function startParaSession() {
-      sessionReqParams = buildVolcReqParams(cfg, v, { instruction: currentInstruction, emotionZh: currentEmotion, intensity: currentIntensity, dialect, sectionId, isStream: true, useServerCache })
+      sessionReqParams = buildVolcReqParams(cfg, v, { instruction: currentInstruction, emotionZh: currentEmotion, intensity: currentIntensity, sectionId, isStream: true, useServerCache })
       session = await conn.startSession(sessionReqParams)
       paragraphs++
     }
@@ -1419,19 +1418,14 @@ function apply(ctx, config) {
     run.doneAt = Date.now()
     if (currentStreamRun === run) currentStreamRun = null
   }
-  /** 创建流式 run 并登记（含方言/情感提示）。 */
+  /** 创建流式 run 并登记。 */
   function createStreamRun(sessionId, messageId, cfg) {
-    const v = cfg.tts.volcengine
     const run = {
       id: randomUUID(), sessionId, messageId,
       queue: [], segBuf: [], segLen: 0, segments: 0, served: 0,
       finished: false, stopped: false, error: '', warn: '', transcript: '',
       abort: null, effortPlan: null, effortMapped: false, effortNote: '', paragraphs: 0, at: Date.now(),
       force: false, // true = 重新生成（跳过转写缓存，重新转写+合成，覆盖旧缓存条目）
-    }
-    const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
-    if (lang && lang.dialect && lang.dialectId && v.speaker !== VV_SPEAKER) {
-      run.warn = '方言「' + lang.label + '」已自动使用 vv 音色（explicit_dialect）'
     }
     return run
   }
@@ -1868,7 +1862,9 @@ function apply(ctx, config) {
     ping: async () => ({ ok: true, now: new Date().toISOString() }),
     meta: async () => ({
       ok: true,
-      voices: VOLC_VOICES,
+      // 每个音色带 languages（能选的语种/方言 id，voice-compat 单一事实源）：设置页照它过滤下拉，
+      // 客户端不存第二份能力数据；老 Client 忽略该字段即退回"全展示"。
+      voices: VOLC_VOICES.map((x) => ({ id: x.id, name: x.name, languages: languagesForVoice(x.id) })),
       kokoroVoices: LOCAL_VOICES,
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
@@ -1948,18 +1944,9 @@ function apply(ctx, config) {
     setConfig: async (args) => {
       const patch = args && args.patch
       if (!patch || typeof patch !== 'object') return { ok: false, error: 'missing patch' }
+      // 不再在保存时改写用户选择：设置页的下拉只会产出合法组合（音色能力过滤），
+      // 这里如实落盘、只返回归一化视图（旧配置/手改值在读取时软着陆）。
       await ctx.settings.update('voice', patch)
-      // 音色↔语种归一（normalizeVoiceConfig：方言→vv / English→英文音色 / 英文音色→English），
-      // 让保存后的配置自洽、UI 显示与发声一致；单次读取避免竞态
-      const cur = readConfig()
-      const norm = normalizeVoiceConfig(cur)
-      const curSpeaker = cur.tts && cur.tts.volcengine && cur.tts.volcengine.speaker
-      const normSpeaker = norm.tts && norm.tts.volcengine && norm.tts.volcengine.speaker
-      if (norm.language !== cur.language || (normSpeaker && normSpeaker !== curSpeaker)) {
-        const write = { language: norm.language }
-        if (normSpeaker) write.tts = { volcengine: { speaker: normSpeaker } }
-        await ctx.settings.update('voice', write)
-      }
       return { ok: true, config: normalizeVoiceConfig(readConfig()) }
     },
     routeInfo: async (args) => {
@@ -1996,17 +1983,20 @@ function apply(ctx, config) {
       // 免得子代理/别的工作区开一轮就把本窗口的朗读掐断。
       return { ok: true, pending: p, gen: turnGeneration, gens: Object.fromEntries(turnGenBySession), stopOnNewTurn }
     },
-    preview: async () => {
-      const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（试听与实际发声一致）
+    /** 试听：优先用设置页当前草稿（args.cfg）合成——不落盘，用户没点保存就不改配置；
+     * 无草稿（老 Client）时退回已存配置。返回语种标签，供界面显示"试听中 · 粤语"。 */
+    preview: async (args) => {
+      const draft = args && args.cfg && typeof args.cfg === 'object' ? args.cfg : null
+      const cfg = normalizeVoiceConfig(draft || readConfig())
+      const languageLabel = (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).label || ''
       if (ttsProviderOf(cfg) === 'browser') {
-        return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
+        return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, languageLabel, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
       }
       try {
-        // 试听样例语言：跟随 voice.language（固定 en → 英文样例）；本地引擎中英都能读，用中文样例即可
-        const provPrev = ttsProviderOf(cfg)
-        const text = (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).id === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
+        // 试听样例语言：固定 en → 英文样例；方言用中文稿（方言靠音色发音体现，不改文稿）
+        const text = cfg.language === 'en' ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
         const audioUrl = await synthToRoute(text, cfg, '', { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
-        return { ok: true, mode: 'audio', audioUrl }
+        return { ok: true, mode: 'audio', audioUrl, languageLabel }
       } catch (error) {
         // 试听失败要留证据：这条路径不走 transcribe，不打印就只剩界面上一句 toast
         console.error('[voice] preview failed:', (error && error.stack) || error)

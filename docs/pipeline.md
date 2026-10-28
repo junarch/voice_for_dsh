@@ -138,7 +138,7 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 
 主接口：**双向流 WebSocket**（默认）；HTTP 单向为内部兜底。
 
-- 模型：`doubao-seed-tts-2.0`（`voice.tts.volcengine.resourceId`），头 `X-Api-Resource-Id: seed-tts-2.0`、`X-Api-Key`。
+- 模型：固定 `doubao-seed-tts-2.0`（头 `X-Api-Resource-Id: seed-tts-2.0`、`X-Api-Key`）；设置页不展示该字段，`gateway=custom` 才保留存量覆盖值。
 - **网关**（`voice.tts.volcengine.gateway`，默认 `plan`；协议与鉴权头一致，仅 URL 路径不同）：
   - `plan`（智能体套餐，默认）：双向流 `wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection`，
     HTTP 兜底 `POST https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional`（当前 Key 可用）。
@@ -159,17 +159,18 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 - `audio_params`：`format`（pcm/mp3）、`sample_rate`、`speech_rate`（五档 `RATE_VALUES`）、`loudness_rate`。
 - `additions`：
   - `context_texts`：情感/语气指令（织自 §3）。
-  - `explicit_dialect`：方言（8 种，仅 vv 音色生效）。
+  - `explicit_dialect`：方言（8 种，仅官方标注支持方言的 4 个音色生效：Vivi/小何/云舟/小天）。
   - `explicit_language`：仅固定英文下发（中文/方言不下发，避免与 explicit_dialect 冲突）。
   - `cache_config`：服务端缓存（见 §4.5）。
   - `section_id`：跨次合成语气连续（`voice.tts.volcengine.useSectionId`）。
   - `post_process.pitch`：音调（连续半音 -12~12，经 `pitchOf` 归一；旧五档 `pitchLevel` 兼容映射）。
 - `req_params.model`：`voice.tts.volcengine.expressive=true` 时 `seed-tts-2.0-expressive`（表现力增强）。
 
-#### 音色↔语种归一（`lib/voice-compat.js`）
+#### 音色能力矩阵与归一（`lib/voice-compat.js`）
 
-不变式：方言 ⟺ vv；English ⟺ 英文音色；中文/auto 配中文音色。`getConfig`/`setConfig`/`speak`/`preview`
-统一经 `normalizeVoiceConfig` 归一 → UI 显示 = 实际发声；设置页交互为"后改字段胜出"双向纠错。
+能力矩阵（`languagesForVoice`）：官方 2.0 音色表里只有 4 个音色标注支持方言（Vivi/小何/云舟/小天，8 种一致）；其余中文音色配 自动/中文/English；英文音色只配 English（读中文会返回空音频）。
+不变式：**能选出来的组合一定合法**——设置页按 meta 下发的 `voices[].languages` 过滤语种下拉，选方言时音色下拉只列能说的音色。
+`normalizeVoiceConfig` 只做旧配置/手改配置软着陆（未知语种→auto；方言+说不了方言的目录音色→换 Vivi；英文音色+非英文→en；自定义 id 不改写、语种降 zh），对页面产物恒等；合成期用 `effectiveVoiceOf` 取有效参数，不再二次改写用户选择。
 （1.0 方言/多情感专属音色一律不接，本插件只适配 2.0。）
 
 ### 4.3 local（本地 Kokoro v1.1，进程内合成，中英跟随原文）
@@ -298,7 +299,7 @@ voice:
   autoSpeak: false            # 每轮结束自动播报
   autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）时同步写入 true；免费引擎（browser/local）为 false
   language: auto              # auto|zh|en|yue|shanghai|henan|beijing|tianjin|sichuan|shaanxi|dongbei
-                              #   固定语种/方言时无论原文语言都按所选转写；8 方言统一走 vv + explicit_dialect
+                              #   固定语种/方言时无论原文语言都按所选转写；方言只对支持方言的 4 个音色出现
   provider: ""                # 转写 LLM provider（空=启动发现；配置错自动回退并自愈写回可用路由）
   model: deepseek-v4-flash
   transcribe:
@@ -317,8 +318,8 @@ voice:
     volcengine:
       apiKey: ""              # 火山方舟专属 API Key（明文存在目标 profile 的 cordis.patch.yml，注意保管，别提交）
                               #   不标 role('secret') 的原因见 §6.0 末条（标了会被设置页保存删除）
-      resourceId: seed-tts-2.0
-      speaker: zh_female_vv_uranus_bigtts  # Vivi 2.0；下拉另含 中文4男4女 + 英文3 + 自定义
+      resourceId: seed-tts-2.0   # 设置页不展示；plan/standard 恒发 seed-tts-2.0，仅 gateway=custom 读存量值
+      speaker: zh_female_vv_uranus_bigtts  # Vivi 2.0；下拉另含 中文4男4女 + 英文3 + 自定义（语种/方言项随音色能力变化）
       sampleRate: 24000       # 采样率（设置页无 UI：固定默认 24000，客户端/管线自适应；老值仍生效）
       rateLevel: 2            # 语速五档 0很慢–4很快
       pitch: 0                # 音调连续半音 [-12,12]，0=正常（步进 0.1 细粒度）
@@ -397,7 +398,7 @@ voice:
 1. **发给 TTS 的 `text` 不得含 `[#`**——豆包接口不解析内嵌标签、会当正文照读（`extractVoiceTags` 提取剥离，进 `context_texts`）。
 2. **只适配豆包语音合成模型 2.0**——不接 1.0 多情感/方言专属音色，不发 `emotion`/`emotion_scale` 数值参数。
 3. **情感走 `context_texts`**（所有 2.0 音色生效、不计费、仅第一个值有效）。
-4. **方言用 `explicit_dialect`** + vv 音色（voice-compat 不变式：方言⟺vv、English⟺英文音色、zh/auto⟺中文音色）。
+4. **方言用 `explicit_dialect`，且只在支持方言的音色上下发**（voice-compat 能力矩阵：4 个音色 / 8 种方言；其余音色不出现方言选项，合成期也不发该参数）。
 5. **服务端缓存只认文本**——`cache_config` 仅当 `ttsFp` 指纹未变才下发；试听/重新生成绝不下发（防"永远四川口音"串音）。
 6. **转写完整才写缓存**——WS 中途失败不污染缓存（否则降级命中坏稿、播不完整内容）。
 7. **重播零 LLM**——转写 + 情感指令全用缓存（不重新生成）；重新生成（↻）= 全部重新生成。
@@ -462,8 +463,8 @@ voice:
   `createLocalRuntime`（`ensureLoaded` 懒加载 / `streamPcm` 分块合成 / `synthesizeWav` 整段 / `status` 自检）、
   `float32ToInt16Pcm` / `pcmToWav`（Float32→16bit 小端）、`speakError`（带 kind 的错误）。
 - `speech-clean.js`：`sanitizeForSpeech`（净化）。
-- `voice-compat.js`：`LANGUAGE_OPTIONS` / `normalizeVoiceConfig` / `correctSpeakerForLanguage` /
-  `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——配置兼容/归一单一事实源；
+- `voice-compat.js`：`LANGUAGE_OPTIONS` / `languagesForVoice`（音色能力矩阵）/ `effectiveVoiceOf`（有效发声参数）/
+  `normalizeVoiceConfig`（旧配置软着陆）/ `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——能力与归一的单一事实源；
   `VOLC_VOICES`（音色精选清单）定义在 `index.js`。
 - `client.js`：设置页（`settings.section id=voice`）、朗读按钮（`assistant-actions`）、流式播放（Web Audio lookahead）、转写/播报状态机。
 - 测试：`scripts/test-host.mjs`（零成本 mock，覆盖转写/缓存/TTS/防串音/重播零 LLM 等）、`scripts/tts-*.mjs`（真实外呼探针，花几分钱）。

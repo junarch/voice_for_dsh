@@ -144,6 +144,22 @@ try {
     if (!zhKeys.includes(k)) throw new Error('missing chime key: ' + k)
   }
 
+  // 音色能力过滤（防漂移）：Client 不许再内联一份能力数据，只按 meta 下发过滤
+  for (const gone of ['DIALECT_IDS', 'correctSpeakerForLanguage', 'correctLanguageForSpeaker', 'var VV_SPEAKER']) {
+    if (source.includes(gone)) throw new Error('Client 不应再内联音色能力逻辑（发现 ' + gone + '）：能力数据只在 Host voice-compat.js，经 meta 下发')
+  }
+  for (const need of ['languagesOfVoice', 'shownLanguages', 'shownVoices']) {
+    if (!source.includes(need)) throw new Error('Client 缺少按音色能力过滤的实现：' + need)
+  }
+  // 设置页不再暴露 resourceId，也不再出现 vv/explicit_dialect 这类黑话
+  if (zhKeys.includes('row.resourceId')) throw new Error('设置页不应再展示 resourceId')
+  for (const jargon of ['explicit_dialect', '方言需 vv 音色']) {
+    if (source.includes(jargon)) throw new Error('设置页文案不应出现术语：' + jargon)
+  }
+  for (const k of ['speaker.hint', 'language.hint', 'dialect.onlyVoices', 'language.enOnly']) {
+    if (!zhKeys.includes(k)) throw new Error('missing capability hint key: ' + k)
+  }
+
   console.log('client contract: uiConversation.events + voice Definition + ' + registrations.length +
     ' slots(带 id、无 select) + turnTail claim 逻辑 + i18n(' + zhKeys.length + ' keys) OK')
 } finally {

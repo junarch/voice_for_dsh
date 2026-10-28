@@ -56,7 +56,7 @@
 **同步清单**（防漂移）：
 - Client `FALLBACK_META` 若新增音色/语种/档位清单 → 与 Host 同步（无 import 的内联镜像）；
 - `docs/pipeline.md` §4（provider 表格 + 参数）、§6（schema）、README"平台支持/引擎"；
-- 音色↔语种不变式（方言⟺vv、en⟺英文音色）若被新 provider 打破，改 `voice-compat.js` 并同步 Client。
+- 音色能力矩阵（方言只对 4 个 2.0 音色开放、英文音色只配 English）与归一规则都在 `voice-compat.js`；能力数据经 meta 的 `voices[].languages` 下发，**Client 不存第二份**（新 provider 不改变这套语义）。
 
 ## 4. 本地 TTS 模型接入（隐私最好的一条路）
 

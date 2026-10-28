@@ -104,14 +104,17 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS 合成失败（服务返回错误）",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
-      "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "音色 speaker",
+      "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
+      "speaker.hint": "只列会说当前语种/方言的音色；手填音色 ID 也能用，但不保证方言 / only voices that speak the picked language; custom ids allowed (dialects untested)",
+      "language.hint": "不支持的方言不会出现在这里；固定语种会覆盖原文语言 / unsupported dialects are hidden; fixed language overrides source",
+      "dialect.onlyVoices": "方言只对上面这几个音色开放（换回普通话即可看到全部音色）/ dialects are limited to the voices listed above",
+      "language.enOnly": "英文音色会把播报稿先改成英文再念（不是只换个嗓子）/ an English voice rewrites the script into English first",
       "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准付费 Key：", "apiKey.hintLink": "新版控制台快速入门",
       "row.gateway": "网关", "row.httpUrl": "HTTP 端点（自定义）",
       "gateway.hint": " plan=智能体套餐（默认）；standard=标准付费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
       "row.loudness": "音量",
       "streaming.degraded": "双向流不可用，已回退整段合成",
-      "dialect.hint": "方言：8 种方言均走 vv 音色 + explicit_dialect（实测生效）；音色/语种会自动互相适配（不锁定）",
       "layer.l5.title": "提示音",
       "layer.l5.summary.on": "开 · {n}/3 种 · 音量 {volume}%", "layer.l5.summary.off": "关",
       "row.chimeEnabled": "开启提示音", "row.chimeVolume": "总音量",
@@ -215,14 +218,17 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS synthesis failed (service error)",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
-      "row.apiKey": "apiKey", "row.resourceId": "resourceId", "row.speaker": "Speaker",
+      "row.apiKey": "apiKey", "row.speaker": "Speaker",
+      "speaker.hint": "Only voices that speak the picked language/dialect are listed; custom ids allowed (dialects untested)",
+      "language.hint": "Unsupported dialects are hidden here; a fixed language overrides the source language",
+      "dialect.onlyVoices": "Dialects are limited to the voices listed above; switch back to Mandarin to see all voices",
+      "language.enOnly": "An English voice rewrites the script into English first — it is not just a different timbre",
       "apiKey.hint": "Doubao TTS: enable the speech service in the Volcengine console, then get an API Key (X-Api-Key) in \"API management\"; plan = agent-plan key, standard = pay-as-you-go key: ", "apiKey.hintLink": "Quick start (new console)",
       "row.gateway": "Gateway", "row.httpUrl": "HTTP endpoint (custom)",
       "gateway.hint": " plan=agent-plan (default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "Speech rate", "row.pitchSemitone": "Pitch (semitones)",
       "row.loudness": "Loudness",
       "streaming.degraded": "Bidirection unavailable; fell back to one-shot synthesis",
-      "dialect.hint": "Dialects: all 8 dialects use vv speaker + explicit_dialect (tested working); voice & language auto-adapt to each other (never locked)",
       "layer.l5.title": "Chimes",
       "layer.l5.summary.on": "On · {n}/3 sounds · volume {volume}%", "layer.l5.summary.off": "Off",
       "row.chimeEnabled": "Enable chimes", "row.chimeVolume": "Master volume",
@@ -296,30 +302,13 @@ window.__ModuleLoader__.load({
       ],
     };
 
-    // ---------- 音色 ↔ 语种/方言 兼容矩阵（与 Host lib/voice-compat.js 同步的内联镜像，client 无 import） ----------
-    // 不变式：方言 ⟺ vv；English ⟺ 英文音色；中文/自动 配中文音色（含 vv）。
-    // 交互 = 后改的字段胜出：改语言→纠音色；改音色→纠语言。
-    var VV_SPEAKER = "zh_female_vv_uranus_bigtts";
-    var EN_DEFAULT_SPEAKER = "en_male_tim_uranus_bigtts";
-    var EN_VOICE_PREFIXES = ["en_", "ICL_uranus_en_"];
-    var DIALECT_IDS = ["yue", "shanghai", "henan", "beijing", "tianjin", "sichuan", "shaanxi", "dongbei"];
-    function isEnVoice(sp) { return !!sp && EN_VOICE_PREFIXES.some(function (p) { return sp.indexOf(p) === 0; }); }
-    function isVvVoice(sp) { return sp === VV_SPEAKER; }
-    function voiceCategory(sp) { return isEnVoice(sp) ? "en" : isVvVoice(sp) ? "vv" : "zh"; }
-    function isDialectLanguage(l) { return DIALECT_IDS.indexOf(l) >= 0; }
-    /** 改音色后让语种适配（en 音色→en；vv→除 en 外保持，en 改 zh；中文音色→方言/en 改 zh）。 */
-    function correctLanguageForSpeaker(language, speaker) {
-      var cat = voiceCategory(speaker);
-      if (cat === "en") return language === "en" ? language : "en";
-      if (cat === "vv") return language === "en" ? "zh" : language;
-      if (isDialectLanguage(language) || language === "en") return "zh";
-      return language;
-    }
-    /** 改语种后让音色适配（方言→vv；en→英文音色；zh/auto 保持，如实反映用户选择）。 */
-    function correctSpeakerForLanguage(language, speaker) {
-      if (isDialectLanguage(language)) return VV_SPEAKER;
-      if (language === "en" && !isEnVoice(speaker)) return EN_DEFAULT_SPEAKER;
-      return speaker;
+    // ---------- 音色 ↔ 语种/方言 ----------
+    // 能力数据只在 Host（lib/voice-compat.js），随 meta 的 voices[].languages 下发；
+    // 这里不存第二份清单，只做"查表过滤"。meta 缺 languages（老 Host / 裂脑兜底）时不过滤。
+    /** 该音色能选的语种 id 列表；没有能力数据时返回 null（= 不过滤）。 */
+    function languagesOfVoice(voices, speaker) {
+      var hit = (voices || []).filter(function (v) { return v && v.id === speaker; })[0];
+      return hit && hit.languages && hit.languages.length ? hit.languages : null;
     }
 
     // ---------- 播放管理（全局单播）----------
@@ -1931,11 +1920,11 @@ window.__ModuleLoader__.load({
       async function onPreview() {
         setBusy(true); setMsg("");
         try {
-          await onSaveSilent();
-          const res = await rpc("preview");
+          // 用页面当前草稿试听，不落盘：没点"保存"就不改配置（旧版会先静默写盘再合成）
+          const res = await rpc("preview", { cfg: cfg });
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
-          else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser")); }
-          else if (res.audioUrl) { playAudio(res.audioUrl, {}); setMsg(ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")); }
+          else if (res.mode === "browser") { speakText(res.text, res.speech, {}); setMsg(t("settings.previewBrowser") + (res.languageLabel ? " · " + res.languageLabel : "")); }
+          else if (res.audioUrl) { playAudio(res.audioUrl, {}); setMsg((ttsEngine === "volcengine" ? t("settings.previewCloud") : t("settings.previewAudio")) + (res.languageLabel ? " · " + res.languageLabel : "")); }
         } catch (e) { setMsg(t("settings.previewFail") + String(e && e.message || e)); }
         setBusy(false);
       }
@@ -2001,22 +1990,34 @@ window.__ModuleLoader__.load({
       const promptShown = isCustom
         ? cfg.transcribe.prompt
         : (presetHit && presetHit.prompt ? presetHit.prompt : cfg.transcribe.prompt);
-      // 音色↔语种配对（voice-compat 不变式）：后改的字段胜出，另一个自动适配，不锁定/不禁用
-      const curDialect = isDialectLanguage(cfg.language);
+      // 音色能力过滤（数据来自 meta）：语种下拉只列当前音色能说的；方言只在能说的音色下出现，
+      // 此时音色下拉也只列能说的音色。合法组合全部由下拉保证，不再"选完再偷偷改"。
+      const curVoiceLangs = languagesOfVoice(voices, cfg.tts.volcengine.speaker);
+      const shownLanguages = curVoiceLangs ? languages.filter((l) => curVoiceLangs.indexOf(l.id) >= 0) : languages;
+      const curLangOption = languages.filter((l) => l.id === cfg.language)[0];
+      const curDialect = !!(curLangOption && curLangOption.dialect);
       const curEn = cfg.language === "en";
-      /** 语种/方言联动（改语言→纠音色）：方言→vv；English→英文音色；zh/auto 且音色为英文→vv。 */
+      const shownVoices = curDialect
+        ? voices.filter((v) => {
+            const langs = languagesOfVoice(voices, v.id);
+            return !langs || langs.indexOf(cfg.language) >= 0;
+          })
+        : voices;
+      /** 语种变了：提交用户选择（能出现在下拉里就是合法组合）。 */
       function onLanguageChange(v) {
         const next = JSON.parse(JSON.stringify(cfg));
         next.language = v;
-        next.tts.volcengine.speaker = correctSpeakerForLanguage(v, next.tts.volcengine.speaker);
         setCfg(next);
         setMsg("");
       }
-      /** 音色联动（改音色→纠语种）：en 音色→English；vv→保持（en 改 zh）；中文音色→方言/en 改中文（普通话）。 */
+      /** 音色变了：若当前语种这个音色说不了（如从中文音色换到英文音色），落到它支持的第一项。 */
       function onSpeakerChange(sp) {
         const next = JSON.parse(JSON.stringify(cfg));
-        next.language = correctLanguageForSpeaker(next.language, sp);
         next.tts.volcengine.speaker = sp;
+        const allowed = languagesOfVoice(voices, sp);
+        if (allowed && allowed.length && allowed.indexOf(next.language) < 0) {
+          next.language = allowed.indexOf("zh") >= 0 ? "zh" : allowed[0];
+        }
         setCfg(next);
         setMsg("");
       }
@@ -2159,33 +2160,29 @@ window.__ModuleLoader__.load({
               React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
             React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
               React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
-            React.createElement(Row, { label: t("row.resourceId") },
-              React.createElement(TextInput, { value: cfg.tts.volcengine.resourceId, onChange: (v) => setField("tts.volcengine.resourceId", v), placeholder: "seed-tts-2.0" })),
             React.createElement("h4", null, t("group.pronounce")),
             React.createElement(Row, { label: t("row.speaker") },
               React.createElement(SelectInput, {
                 value: (speakerKnown ? cfg.tts.volcengine.speaker : VOICE_CUSTOM),
                 onChange: (v) => { if (v !== VOICE_CUSTOM) onSpeakerChange(v); },
               },
-                voices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+                shownVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
                 React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
               (speakerKnown ? null : React.createElement(TextInput, {
                 value: cfg.tts.volcengine.speaker,
                 onChange: (v) => onSpeakerChange(v),
                 placeholder: "zh_female_vv_uranus_bigtts",
               })),
-              React.createElement("span", { className: "dsh-voice-dim" }, " 精选已实测；自定义可输入任意音色 ID（未实测不保证） / curated & tested; custom id allowed (untested)")),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("speaker.hint"))),
             React.createElement(Row, { label: t("row.language") },
               React.createElement(SelectInput, { value: cfg.language, onChange: onLanguageChange },
-                languages.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.label))),
-              React.createElement("span", { className: "dsh-voice-dim" }, " 固定语种/方言时无论原文语言都按所选播报 / fixed language overrides source")),
+                shownLanguages.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.label))),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("language.hint"))),
             (curDialect
-              ? React.createElement("p", { className: "dsh-voice-warn" },
-                  "方言需 vv 音色 + explicit_dialect（8 种方言实测生效）；选其他音色时语种会自动改为普通话 / dialect uses vv; picking another voice switches language to Mandarin")
+              ? React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.onlyVoices"))
               : null),
             (curEn
-              ? React.createElement("p", { className: "dsh-voice-warn" },
-                  "English 已自动切换英文音色（explicit_language=en）/ speaker auto-corrected to an EN voice")
+              ? React.createElement("p", { className: "dsh-voice-warn" }, t("language.enOnly"))
               : null),
             React.createElement(Row, { label: t("row.rateLevel") },
               React.createElement(SliderInput, { value: cfg.tts.volcengine.rateLevel, onChange: (v) => setField("tts.volcengine.rateLevel", v), min: 0, max: 4, step: 1, format: (v) => rateStops[v] || String(v) }),
@@ -2195,8 +2192,7 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "dsh-voice-dim" }, " 半音（0=正常，可调 0.1 细粒度）/ semitones (0=normal)")),
             React.createElement(Row, { label: t("row.loudness") },
               React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
-              React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate")),
-            React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.hint"))) : null),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate"))) : null),
 
         // —— L3 转写：开关在层头（收起也能直接开关），体内只在开启时渲染 ——
         React.createElement(Collapse, {
