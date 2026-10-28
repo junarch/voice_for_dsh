@@ -441,8 +441,10 @@ function apply(ctx, config) {
     return c
   }
   const audioStore = new Map() // id → { buf: Buffer, mime: string, at: number }（一次性取出）
-  const AUDIO_TTL_MS = 5 * 60_000 // 未取走的音频段最长保留 5 分钟（防 HTTP 路径无 disposeRun 兜底导致内存滞留）
-  const AUDIO_MAX = 64 // 同时滞留的音频段上限（超出删最旧，如客户端长期不消费）
+  // 未取走的音频段保留上限：客户端是实时播放、边播边按需取段，一轮长稿的段会在一两分钟里陆续取走；
+  // TTL/容量太小会先把"下一条要取的段"清掉（表现为客户端 fetch 404、流中断）。
+  const AUDIO_TTL_MS = 30 * 60_000
+  const AUDIO_MAX = 512 // 同时滞留的音频段上限（约 10 分钟音频；超出删最旧，防失控）
   /** 存入音频并做 TTL/容量清理；返回一次性路由 id。 */
   function storeAudio(buf, mime) {
     const now = Date.now()
@@ -1406,8 +1408,14 @@ function apply(ctx, config) {
       }
       run.finished = true
       if (currentStreamRun === run) currentStreamRun = null
-      // 兜底清理：结束后 8s 无论客户端是否取完，都清掉未消费段与注册（防 pcm 大段滞留膨胀）
-      setTimeout(() => disposeRun(run), 8000)
+      // 兜底清理：客户端实时播放、按需取段，不能按固定 8s 清——按"还没取走的音频还要播多久"顺延，
+      // 否则长稿播到一半段就被删了（客户端 fetch 404，流中断）。上限 30 分钟防跑飞。
+      let pendingMs = 0
+      for (const q of run.queue) {
+        const hit = audioStore.get(q.id)
+        if (hit) pendingMs += (hit.buf.length / (2 * (run.sampleRate || 24000))) * 1000
+      }
+      setTimeout(() => disposeRun(run), 8000 + Math.max(0, Math.min(pendingMs, 30 * 60_000)))
     })()
   }
   /** 是否走双向流流式播报（豆包）。 */
