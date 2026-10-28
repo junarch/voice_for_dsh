@@ -439,8 +439,10 @@ window.__ModuleLoader__.load({
       // pending：等下一拍
     }
     /** 裸 PCM（16bit 小端）→ AudioBuffer：无解码延迟，切在哪都无缝（主路径）。
-     *  先做内容校验：长度必须为正偶数（16bit），且不能是容器/编码器头——
-     *  非音频内容被当 PCM 播就是一片噪声，宁可走失败降级。 */
+     *  先做内容校验：长度必须为正偶数（16bit），且不能是容器头——
+     *  非音频内容被当 PCM 播就是一片噪声，宁可走失败降级。
+     *  只认 ID3/RIFF/OggS 这类 4 字节魔数：裸 PCM 碰巧撞上的概率可忽略。
+     *  不要用 MP3 帧同步字（0xFF 0xEx）判断——PCM 段任意起点约有 3% 会撞上，会误杀正常段。 */
     function buildAudioBufferFromPcm(arrayBuffer, sampleRate) {
       const bytes = new Uint8Array(arrayBuffer);
       if (!bytes.length || (bytes.length & 1)) throw new Error("bad pcm length " + bytes.length);
@@ -448,8 +450,7 @@ window.__ModuleLoader__.load({
         const id3 = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33;             // ID3
         const riff = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46; // RIFF
         const ogg = bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53;  // OggS
-        const mp3 = bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0;                          // MP3 帧同步
-        if (id3 || riff || ogg || mp3) throw new Error("segment is not raw pcm");
+        if (id3 || riff || ogg) throw new Error("segment is not raw pcm");
       }
       const int16 = new Int16Array(arrayBuffer);
       const frames = int16.length;
