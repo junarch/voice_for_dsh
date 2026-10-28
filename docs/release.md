@@ -24,7 +24,8 @@
 - [ ] `node --check` 覆盖 `lib/` 下全部 8 个手写模块（CI 已含）。
 - [ ] CI（`.github/workflows/test.yml`）在 PR 上跑过一遍。
 
-> 断言数以脚本末尾的输出为准，文档里不写死历史条数（改了断言不用回来改这一页）。
+> 读数以脚本输出为准，文档里不写死历史条数（改了断言不用回来改这一页）：`test-host` / 两个提示音套件 /
+> `test-settings-ui` 打印 `结果: N passed, M failed`，`test-client` 打印合约摘要与 i18n 键数（退出码为准）。
 
 ## 2. 防 Token 浪费专项（最高优先级）
 

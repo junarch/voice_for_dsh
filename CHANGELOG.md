@@ -6,7 +6,7 @@
 
 ---
 
-## [Unreleased]
+## [0.4.0] - 2026-10-28
 
 ### Added
 
@@ -23,6 +23,10 @@
 - **设置页标题下的版本行**：`voice_for_dsh vX.Y.Z · 适配 DSH A.B.C`（版本号取自 package.json，经 `/voice/api/meta` 下发）。
 - **本地音色全表（103 个）**：按官方 `sid → 名字` 表生成，下拉按「英文女 3 / 中文女 55 / 中文男 45」分组，
   标签写 `zf_001` 这类官名；音色提示里写明 sid 就是 `voices.bin` 的行号，并给出官方试听页链接。
+- **设置页按引擎显隐的回归防线**：新增 `scripts/test-settings-ui.mjs`，用迷你 React 渲染真组件，
+  断言三档引擎下该出现的出现、该藏的不出现（含切引擎重渲染），不重启桌面端即可验证。
+- **本地音色直连探针**：`scripts/local-tts-probe.mjs` 绕开插件直接打 sherpa，按不同 sid/speed 打印
+  音频指纹，分清"模型只出一个声"与"插件没传音色"。
 
 ### Changed
 
@@ -48,7 +52,7 @@
 - **句间停顿 440ms → 220ms**：Kokoro 的句间静音由 `generationConfig.silenceScale` 控制（默认 0.2），
   我们的代码从来没传过它——现在固定传 0.1。中文标点停顿约 220ms、英文约 150ms，听感接近正常呼吸间隔。
   这是本次"断句奇怪"的真正原因；上一版文档把它写成"不可配"是错的，已更正。
-- **提示音每类三个内置变体**：完成音=清铃/木琴/余韵，提问音=轻问/上扬/回声（工作音见上一条，共五个）；
+- **提示音自带内置变体**：完成音=清铃/木琴/余韵，提问音=轻问/上扬/回声，工作音五个（见上一条）；
   名字进下拉，不再出现"程序合成"字样。`chime.*.source` 取值改为 `a|b|c|d|e` 或 `custom`
   （旧值 `default` 归一成 `a`）。
 - **豆包发音组：语种/方言在上、音色在下**；切任何引擎都不再自动展开「当前引擎声音设置」。
@@ -98,16 +102,9 @@
 - **自定义网关缺 `wsUrl` 时边说边播静默失效**：网关行下面补一句"会整段合成完再播"（`wsUrl` 至今无界面）。
 - **系统语音名填错静默默认**：语音名一行补"名字对不上系统里的语音就按默认音播"。
 
-### Added
+### 本地运行时与音色能力
 
-- **设置页按引擎显隐的回归防线**：新增 `scripts/test-settings-ui.mjs`，用迷你 React 渲染真组件，
-  断言三档引擎下该出现的出现、该藏的不出现（含切引擎重渲染），不重启桌面端即可验证。
-- **本地音色直连探针**：`scripts/local-tts-probe.mjs` 绕开插件直接打 sherpa，按不同 sid/speed 打印
-  音频指纹，分清"模型只出一个声"与"插件没传音色"。
-
-## [0.4.0] - 2026-10-28
-
-### Added
+#### Added
 
 - **音色能力矩阵**：官方 2.0 音色表里只有 Vivi／小何／云舟／小天 四个音色支持方言（8 种一致），
   其余中文音色只有中文、英文音色只有美式英语。设置页的语种/方言下拉按当前音色过滤——
@@ -115,7 +112,7 @@
 - **英文音色不再无声**：英文音色读中文文本会返回空音频，现在"英文音色 + 中文"这种组合
   在下拉里就选不出来。
 
-### Changed
+#### Changed
 
 - **不再替用户改配置**：删掉「选方言强制换 Vivi」「改音色强制改语种」「保存时再归一一遍」
   三层自动改写，保存前后配置恒等；旧配置里的冲突值改为读取时软着陆（未知语种→自动、
@@ -124,7 +121,7 @@
   只有 `gateway=custom` 才读存量覆盖值。存量配置里的旧值不再影响发声。
 - **试听不再静默写盘**：点试听用页面当前草稿合成，没按保存就不改配置；提示里带上当前语种。
 
-### Fixed
+#### Fixed
 
 - **本地引擎在桌面端整条不出声**：Electron 的 native 运行时以 `TTS settlement failed` 拒绝
   `generateAsync`，但音频已由 `onProgress` 全部给到——现在按成功收尾（试听、整段、流式都恢复）。
@@ -135,36 +132,7 @@
   现在按音色下发 `explicit_dialect`，改音色不再连带改语种。
 - **指纹语义变更后串音**：`ttsFp` 加 `v2|` 前缀作废旧落盘缓存条目，避免升级后第一次重播
   命中旧参数音频。
-
-### 升级指引（Python 版 → 0.4.0）
-
-本地合成从"独立的 Python 服务"改成"dsh 进程内原生模块"。这一版对本地引擎是**破坏性**的，
-照下面四条做一次即可，其余功能不受影响：
-
-- **模型要重下**：模型包换成 `kokoro-multi-lang-v1_1`（中英混读），旧版 `local/models` 里的英文
-  Kokoro v1.0 不再被读取。设置页 →「语音播报」→ **常用** 选「本地 Kokoro」→ **当前引擎的声音**
-  层头点「下载模型」（下载 348MB、解包后 407MB，只存本机、可断点续传、装完不用重启）。
-  已有解包好的目录可以填进 **高级** 层的「模型目录」直接用。
-- **`local/` 可以整个删**：venv、旧引擎的源码与权重、旧模型、临时目录都不再被读写
-  （逐项清单见 `docs/local-tts.md` §5.1）。**不需要**再装 Python、不用再起本地服务、不用管端口。
-- **配置不用改**：`tts.local.sid`/`speed` 继续生效；旧的 `provider: local-cosyvoice` 会自动归一到
-  `local`（旧配置的意图就是"用本地引擎"）；已退役的 `baseUrl`/`voice`/`autoStart`/`pythonPath`
-  读到会被忽略——它们仍留在 patch 里（插件不读、也不主动清），想清爽就手动删掉那几行。
-- **豆包不受影响**：`tts.volcengine.apiKey` 的位置与写法完全不变（仍是 profile `cordis.patch.yml` 里的明文）。
-
-### 升级指引（0.1.x → 0.2.0，配置位置变更）
-
-- **必须做**：把旧的 `voice` 配置搬进目标 profile。0.2.0 起插件配置不再来自 `$DSH_HOME\settings.yaml`
-  （首次启动已被改名成 `settings.yaml.imported`），而是来自 profile 的 `cordis.patch.yml`：
-  ```powershell
-  node scripts/migrate-voice-config.mjs          # 预览
-  node scripts/migrate-voice-config.mjs --write  # 落盘（写前自动备份 patch，幂等）
-  ```
-  不迁移的后果：转写路由、音色/语速、豆包开关与 apiKey 全部掉回默认值（默认引擎 = 系统 TTS（浏览器语音））。
-- **若插件装在旧的 `web` profile**：桌面端只读 `desktop` profile，需要重新装到 desktop
-  （`& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice`），否则插件页里根本看不到它。
-
-### Added
+#### Added
 
 - **本地合成改为进程内**（`local` provider 重写）：`sherpa-onnx-node@1.13.8` 直接在 dsh 的 Host 进程里合成
   （Kokoro v1.1，中英跟随原文语言，103 个数字音色），**不起子进程、不装 Python、不监听端口**，
@@ -208,7 +176,7 @@
 - 新增 `scripts/verify-installed.mjs`：重启桌面端后一键自检（Host 路由活着 → Client 半进 boot 图且能取回字节
   → 配置可读 → 本地模型与运行时状态），退出码 0/1，可接进发版检查。
 
-### Changed
+#### Changed
 
 - **适配 DSH 0.2.x 的插件配置模型**：`ctx.settings.register(ns, schema)` 已被上游移除，插件改为导出
   `Config`（schemastery schema，可热改字段标 `.volatile()`），插件体 `apply(ctx, config)` 读配置；
@@ -228,7 +196,7 @@
 - 记下一条实操事实（`docs/development.md` §2）：装完插件或升级依赖后**必须重启桌面端**——Host 半会随
   Loader 热加载，Client 半只有整个应用重启才进 boot 图。
 
-### Fixed
+#### Fixed
 
 - **PCM 校验误杀正常段**：最初用 MP3 帧同步字（`0xFF 0xEx`）判断「这段不是裸 PCM」，
   而 PCM 段任意起点约有 3% 会撞上这个字节组合——实测播到第 61 段被误判、流中断。
@@ -258,7 +226,7 @@
 - **i18n 键对齐**：`en` 缺 `read.regenerate`，`zh` 缺 `read.stopTitle`/`read.degraded`（英文界面这两处此前
   显示为 key 本身）；`test-client.mjs` 新增 zh/en 键集合一致性断言，防再漏配。
 
-### Docs
+#### Docs
 
 - README 重写项目定位与本地 TTS 安装步骤（现在是设置页一键下载，不再是 PowerShell + venv + Python 服务）；
   术语统一：**转写** = 改写成口语稿、**播报** = 交给 TTS 出声的整段流程、**朗读** = 用户点的那一下；
@@ -269,6 +237,34 @@
   `docs/ROADMAP.md` 已落地项移入"已完成"，只留未落地的规划。
 - README 分工：根 README 保留完整叙事（定位/安装/成本与隐私），`packages/dsh-plugin-voice/README.md`
   收缩成 npm 页——安装命令、配置位置、三行功能、指向 `docs/`。
+
+### 升级指引（Python 版 → 0.4.0）
+
+本地合成从"独立的 Python 服务"改成"dsh 进程内原生模块"。这一版对本地引擎是**破坏性**的，
+照下面四条做一次即可，其余功能不受影响：
+
+- **模型要重下**：模型包换成 `kokoro-multi-lang-v1_1`（中英混读），旧版 `local/models` 里的英文
+  Kokoro v1.0 不再被读取。设置页 →「语音播报」→ **常用** 选「本地 Kokoro」→ **当前引擎的声音**
+  层头点「下载模型」（下载 348MB、解包后 407MB，只存本机、可断点续传、装完不用重启）。
+  已有解包好的目录可以填进 **高级** 层的「模型目录」直接用。
+- **`local/` 可以整个删**：venv、旧引擎的源码与权重、旧模型、临时目录都不再被读写
+  （逐项清单见 `docs/local-tts.md` §5.1）。**不需要**再装 Python、不用再起本地服务、不用管端口。
+- **配置不用改**：`tts.local.sid`/`speed` 继续生效；旧的 `provider: local-cosyvoice` 会自动归一到
+  `local`（旧配置的意图就是"用本地引擎"）；已退役的 `baseUrl`/`voice`/`autoStart`/`pythonPath`
+  读到会被忽略——它们仍留在 patch 里（插件不读、也不主动清），想清爽就手动删掉那几行。
+- **豆包不受影响**：`tts.volcengine.apiKey` 的位置与写法完全不变（仍是 profile `cordis.patch.yml` 里的明文）。
+
+### 升级指引（0.1.x → 0.2.0，配置位置变更）
+
+- **必须做**：把旧的 `voice` 配置搬进目标 profile。0.2.0 起插件配置不再来自 `$DSH_HOME\settings.yaml`
+  （首次启动已被改名成 `settings.yaml.imported`），而是来自 profile 的 `cordis.patch.yml`：
+  ```powershell
+  node scripts/migrate-voice-config.mjs          # 预览
+  node scripts/migrate-voice-config.mjs --write  # 落盘（写前自动备份 patch，幂等）
+  ```
+  不迁移的后果：转写路由、音色/语速、豆包开关与 apiKey 全部掉回默认值（默认引擎 = 系统 TTS（浏览器语音））。
+- **若插件装在旧的 `web` profile**：桌面端只读 `desktop` profile，需要重新装到 desktop
+  （`& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice`），否则插件页里根本看不到它。
 
 ## [0.3.1] - 2026-09-06
 

@@ -420,7 +420,7 @@ voice:
   chime:                      # 提示音（设置页第五层）；默认整层关闭，与朗读互不依赖
     enabled: false
     volume: 0.3               # 总音量 0–1（客户端 master gain）
-    work: { enabled: false, source: a, file: "" }   # 工作音：顶层会话在跑时循环（source: a/b/c=内置变体）
+    work: { enabled: false, source: a, file: "" }   # 工作音：会话在跑时循环（source: a..e=内置变体，见 §6.2）
     done: { enabled: false, source: a, file: "" }   # 完成音：顶层会话 running 真→假
     ask:  { enabled: false, source: a, file: "" }   # 提问音：question / plan-review（审批不算）
 ```
