@@ -58,7 +58,7 @@
 
 // import = 从 Node.js 自带的标准库里取工具。
 // mkdtempSync 建一个一次性临时文件夹；rmSync 删文件夹。
-import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, utimesSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -282,6 +282,7 @@ globalThis.fetch = async (url, init) => {
 // 装配（apply(ctx, config)）在下方"测试数据"段里、初始配置解析之后调用；路由处理器随后再取。
 let apiHandler
 let audioHandler
+let soundsHandler
 
 // rpc = 模拟"浏览器向插件发 HTTP 请求"。和 curl 的区别：不用起服务器，直接调处理函数。
 async function rpc(method, args, headers) {
@@ -298,6 +299,25 @@ async function fetchAudio(id) {
   const req = { method: 'GET', url: '/voice/audio/' + id }
   const res = { code: 0, body: null, mime: '', writeHead(c, h) { this.code = c; if (h && h['Content-Type']) this.mime = h['Content-Type'] }, end(b) { this.body = b } }
   await audioHandler(req, res)
+  return res
+}
+/** 模拟一次 /voice/sounds 请求：POST 的 body 按块喂（测累加上限），GET 无 body。 */
+async function soundsRequest(method, url, body, headers) {
+  const chunks = []
+  if (body) chunks.push(Buffer.isBuffer(body) ? body : Buffer.from(body))
+  const req = {
+    method, url, headers: headers || {},
+    async *[Symbol.asyncIterator]() { for (const c of chunks) yield c },
+  }
+  const res = {
+    code: 0, headers: {}, body: null, text: '', mime: '',
+    writeHead(c, h) { this.code = c; this.headers = h || {}; this.mime = (h && h['Content-Type']) || '' },
+    end(b) {
+      this.body = b === undefined ? null : b
+      this.text = Buffer.isBuffer(b) ? b.toString('latin1') : String(b == null ? '' : b)
+    },
+  }
+  await soundsHandler(req, res)
   return res
 }
 // fire = 伪造一条会话事件，喂给插件的事件监听器。
@@ -333,6 +353,7 @@ try { apply(ctx, liveConfig) } catch (error) { applyError = error }
 // apply 抛错时路由不存在（下面 T0 会先断言并给出可读报告，而不是在这里崩栈）
 apiHandler = (routes.find((r) => r.path === '/voice/api') || {}).handler
 audioHandler = (routes.find((r) => r.path === '/voice/audio') || {}).handler
+soundsHandler = (routes.find((r) => r.path === '/voice/sounds') || {}).handler
 
 const sessionEvents = [
     msgEvent('m1', 1, '原始回复内容'),
@@ -386,7 +407,7 @@ check('空配置解析出全部默认值（tts 音色 / 转写上下文轮数 / 
   { speaker: defaultCfg.tts.get().volcengine.speaker, contextTurns: defaultCfg.transcribe.get().contextTurns, autoSpeak: defaultCfg.autoSpeak.get() })
 check('volatile 引用 .get() 返回普通对象（cfg.tts.volcengine.speaker 同形可读）',
   typeof defaultCfg.tts.get() === 'object' && defaultCfg.tts.get().volcengine.speaker === 'zh_female_vv_uranus_bigtts' && defaultCfg.stopOnNewTurn.get() === true)
-check('volatile 边界齐全（8 个顶层字段，缺一个设置页就写不进去）', configRefs(liveConfig).length === 8, configRefs(liveConfig).map((r) => r.path.join('.')))
+check('volatile 边界齐全（9 个顶层字段，缺一个设置页就写不进去）', configRefs(liveConfig).length === 9, configRefs(liveConfig).map((r) => r.path.join('.')))
 // apiKey 有意不标 role=secret：dsh-settings 写入时会把非 volatile 的 secret 字段从落盘补丁里剥掉，
 // 而设置页每次保存都整块重写该条目 config —— 标了 secret，用户第一次点保存就把 patch 里的 apiKey 删掉
 // （docs/pipeline.md §6.0）。这条断言就是防止有人"顺手加回来"。
@@ -402,7 +423,7 @@ check('再次 update 恢复原值', liveConfig.tts.get().browser.rate === 1, liv
 check('替身没有解析失败残留（配置补丁全部合法）', settingsState.resolveErrors.length === 0, settingsState.resolveErrors)
 
 section('T1 apply/路由注册')
-check('注册了 /voice/api 与 /voice/audio 两条路由', routes.length === 2 && !!apiHandler && !!audioHandler)
+check('注册了 /voice/api、/voice/audio、/voice/sounds 三条路由', routes.length === 3 && !!apiHandler && !!audioHandler && !!soundsHandler)
 check('ping', (await rpc('ping')).ok === true)
 
 section('T1b 同源校验（CSRF 防护：跨站不得触发付费调用/改配置）')
@@ -1846,6 +1867,89 @@ async function waitDeploy(installer, timeoutMs = 8000) {
   setInstallerHooksForTest(null)
   if (savedEnvModelDir !== undefined) process.env.VOICE_LOCAL_MODEL_DIR = savedEnvModelDir
   rmSync(root, { recursive: true, force: true })
+}
+
+// —— I. 提示音素材：/voice/sounds 上传 + 读取 + 启动清扫 + chime 配置默认值 ——
+{
+  const cfgNow = liveConfig.chime.get()
+  check('chime 默认值：总开关关、音量 0.3、三种音各自独立（默认音）',
+    cfgNow.enabled === false && cfgNow.volume === 0.3
+    && ['work', 'done', 'ask'].every((k) => cfgNow[k].enabled === false && cfgNow[k].source === 'default' && cfgNow[k].file === ''),
+    cfgNow)
+  check('getConfig 带回 chime（设置页第五层读得到）', !!(await rpc('getConfig')).config.chime && (await rpc('getConfig')).config.chime.volume === 0.3)
+
+  const soundsDir = path.join(home, 'voice', 'sounds')
+  const listSounds = () => (existsSync(soundsDir) ? readdirSync(soundsDir) : [])
+  const wavBytes = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE'), Buffer.alloc(8)])
+  const mp3Bytes = Buffer.concat([Buffer.from('ID3'), Buffer.alloc(24)])
+
+  const up1 = await soundsRequest('POST', '/voice/sounds?kind=work&name=%E5%B7%A5%E4%BD%9C%E9%9F%B3.wav', wavBytes)
+  const up1Body = JSON.parse(up1.text)
+  check('上传 wav：200 + ok + 落盘名 <kind>-<uuid>.<ext>',
+    up1.code === 200 && up1Body.ok === true && /^work-[0-9a-f-]{36}\.wav$/.test(up1Body.file),
+    { code: up1.code, body: up1Body })
+  check('上传 wav：扩展名由魔数判定（audio/wav 内容 → .wav）', up1Body.ext === 'wav', up1Body.ext)
+  check('上传 wav：文件真的写进了 <DSH_HOME>/voice/sounds', existsSync(path.join(soundsDir, up1Body.file)))
+  check('上传 wav：落盘字节与上传一致', readFileSync(path.join(soundsDir, up1Body.file)).equals(wavBytes))
+
+  const dirBefore = listSounds().length
+  const up2 = await soundsRequest('POST', '/voice/sounds?kind=done&name=done.mp3', mp3Bytes)
+  const up2Body = JSON.parse(up2.text)
+  check('上传 mp3（ID3 头）：200 且识别为 mp3', up2.code === 200 && up2Body.ok === true && up2Body.ext === 'mp3', up2Body)
+
+  const bigChunk = Buffer.alloc(1024 * 1024, 0x41)
+  const big = Buffer.concat([Buffer.from('RIFF'), bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk, bigChunk])
+  const upBig = await soundsRequest('POST', '/voice/sounds?kind=ask&name=big.wav', big)
+  check('上传 >10MB：413 拒绝且不落盘', upBig.code === 413 && JSON.parse(upBig.text).ok === false && listSounds().length === dirBefore + 1, { code: upBig.code, n: listSounds().length })
+
+  const upBadMagic = await soundsRequest('POST', '/voice/sounds?kind=ask&name=note.txt', Buffer.from('这根本不是音频'))
+  check('魔数不在白名单（纯文本）：415 拒绝', upBadMagic.code === 415 && JSON.parse(upBadMagic.text).ok === false, { code: upBadMagic.code, text: upBadMagic.text })
+  check('魔数不对：不落盘', listSounds().length === dirBefore + 1)
+
+  const upDot = await soundsRequest('POST', '/voice/sounds?kind=work&name=..%2F..%2Fevil.wav', wavBytes)
+  check('文件名带 ..：400 拒绝', upDot.code === 400, { code: upDot.code, text: upDot.text })
+  const upSlash = await soundsRequest('POST', '/voice/sounds?kind=work&name=a%2Fb.wav', wavBytes)
+  check('文件名带路径分隔符：400 拒绝', upSlash.code === 400, { code: upSlash.code, text: upSlash.text })
+  const upKind = await soundsRequest('POST', '/voice/sounds?kind=evil&name=a.wav', wavBytes)
+  check('kind 不在 work|done|ask：400 拒绝', upKind.code === 400, { code: upKind.code, text: upKind.text })
+  check('被拒的上传都没有落盘', listSounds().length === dirBefore + 1, listSounds().length)
+
+  const g1 = await soundsRequest('GET', '/voice/sounds/' + up1Body.file)
+  check('GET 素材：200 + 正确 Content-Type + 字节一致', g1.code === 200 && g1.mime === 'audio/wav' && Buffer.isBuffer(g1.body) && g1.body.equals(wavBytes), { code: g1.code, mime: g1.mime })
+  const g2 = await soundsRequest('GET', '/voice/sounds/' + up1Body.file)
+  check('GET 只读不删（第二次仍 200——不能复用"取一次即删"的 /voice/audio）', g2.code === 200 && g2.body.equals(wavBytes), g2.code)
+  check('GET mp3 素材：Content-Type = audio/mpeg', (await soundsRequest('GET', '/voice/sounds/' + up2Body.file)).mime === 'audio/mpeg')
+
+  const gTrav = await soundsRequest('GET', '/voice/sounds/%2e%2e%2f%2e%2e%2fpackage.json')
+  check('GET 路径穿越（编码后的 ../）：403 拒绝', gTrav.code === 403, { code: gTrav.code, text: gTrav.text })
+  const gTrav2 = await soundsRequest('GET', '/voice/sounds/..%5C..%5Cwin.ini')
+  check('GET 路径穿越（反斜杠）：403 拒绝', gTrav2.code === 403, { code: gTrav2.code })
+  const gMiss = await soundsRequest('GET', '/voice/sounds/' + 'nope-1234.wav')
+  check('GET 不存在的素材：404', gMiss.code === 404, gMiss.code)
+  const gExt = await soundsRequest('GET', '/voice/sounds/evil.exe')
+  check('GET 非白名单扩展名：415', gExt.code === 415, gExt.code)
+  const gOrigin = await soundsRequest('POST', '/voice/sounds?kind=work&name=a.wav', wavBytes, { origin: 'https://evil.example.com', host: '127.0.0.1:3080' })
+  check('/voice/sounds 同源校验：跨站 POST 403', gOrigin.code === 403, { code: gOrigin.code, text: gOrigin.text })
+
+  // 启动清扫：配置引用的留着；没引用且超过 1 天的删；没引用但还新的留
+  await settings.update('voice', { chime: { enabled: true, work: { enabled: true, source: 'custom', file: 'work-keep.wav' } } })
+  mkdirSync(soundsDir, { recursive: true })
+  const old = (Date.now() - 48 * 60 * 60 * 1000) / 1000
+  writeFileSync(path.join(soundsDir, 'work-keep.wav'), wavBytes)
+  writeFileSync(path.join(soundsDir, 'old-orphan.wav'), wavBytes)
+  writeFileSync(path.join(soundsDir, 'fresh-orphan.wav'), wavBytes)
+  utimesSync(path.join(soundsDir, 'work-keep.wav'), old, old)
+  utimesSync(path.join(soundsDir, 'old-orphan.wav'), old, old)
+  // 再 apply 一次 = 模拟一次 Host 启动（用独立的 webServer 替身，不污染已有路由表）
+  const restartCtx = Object.assign({}, ctx, { webServer: { register: () => {} } })
+  apply(restartCtx, liveConfig)
+  check('启动清扫：未被引用且超过 1 天的素材删掉', !existsSync(path.join(soundsDir, 'old-orphan.wav')))
+  check('启动清扫：配置引用着的旧文件留着', existsSync(path.join(soundsDir, 'work-keep.wav')))
+  check('启动清扫：未被引用但还没满 1 天的留着（防删刚上传未保存的）', existsSync(path.join(soundsDir, 'fresh-orphan.wav')))
+  check('启动清扫：上传过的素材仍在（都还新）', listSounds().length >= 3, listSounds())
+
+  await settings.update('voice', { chime: { enabled: false, volume: 0.3, work: { enabled: false, source: 'default', file: '' } } })
+  check('chime 配置可经 settings.update 写回（设置页保存路径）', liveConfig.chime.get().work.enabled === false && liveConfig.chime.get().enabled === false)
 }
 
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）

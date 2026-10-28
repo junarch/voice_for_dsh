@@ -129,6 +129,20 @@ try {
   for (const k of ['toast.fallback', 'toast.ttsUnavailable', 'toast.ttsTimeout', 'toast.ttsHttp']) {
     if (!zhKeys.includes(k)) throw new Error('missing toast key: ' + k)
   }
+  // 提示音第五层：层头/层体/上传/校验的文案缺一条，界面上就会露出 key 本身
+  const chimeKeys = [
+    'layer.l5.title', 'layer.l5.summary.on', 'layer.l5.summary.off',
+    'row.chimeEnabled', 'row.chimeVolume', 'hint.chime',
+    'chime.work', 'chime.done', 'chime.ask',
+    'chime.source.default', 'chime.source.custom',
+    'chime.upload', 'chime.uploading', 'chime.uploaded', 'chime.uploadFail',
+    'chime.tooLarge', 'chime.tooLong', 'chime.undecodable',
+    'chime.noFile', 'chime.missing', 'chime.preview', 'chime.previewFail',
+    'chime.audioUnavailable', 'chime.rowToggle',
+  ]
+  for (const k of chimeKeys) {
+    if (!zhKeys.includes(k)) throw new Error('missing chime key: ' + k)
+  }
 
   console.log('client contract: uiConversation.events + voice Definition + ' + registrations.length +
     ' slots(带 id、无 select) + turnTail claim 逻辑 + i18n(' + zhKeys.length + ' keys) OK')

@@ -23,7 +23,7 @@
  *    → 用 Object.assign({}, prepared.config, { system, messages }) 构造请求
  */
 import z from '@deepseek-ai/schemastery'
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -296,6 +296,82 @@ function resolveEffort(info, configured) {
   return { effort: undefined, mapped: true, note: '模型不支持思考档位 "' + configured + '"，已忽略该设置' }
 }
 
+// ---- 提示音素材（/voice/sounds）：落盘、读取、启动清扫 --------------------------------
+/** 提示音三类：工作音 / 完成音 / 提问音（设置页第五层；对应 Config.chime.*）。 */
+const CHIME_KINDS = ['work', 'done', 'ask']
+/** 单次上传上限（与前端「>10MB 直接拒」同一口径；Host 是最后一道闸）。 */
+const CHIME_MAX_BYTES = 10 * 1024 * 1024
+/** 孤儿清扫：配置未引用、且超过 1 天没动过的素材删掉。 */
+const CHIME_ORPHAN_AGE_MS = 24 * 60 * 60 * 1000
+/** 扩展名 → Content-Type（只认下面这份白名单）。 */
+const CHIME_MIME = {
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+  aac: 'audio/aac', flac: 'audio/flac', opus: 'audio/ogg', webm: 'audio/webm',
+}
+
+/** 提示音素材目录：<DSH_HOME>/voice/sounds（模型在同级 voice/models）。 */
+function chimeSoundsDir() {
+  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+  return path.join(home, 'voice', 'sounds')
+}
+
+/** 按文件头认容器（魔数白名单）；认不出返回 ''。
+ *  扩展名只由内容决定，不信上传的文件名——文件名可以随便写，字节不会。 */
+function detectChimeExt(buf) {
+  if (!buf || buf.length < 4) return ''
+  const tag = (off, s) => off + s.length <= buf.length && buf.toString('latin1', off, off + s.length) === s
+  if (tag(0, 'fLaC')) return 'flac'
+  if (tag(0, 'OggS')) return tag(28, 'OpusHead') ? 'opus' : 'ogg'
+  if (tag(0, 'RIFF') && tag(8, 'WAVE')) return 'wav'
+  if (tag(4, 'ftyp')) return 'm4a'
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return 'webm'
+  if (tag(0, 'ID3')) return 'mp3'
+  // 0xFF Ex：第二字节的 layer 位为 0 是 ADTS（AAC），否则是 MPEG 帧同步（MP3）
+  if (buf.length >= 2 && buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return (buf[1] & 0x06) === 0 ? 'aac' : 'mp3'
+  return ''
+}
+
+/** 上传文件名白名单：只做校验，落盘名是 <kind>-<uuid>.<ext>（原名不参与拼路径）。
+ *  拒绝路径分隔符、`..`、控制字符与超长名——它们只可能是穿越尝试或误传。 */
+function isValidChimeName(name) {
+  const s = String(name == null ? '' : name)
+  if (!s || s.length > 120) return false
+  if (s.includes('..') || /[/\\]/.test(s)) return false
+  return /^[\w.\- ()\u4e00-\u9fa5]+$/.test(s)
+}
+
+/** 启动清扫：目录里没有被配置引用的、且超过 1 天的素材删掉（删不掉不影响启动）。
+ *  文件名带 uuid，每次上传都是新文件，旧文件靠这里回收。 */
+function sweepChimeSounds(referenced) {
+  const dir = chimeSoundsDir()
+  const report = { removed: [], kept: [] }
+  if (!existsSync(dir)) return report
+  for (const name of readdirSync(dir)) {
+    const full = path.join(dir, name)
+    let st
+    try { st = statSync(full) } catch { continue }
+    if (!st.isFile()) continue
+    if (referenced.has(name) || Date.now() - st.mtimeMs < CHIME_ORPHAN_AGE_MS) { report.kept.push(name); continue }
+    try { unlinkSync(full); report.removed.push(name) } catch { report.kept.push(name) }
+  }
+  return report
+}
+
+/** 一路提示音配置的默认值（每行三个字段；带默认值即向后兼容）。 */
+function chimeRowDefault() {
+  return { enabled: false, source: 'default', file: '' }
+}
+function chimeRowSchema() {
+  return z.object({
+    enabled: z.boolean().default(false),   // 这一类音响不响
+    source: z.string().default('default'), // default=程序合成（不随包带文件）| custom=用户上传
+    file: z.string().default(''),          // custom 时：<DSH_HOME>/voice/sounds 下的文件名
+  }).default(chimeRowDefault())
+}
+function chimeConfigDefaults() {
+  return { enabled: false, volume: 0.3, work: chimeRowDefault(), done: chimeRowDefault(), ask: chimeRowDefault() }
+}
+
 /** voice 插件的 Config：导出的 Config 声明字段，插件体收第二参 config（= 解析后的引用）。
  *  字段一次定稿，避免迁移（docs/pipeline.md §6）。
  *  volatile = 该字段经 ctx.settings.update 写入时直接提交进运行中的引用（不重挂插件），
@@ -365,6 +441,15 @@ const Config = z.object({
     local: { sid: LOCAL_DEFAULT_SID, speed: 1, numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
+  // 提示音（设置页第五层）：默认全关；三种音各自可换自定义素材。
+  // file 只存 <DSH_HOME>/voice/sounds 下的文件名（相对路径 → 重启后仍读得到，也不怕 DSH_HOME 搬家）。
+  chime: z.object({
+    enabled: z.boolean().default(false),
+    volume: z.number().default(0.3), // 总音量 0–1（客户端 master gain）
+    work: chimeRowSchema(),
+    done: chimeRowSchema(),
+    ask: chimeRowSchema(),
+  }).default(chimeConfigDefaults()).volatile(),
 })
 
 const inject = ['settings', 'webServer']
@@ -389,6 +474,7 @@ function apply(ctx, config) {
       transcribe: config.transcribe.get(),
       tts: config.tts.get(),
       stopOnNewTurn: config.stopOnNewTurn.get(),
+      chime: config.chime.get(),
     }
   }
 
@@ -408,6 +494,16 @@ function apply(ctx, config) {
     },
   })
   try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
+
+  // 提示音素材清扫：配置里不再引用的、且超过 1 天的文件删掉（设置页换音源后就地回收）。
+  try {
+    const chimeNow = readConfig().chime || {}
+    const referenced = new Set(CHIME_KINDS.map((k) => String((chimeNow[k] || {}).file || '')).filter(Boolean))
+    const swept = sweepChimeSounds(referenced)
+    if (swept.removed.length) console.log('[voice] chime orphan sweep removed ' + swept.removed.length + ' file(s)')
+  } catch (error) {
+    console.warn('[voice] chime orphan sweep skipped:', error && error.message || error)
+  }
 
   // ---- session/event：信封结构，payload 在 event.data ------------------------
   function payloadOf(event) {
@@ -1962,7 +2058,80 @@ function apply(ctx, config) {
     },
   })
 
-  console.log('[voice] host half applied: /voice/api/* + /voice/audio/* ready, voice settings namespace registered')
+  // 提示音素材路由：POST /voice/sounds?kind=work|done|ask&name=<原名> 上传；
+  // GET /voice/sounds/<file> 只读不删（素材要能被 <audio>/decodeAudioData 反复取）。
+  // 不复用 /voice/audio（取一次即删）与 /voice/api（限 1MB、只收 JSON）：这里是二进制、可反复取、上限 10MB。
+  ctx.webServer.register({
+    kind: 'prefix',
+    path: '/voice/sounds',
+    handler: async (req, res) => {
+      const sendJson = (code, obj) => {
+        const body = JSON.stringify(obj)
+        res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+        res.end(body)
+      }
+      try {
+        // 同源规则与 /voice/api、/voice/audio 一致
+        if (!isSameOrigin(req)) { sendJson(403, { ok: false, error: 'cross-origin request rejected' }); return }
+        const url = new URL(req.url, 'http://127.0.0.1')
+
+        if (req.method === 'POST') {
+          const kind = String(url.searchParams.get('kind') || '')
+          if (CHIME_KINDS.indexOf(kind) < 0) { sendJson(400, { ok: false, error: 'kind must be work|done|ask' }); return }
+          const name = url.searchParams.get('name') || ''
+          if (!isValidChimeName(name)) { sendJson(400, { ok: false, error: 'invalid file name' }); return }
+          const chunks = []
+          let total = 0
+          for await (const chunk of req) {
+            total += chunk.length
+            if (total > CHIME_MAX_BYTES) { sendJson(413, { ok: false, error: 'payload too large (max 10MB)' }); return }
+            chunks.push(chunk)
+          }
+          if (!total) { sendJson(400, { ok: false, error: 'empty body' }); return }
+          const buf = Buffer.concat(chunks)
+          const ext = detectChimeExt(buf)
+          if (!ext) { sendJson(415, { ok: false, error: 'unsupported audio container' }); return }
+          const dir = chimeSoundsDir()
+          mkdirSync(dir, { recursive: true })
+          const file = kind + '-' + randomUUID() + '.' + ext
+          const target = path.join(dir, file)
+          const tmp = path.join(dir, '.' + file + '.tmp')
+          writeFileSync(tmp, buf)          // 先写临时文件再改名：GET 永远看不到半个文件
+          renameSync(tmp, target)
+          sendJson(200, { ok: true, file, url: '/voice/sounds/' + file, ext, bytes: total })
+          return
+        }
+
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          let raw = ''
+          try { raw = decodeURIComponent(url.pathname.slice('/voice/sounds/'.length)) } catch { raw = '' }
+          // 路径穿越：解码后仍出现分隔符、`..` 或点在开头一律拒
+          if (!raw || raw.includes('/') || raw.includes('\\') || raw.includes('..') || raw.charAt(0) === '.') {
+            sendJson(403, { ok: false, error: 'invalid sound file name' }); return
+          }
+          const dir = path.resolve(chimeSoundsDir())
+          const full = path.resolve(dir, raw)
+          if (full !== path.join(dir, raw) || full.indexOf(dir + path.sep) !== 0) {
+            sendJson(403, { ok: false, error: 'invalid sound file path' }); return
+          }
+          const ext = path.extname(full).slice(1).toLowerCase()
+          const mime = CHIME_MIME[ext]
+          if (!mime) { sendJson(415, { ok: false, error: 'unsupported sound extension' }); return }
+          if (!existsSync(full)) { sendJson(404, { ok: false, error: 'sound not found' }); return }
+          const buf = readFileSync(full)
+          res.writeHead(200, { 'Content-Type': mime, 'Content-Length': buf.length, 'Cache-Control': 'no-store' })
+          res.end(req.method === 'HEAD' ? undefined : buf)
+          return
+        }
+
+        sendJson(405, { ok: false, error: 'GET or POST only' })
+      } catch (error) {
+        sendJson(500, { ok: false, error: String(error && error.message || error).slice(0, 300) })
+      }
+    },
+  })
+
+  console.log('[voice] host half applied: /voice/api/* + /voice/audio/* + /voice/sounds/* ready, voice settings namespace registered')
 }
 
 export { apply, inject, Config, splitForStream }

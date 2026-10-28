@@ -112,6 +112,22 @@ window.__ModuleLoader__.load({
       "row.loudness": "音量",
       "streaming.degraded": "双向流不可用，已回退整段合成",
       "dialect.hint": "方言：8 种方言均走 vv 音色 + explicit_dialect（实测生效）；音色/语种会自动互相适配（不锁定）",
+      "layer.l5.title": "提示音",
+      "layer.l5.summary.on": "开 · {n}/3 种 · 音量 {volume}%", "layer.l5.summary.off": "关",
+      "row.chimeEnabled": "开启提示音", "row.chimeVolume": "总音量",
+      "hint.chime": "有会话在跑就循环工作音，会话结束响一次完成音，DSH 弹出提问等你回答响一次提问音；与朗读互不影响。",
+      "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
+      "chime.source.default": "默认音（程序合成）", "chime.source.custom": "自定义",
+      "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
+      "chime.uploadFail": "❌ 上传失败：", "chime.uploadFailUnknown": "未知错误",
+      "chime.tooLarge": "文件超过 10MB，换个小一点的",
+      "chime.tooLong": "音频超过 60 秒（{seconds} 秒），换短一点的",
+      "chime.undecodable": "这个格式浏览器解不了",
+      "chime.noFile": "还没上传文件",
+      "chime.missing": "⚠ 这个音源读不到或解不了，已回落到默认音",
+      "chime.preview": "▶ 试听", "chime.previewFail": "试听失败",
+      "chime.audioUnavailable": "当前浏览器不支持 Web Audio，提示音用不了",
+      "chime.rowToggle": "开关{name}",
     };
     var en = {
       "read.title": "Transcribe and read this message aloud", "read.busyTitle": "Transcribing, please wait",
@@ -207,6 +223,22 @@ window.__ModuleLoader__.load({
       "row.loudness": "Loudness",
       "streaming.degraded": "Bidirection unavailable; fell back to one-shot synthesis",
       "dialect.hint": "Dialects: all 8 dialects use vv speaker + explicit_dialect (tested working); voice & language auto-adapt to each other (never locked)",
+      "layer.l5.title": "Chimes",
+      "layer.l5.summary.on": "On · {n}/3 sounds · volume {volume}%", "layer.l5.summary.off": "Off",
+      "row.chimeEnabled": "Enable chimes", "row.chimeVolume": "Master volume",
+      "hint.chime": "Loop a work sound while sessions run, a done sound when one finishes, and an ask sound when DSH is waiting on your answer. Independent of readout.",
+      "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
+      "chime.source.default": "Default (synthesized)", "chime.source.custom": "Custom",
+      "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
+      "chime.uploadFail": "❌ Upload failed: ", "chime.uploadFailUnknown": "Unknown error",
+      "chime.tooLarge": "File is over 10MB - pick a smaller one",
+      "chime.tooLong": "Audio is over 60 seconds ({seconds}s) - pick a shorter one",
+      "chime.undecodable": "This browser cannot decode that format",
+      "chime.noFile": "No file uploaded yet",
+      "chime.missing": "⚠ This sound file is unreadable or undecodable; falling back to the default sound",
+      "chime.preview": "▶ Preview", "chime.previewFail": "Preview failed",
+      "chime.audioUnavailable": "This browser has no Web Audio support; chimes are unavailable",
+      "chime.rowToggle": "Toggle {name}",
     };
     var T = (k) => k; // apply 时绑定 locale
     function t(k) { return T(k); }
@@ -933,6 +965,454 @@ window.__ModuleLoader__.load({
       },
     };
 
+    // ---------- 提示音（设置页第五层；独立 AudioContext，不碰播报链） ----------
+    // 信号全部来自客户端 uiSession.sessionStatus（Map<sessionId, {running, pendingInteraction, completionUnread}>，
+    // 有 getSnapshot/subscribe）：
+    //  - 工作音：顶层会话 running 计数 0→>0 起、>0→0 停
+    //  - 完成音：顶层会话 running 真→假（不用 turn/end——那个只服务自动播报）
+    //  - 提问音：pendingInteraction.kind 为 question / plan-review；审批（kind=approval）不响
+    // 子代理也会往同一个 store 写 status，必须 join ctx.sessions.list，按 origin/parentId 只认顶层会话。
+    // 上下文必须独立：现有播报上下文固定 24kHz、且会被 stopPlaybackOnly 连坐（播报一停提示音跟着哑）。
+    var CHIME_KINDS = ["work", "done", "ask"];
+    var CHIME_VOLUME_DEFAULT = 0.3;
+    var CHIME_MIN_LOOP_SEC = 2;         // 素材短于 2 秒时 loop 会变蜂鸣 → 改成每 2 秒一次
+    var CHIME_DONE_SUPPRESS_MS = 1000;  // 完成音抑制窗：一段时间内多次结束只响一次
+    var CHIME_MAX_BYTES = 10 * 1024 * 1024;
+    var CHIME_MAX_SEC = 60;
+
+    var pluginCtx = null;      // apply 时记下：uiSession / sessions 都是可选服务
+    var chimeCfg = null;       // 归一化后的 chime 配置（Host 的 Config.chime 快照）
+    var chimeCtx = null;       // 提示音专用 AudioContext
+    var chimeMaster = null;    // 总音量 master gain
+    var chimeNodes = {};       // slot → { src, gain }（正在响的实例；先停后起）
+    var chimeBuffers = {};     // "kind|file" → AudioBuffer（默认音同样缓存）
+    var chimeWorkTimer = null; // 短素材工作音的重复定时器
+    var chimeWorkPending = false; // 工作音素材正在加载（防同一次状态变化叠两条）
+    var chimeWorkGen = 0;      // 加载途中被停过 → 迟到的加载结果不许起播
+    var chimeDoneAt = 0;       // 上一次完成音的时间（抑制窗）
+    var chimePrevRunning = {}; // sessionId → 上一次 running（判真→假）
+    var chimeAskKeys = {};     // interaction key → true（同一交互只响一次）
+    var chimeMissing = {};     // kind → 配置里的文件名（读不到、已回落默认音）
+    var chimePreheat = null;   // 首次交互预热用的监听器
+
+    function chimeSupported() {
+      return typeof window !== "undefined" && !!(window.AudioContext || window.webkitAudioContext);
+    }
+    /** 可选服务查找：没有该服务时返回 undefined（缺 uiSession 就静默降级，不影响播报）。 */
+    function clientService(name) {
+      var c = pluginCtx;
+      if (!c) return undefined;
+      try {
+        if (typeof c.get === "function") {
+          var hit = c.get(name);
+          if (hit !== undefined) return hit;
+        }
+      } catch (e) { /* 服务未提供：按缺失处理 */ }
+      try { return c[name]; } catch (e2) { return undefined; }
+    }
+    function normalizeChimeRow(row) {
+      var r = row && typeof row === "object" ? row : {};
+      return {
+        enabled: !!r.enabled,
+        source: r.source === "custom" ? "custom" : "default",
+        file: typeof r.file === "string" ? r.file : "",
+      };
+    }
+    function normalizeChimeCfg(chime) {
+      var c = chime && typeof chime === "object" ? chime : {};
+      var vol = typeof c.volume === "number" && isFinite(c.volume) ? c.volume : CHIME_VOLUME_DEFAULT;
+      return {
+        enabled: !!c.enabled,
+        volume: Math.max(0, Math.min(1, vol)),
+        work: normalizeChimeRow(c.work),
+        done: normalizeChimeRow(c.done),
+        ask: normalizeChimeRow(c.ask),
+      };
+    }
+    function chimeRowEnabled(kind) {
+      return !!(chimeCfg && chimeCfg.enabled && chimeCfg[kind] && chimeCfg[kind].enabled);
+    }
+    function chimeSourceOf(row) {
+      return row && row.source === "custom" ? String(row.file || "") : "";
+    }
+    function ensureChimeCtx() {
+      if (!chimeCtx) {
+        if (!chimeSupported()) return null;
+        try {
+          var Ctor = window.AudioContext || window.webkitAudioContext;
+          chimeCtx = new Ctor();
+          chimeMaster = chimeCtx.createGain();
+          chimeMaster.gain.value = chimeCfg ? chimeCfg.volume : CHIME_VOLUME_DEFAULT;
+          chimeMaster.connect(chimeCtx.destination);
+        } catch (e) {
+          chimeCtx = null;
+          chimeMaster = null;
+          return null;
+        }
+      }
+      if (chimeCtx.state === "suspended") {
+        try { var p = chimeCtx.resume(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+      }
+      return chimeCtx;
+    }
+    function applyChimeVolume() {
+      if (chimeMaster && chimeCfg) chimeMaster.gain.value = chimeCfg.volume;
+    }
+    /** 默认三音：程序合成（正弦振荡 + 指数衰减包络），不随包带音频文件。 */
+    var CHIME_SYNTH = {
+      work: { total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
+      done: { total: 0.7, notes: [{ f: 1046.5, t: 0, d: 0.18, g: 0.55 }, { f: 1318.51, t: 0.16, d: 0.44, g: 0.5 }] },
+      ask: { total: 0.62, notes: [{ f: 880.0, t: 0, d: 0.2, g: 0.55 }, { f: 1108.73, t: 0.18, d: 0.36, g: 0.5 }] },
+    };
+    function synthChimeBuffer(ctx, kind) {
+      var spec = CHIME_SYNTH[kind] || CHIME_SYNTH.done;
+      var rate = ctx.sampleRate || 44100;
+      var len = Math.max(1, Math.round(spec.total * rate));
+      var buffer = ctx.createBuffer(1, len, rate);
+      var data = buffer.getChannelData(0);
+      for (var n = 0; n < spec.notes.length; n++) {
+        var note = spec.notes[n];
+        var start = Math.round(note.t * rate);
+        var dur = Math.max(1, Math.round(note.d * rate));
+        for (var i = 0; i < dur; i++) {
+          var idx = start + i;
+          if (idx >= len) break;
+          var t = i / rate;
+          var env = Math.exp(-4.5 * (i / dur));          // 衰减包络
+          var attack = Math.min(1, t / 0.004);           // 4ms 起音，避免爆音
+          data[idx] += Math.sin(2 * Math.PI * note.f * t) * env * attack * note.g;
+        }
+      }
+      var peak = 0;
+      var k;
+      for (k = 0; k < len; k++) { var a = Math.abs(data[k]); if (a > peak) peak = a; }
+      if (peak > 0.95) { var s = 0.95 / peak; for (k = 0; k < len; k++) data[k] *= s; }
+      return buffer;
+    }
+    /** 取某类音的 AudioBuffer：默认音现场合成；自定义音 GET /voice/sounds/<file> 后解码。
+     *  文件读不到/解不了 → 回落默认音（记进 chimeMissing 供设置页提示），不静默哑掉。 */
+    function chimeBufferFor(kind, row) {
+      var ctx = ensureChimeCtx();
+      if (!ctx) return Promise.resolve(null);
+      var file = chimeSourceOf(row);
+      var key = kind + "|" + (file || "default");
+      if (chimeBuffers[key]) {
+        if (file) delete chimeMissing[kind];
+        return Promise.resolve(chimeBuffers[key]);
+      }
+      if (!file) {
+        chimeBuffers[key] = synthChimeBuffer(ctx, kind);
+        return Promise.resolve(chimeBuffers[key]);
+      }
+      return fetch("/voice/sounds/" + encodeURIComponent(file), { cache: "no-store" }).then(function (res) {
+        if (!res || !res.ok) throw new Error("sound not found: " + file);
+        return res.arrayBuffer();
+      }).then(function (raw) {
+        return new Promise(function (resolve, reject) {
+          var ret = ctx.decodeAudioData(raw, resolve, reject);
+          if (ret && ret.then) ret.then(resolve, reject);
+        });
+      }).then(function (buffer) {
+        chimeBuffers[key] = buffer;
+        delete chimeMissing[kind];
+        return buffer;
+      }).catch(function () {
+        chimeMissing[kind] = file;
+        var fallback = synthChimeBuffer(ctx, kind);
+        chimeBuffers[kind + "|default"] = fallback;
+        return fallback;
+      });
+    }
+    /** 停掉某 slot 正在响的实例（loop 与一次性共用这张表）。 */
+    function stopChime(slot) {
+      var node = chimeNodes[slot];
+      if (!node) return;
+      chimeNodes[slot] = null;
+      try { node.src.onended = null; } catch (e) {}
+      try { node.src.stop(); } catch (e) {}
+      try { node.src.disconnect(); } catch (e) {}
+      try { node.gain.disconnect(); } catch (e) {}
+    }
+    function stopWorkTimer() {
+      if (!chimeWorkTimer) return;
+      clearInterval(chimeWorkTimer);
+      chimeWorkTimer = null;
+    }
+    function stopChimes() {
+      stopWorkTimer();
+      for (var i = 0; i < CHIME_KINDS.length; i++) stopChime(CHIME_KINDS[i]);
+      // 试听走独立 slot（试听不打断正在响的工作音，但总开关关掉时要一起停）
+      for (var slot in chimeNodes) { if (slot.indexOf("preview:") === 0) stopChime(slot); }
+    }
+    /** 播一次（loop=true 循环）；先停同类旧实例——重置时不许两条叠着。
+     *  opts.buffer 已预载时直接播（工作音避免"加载途中又来一次状态变化"叠两条）；
+     *  opts.slot 用于试听另开一条通道（不打断正在响的工作音）。 */
+    function playChime(kind, opts) {
+      var options = opts || {};
+      var ctx = ensureChimeCtx();
+      if (!ctx) return Promise.resolve(false);
+      if (options.needsCfg !== false && !chimeRowEnabled(kind)) return Promise.resolve(false);
+      var loading = options.buffer
+        ? Promise.resolve(options.buffer)
+        : chimeBufferFor(kind, options.row || (chimeCfg && chimeCfg[kind]));
+      return loading.then(function (buffer) {
+        if (!buffer || !chimeCtx) return false;
+        if (options.needsCfg !== false && !chimeRowEnabled(kind)) return false;
+        var slot = options.slot || kind;
+        stopChime(slot);
+        var src = chimeCtx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = !!options.loop;
+        var gain = chimeCtx.createGain();
+        gain.gain.value = typeof options.gain === "number" ? Math.max(0, Math.min(1, options.gain)) : 1;
+        src.connect(gain);
+        gain.connect(options.destination || chimeMaster);
+        var node = { src: src, gain: gain };
+        chimeNodes[slot] = node;
+        src.onended = function () { if (chimeNodes[slot] === node) chimeNodes[slot] = null; };
+        try { src.start(0); } catch (e) { chimeNodes[slot] = null; return false; }
+        return true;
+      }).catch(function () { return false; });
+    }
+    /** 工作音：长素材 loop 单条；短素材（<2 秒）每 2 秒响一次。
+     *  pending/gen 两道闸：加载途中又来一次状态变化不许叠第二条，停了以后也不许"迟到起播"。 */
+    function startWorkChime() {
+      if (!chimeRowEnabled("work")) return;
+      if (chimeWorkTimer || chimeNodes.work || chimeWorkPending) return;
+      if (!ensureChimeCtx()) return;
+      chimeWorkPending = true;
+      var gen = ++chimeWorkGen;
+      chimeBufferFor("work", chimeCfg.work).then(function (buffer) {
+        chimeWorkPending = false;
+        if (gen !== chimeWorkGen) return;
+        if (!buffer || chimeWorkTimer || chimeNodes.work) return;
+        if (!chimeRowEnabled("work")) return;
+        if (buffer.duration >= CHIME_MIN_LOOP_SEC) { playChime("work", { loop: true, buffer: buffer }); return; }
+        playChime("work", { buffer: buffer });
+        chimeWorkTimer = setInterval(function () {
+          if (!chimeRowEnabled("work")) { stopWorkTimer(); stopChime("work"); return; }
+          playChime("work", {});
+        }, CHIME_MIN_LOOP_SEC * 1000);
+      }, function () { chimeWorkPending = false; });
+    }
+    function stopWorkChime() {
+      chimeWorkGen++;
+      chimeWorkPending = false;
+      stopWorkTimer();
+      stopChime("work");
+    }
+    function triggerDoneChime() {
+      if (!chimeRowEnabled("done")) return;
+      var now = Date.now();
+      if (now - chimeDoneAt < CHIME_DONE_SUPPRESS_MS) return;
+      chimeDoneAt = now;
+      stopChime("done");                 // 重置：先停旧的，再起新的
+      playChime("done", {});
+    }
+    function triggerAskChime(key) {
+      if (!chimeRowEnabled("ask")) return;
+      if (chimeAskKeys[key]) return;     // 按 interaction key 去重
+      chimeAskKeys[key] = true;
+      stopChime("ask");
+      playChime("ask", {});
+    }
+    /** 只认顶层会话：子代理也写同一个 status，不按 origin/parentId 过滤就会多响。 */
+    function isTopLevelSession(id) {
+      var sessions = clientService("sessions");
+      var list = null;
+      try {
+        if (sessions && sessions.list && sessions.list.getSnapshot) list = sessions.list.getSnapshot();
+      } catch (e) { return true; }
+      if (!list || !list.byId) return true;      // 拿不到会话表：不因缺信息丢音
+      var row = list.byId[id];
+      if (!row) return true;                     // status 里可能有列表还没收到的 id
+      if (row.origin === "subagent") return false;
+      if (row.parentId !== undefined && row.parentId !== null) return false;
+      return true;
+    }
+    /** 状态对账：work 计数、done 真→假、ask 按 key 去重。 */
+    function chimeTick() {
+      if (!chimeCfg || !chimeCfg.enabled) { stopChimes(); return; }
+      var uiSession = clientService("uiSession");
+      if (!uiSession || !uiSession.sessionStatus) return;   // 缺服务：静默，不影响播报
+      var snap;
+      try { snap = uiSession.sessionStatus.getSnapshot(); } catch (e) { return; }
+      if (!snap || typeof snap.forEach !== "function") return;
+      var runningCount = 0;
+      var liveAsk = {};
+      var seen = {};
+      snap.forEach(function (st, id) {
+        if (isTopLevelSession(id)) {
+          seen[id] = true;
+          var running = !!(st && st.running);
+          if (running) runningCount += 1;
+          if (running) chimePrevRunning[id] = true;
+          else {
+            if (chimePrevRunning[id] === true) triggerDoneChime();
+            chimePrevRunning[id] = false;
+          }
+          var interaction = st && st.pendingInteraction;
+          if (interaction && typeof interaction === "object") {
+            var kind = interaction.kind;
+            if (kind === "question" || kind === "plan-review") {
+              var key = String(interaction.key || (id + ":pending"));
+              liveAsk[key] = true;
+              triggerAskChime(key);
+            }
+          }
+        }
+      });
+      for (var sid in chimePrevRunning) { if (!seen[sid]) delete chimePrevRunning[sid]; }
+      for (var k in chimeAskKeys) { if (!liveAsk[k]) delete chimeAskKeys[k]; }
+      if (runningCount > 0) startWorkChime();
+      else stopWorkChime();
+    }
+    /** 应用一份 chime 配置：关掉立即停；打开按当前状态立刻起（不用等下一次状态变化）。 */
+    function applyChimeConfig(chime) {
+      chimeCfg = normalizeChimeCfg(chime);
+      if (chimeCfg.enabled) {
+        ensureChimeCtx();       // 关着的时候不建上下文：不占声卡、不需要手势
+        applyChimeVolume();
+        chimeTick();
+      } else {
+        stopChimes();
+      }
+      if (!chimeRowEnabled("work")) stopWorkChime();
+    }
+    function loadChimeConfig() {
+      return rpc("getConfig").then(function (res) {
+        if (res && res.ok && res.config) applyChimeConfig(res.config.chime);
+        return res;
+      }).catch(function () { return null; });
+    }
+    /** 首次 pointerdown/keydown 预热并 resume 上下文（自动播报没有手势，提示音要提前拿到声卡）。 */
+    function armChimePreheat() {
+      if (typeof document === "undefined" || !chimeSupported()) return;
+      chimePreheat = function () {
+        ensureChimeCtx();
+        if (!chimePreheat) return;
+        document.removeEventListener("pointerdown", chimePreheat, true);
+        document.removeEventListener("keydown", chimePreheat, true);
+        chimePreheat = null;
+      };
+      document.addEventListener("pointerdown", chimePreheat, true);
+      document.addEventListener("keydown", chimePreheat, true);
+    }
+    function disposeChime() {
+      stopChimes();
+      if (typeof document !== "undefined" && chimePreheat) {
+        document.removeEventListener("pointerdown", chimePreheat, true);
+        document.removeEventListener("keydown", chimePreheat, true);
+      }
+      chimePreheat = null;
+      var ctx = chimeCtx;
+      chimeCtx = null;
+      chimeMaster = null;
+      chimeBuffers = {};
+      chimeNodes = {};
+      if (ctx) { try { ctx.close(); } catch (e) {} }
+    }
+    /** 服务可用就订阅 sessionStatus；缺 uiSession 直接返回（静默降级）。 */
+    function startChimeWatch() {
+      var uiSession = clientService("uiSession");
+      if (!uiSession || !uiSession.sessionStatus) return;
+      var unsubscribe = null;
+      try { unsubscribe = uiSession.sessionStatus.subscribe(chimeTick); } catch (e) { unsubscribe = null; }
+      chimeTick();
+      if (unsubscribe && pluginCtx && typeof pluginCtx.effect === "function") {
+        pluginCtx.effect(function () { return function () { try { unsubscribe(); } catch (e) {} }; }, "voice: chime status");
+      }
+    }
+    /** 探一个素材文件在不在（设置页提示用；HEAD 只问在不在，不下载整段音频）。 */
+    function probeSoundFile(file) {
+      if (!file) return Promise.resolve(true);
+      return fetch("/voice/sounds/" + encodeURIComponent(file), { method: "HEAD", cache: "no-store" })
+        .then(function (res) { return !!(res && res.ok); })
+        .catch(function () { return false; });
+    }
+    /** 试听：按设置页当前的（可能还没保存的）音源与总音量播一次；另开 slot，不打断工作音。 */
+    function previewChime(kind, row, volume) {
+      var ctx = ensureChimeCtx();
+      if (!ctx) return Promise.resolve(false);
+      var vol = typeof volume === "number" && isFinite(volume) ? Math.max(0, Math.min(1, volume)) : (chimeCfg ? chimeCfg.volume : CHIME_VOLUME_DEFAULT);
+      return playChime(kind, {
+        row: normalizeChimeRow(row),
+        needsCfg: false,
+        slot: "preview:" + kind,
+        gain: vol,
+        destination: ctx.destination,
+      });
+    }
+    /** 读时长（<audio> 元数据，不播）；读不到返回 null，由解码那一步给结论。 */
+    function readAudioDuration(file) {
+      return new Promise(function (resolve) {
+        if (typeof Audio === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) { resolve(null); return; }
+        var url = null;
+        try { url = URL.createObjectURL(file); } catch (e) { resolve(null); return; }
+        var audio = new Audio();
+        var done = false;
+        function finish(value) {
+          if (done) return;
+          done = true;
+          try { audio.removeAttribute("src"); audio.load(); } catch (e) {}
+          try { URL.revokeObjectURL(url); } catch (e) {}
+          resolve(value);
+        }
+        audio.preload = "metadata";
+        audio.onloadedmetadata = function () { finish(isFinite(audio.duration) ? audio.duration : null); };
+        audio.onerror = function () { finish(null); };
+        setTimeout(function () { finish(null); }, 5000);
+        audio.src = url;
+      });
+    }
+    /** decodeAudioData 试解一次：浏览器解不了的容器，传上去也播不出来。 */
+    function decodeProbe(file) {
+      var ctx = ensureChimeCtx();
+      if (!ctx || typeof ctx.decodeAudioData !== "function") return Promise.resolve({ ok: true });
+      return file.arrayBuffer().then(function (raw) {
+        return new Promise(function (resolve) {
+          var settled = false;
+          function ok(buffer) { if (settled) return; settled = true; resolve({ ok: true, duration: buffer && buffer.duration || 0 }); }
+          function bad() { if (settled) return; settled = true; resolve({ ok: false }); }
+          try {
+            var ret = ctx.decodeAudioData(raw, ok, bad);
+            if (ret && ret.then) ret.then(ok, bad);
+          } catch (e) { bad(); }
+        });
+      }).catch(function () { return { ok: false }; });
+    }
+    /** 上传体检 → POST：本地先看大小/时长/能不能解码，通过才发（Host 只管大小与魔数）。 */
+    async function uploadChimeSound(kind, file) {
+      if (!file) return { ok: false, error: "empty" };
+      if (file.size > CHIME_MAX_BYTES) return { ok: false, error: "too-large" };
+      var seconds = await readAudioDuration(file);
+      if (typeof seconds === "number" && seconds > CHIME_MAX_SEC) return { ok: false, error: "too-long", seconds: seconds };
+      var probed = await decodeProbe(file);
+      if (!probed.ok) return { ok: false, error: "undecodable" };
+      if (typeof seconds !== "number" && probed.duration > CHIME_MAX_SEC) {
+        return { ok: false, error: "too-long", seconds: probed.duration };
+      }
+      var res = await fetch("/voice/sounds?kind=" + encodeURIComponent(kind) + "&name=" + encodeURIComponent(String(file.name || kind)), {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      var body = null;
+      try { body = await res.json(); } catch (e) {}
+      if (!res.ok || !body || body.ok !== true) {
+        return { ok: false, error: "upload-failed", detail: body && body.error };
+      }
+      return { ok: true, file: body.file };
+    }
+    function chimeErrorText(out) {
+      if (!out) return t("chime.uploadFailUnknown");
+      if (out.error === "too-large") return t("chime.tooLarge");
+      if (out.error === "too-long") return t("chime.tooLong").replace("{seconds}", String(Math.round(out.seconds || 0)));
+      if (out.error === "undecodable") return t("chime.undecodable");
+      if (out.detail) return String(out.detail);
+      return t("chime.uploadFailUnknown");
+    }
+
     // ---------- 设置页（settings.section: voice）----------
     function Row(props) {
       return React.createElement("div", { className: "dsh-voice-row" },
@@ -1151,6 +1631,82 @@ window.__ModuleLoader__.load({
         React.createElement("p", { className: "dsh-voice-deploy-note" }, note));
     }
 
+    /** 提示音的一行（工作/完成/提问）：开关 + 音源 + 上传 + 试听。
+     *  某行关着时只留开关——音源、上传、试听都不渲染（渐进显隐与上面四层一致）。 */
+    function ChimeRow(props) {
+      var kind = props.kind;
+      var row = props.row || { enabled: false, source: "default", file: "" };
+      var msgPair = React.useState("");
+      var msg = msgPair[0], setMsg = msgPair[1];
+      var busyPair = React.useState(false);
+      var busy = busyPair[0], setBusy = busyPair[1];
+      var missPair = React.useState(false);
+      var missing = missPair[0], setMissing = missPair[1];
+      var fileRef = React.useRef(null);
+      var name = t("chime." + kind);
+      var file = row.source === "custom" ? String(row.file || "") : "";
+
+      // 播放端读不到/解不了会自动回落默认音；这里把"为什么不是你的音"说清楚
+      React.useEffect(function () {
+        var alive = true;
+        if (!file) { setMissing(false); return function () { alive = false; }; }
+        if (chimeMissing[kind] === file) { setMissing(true); return function () { alive = false; }; }
+        probeSoundFile(file).then(function (ok) { if (alive) setMissing(!ok); });
+        return function () { alive = false; };
+      }, [file]);
+
+      async function onPick(e) {
+        var picked = e && e.target && e.target.files ? e.target.files[0] : null;
+        if (e && e.target) e.target.value = "";   // 清掉，同一个文件还能再选一次
+        if (!picked) return;
+        setBusy(true);
+        setMsg("");
+        var out = await uploadChimeSound(kind, picked);
+        setBusy(false);
+        if (!out.ok) { setMsg(t("chime.uploadFail") + chimeErrorText(out)); return; }
+        props.onUploaded(out.file);
+        setMsg(t("chime.uploaded").replace("{file}", out.file));
+      }
+      async function onPreview() {
+        setMsg("");
+        var played = await previewChime(kind, row, props.volume);
+        if (!played) setMsg(t("chime.previewFail"));
+      }
+
+      return React.createElement("div", { className: "dsh-voice-chime-row", "data-chime-kind": kind },
+        React.createElement("div", { className: "dsh-voice-chime-head" },
+          React.createElement("span", { className: "dsh-voice-chime-name" }, name),
+          React.createElement(CheckInput, {
+            value: !!row.enabled,
+            label: t("chime.rowToggle").replace("{name}", name),
+            onChange: function (v) { props.onToggle(v); },
+          }),
+          row.enabled ? React.createElement(SelectInput, {
+            value: row.source === "custom" ? "custom" : "default",
+            onChange: function (v) { props.onSource(v); },
+          },
+            React.createElement("option", { value: "default" }, t("chime.source.default")),
+            React.createElement("option", { value: "custom" }, t("chime.source.custom"))) : null,
+          row.enabled ? React.createElement("button", {
+            className: "dsh-voice-read-btn",
+            onClick: function () { if (fileRef.current) fileRef.current.click(); },
+            disabled: busy,
+          }, busy ? t("chime.uploading") : t("chime.upload")) : null,
+          row.enabled ? React.createElement("input", {
+            ref: fileRef,
+            type: "file",
+            accept: "audio/*",
+            style: { display: "none" },
+            onChange: onPick,
+          }) : null,
+          row.enabled ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: onPreview }, t("chime.preview")) : null),
+        row.enabled && row.source === "custom"
+          ? React.createElement("p", { className: "dsh-voice-chime-file" }, file || t("chime.noFile"))
+          : null,
+        missing ? React.createElement("p", { className: "dsh-voice-chime-warn" }, t("chime.missing")) : null,
+        msg ? React.createElement("p", { className: "dsh-voice-msg" }, msg) : null);
+    }
+
     function VoiceSettingsSection() {
       const cfgPair = React.useState(null);
       const cfg = cfgPair[0];
@@ -1190,6 +1746,7 @@ window.__ModuleLoader__.load({
         rpc("getConfig").then((res) => {
           if (res && res.ok) {
             setCfg(res.config);
+            applyChimeConfig(res.config.chime);
             rpc("routeInfo", { provider: res.config.provider, model: res.config.model }).then((ri) => { if (ri && ri.ok) setInfo(ri); }).catch(() => {});
           } else setMsg(t("settings.loadFail") + (res && res.error ? "：" + String(res.error) : ""));
         }).catch((e) => setMsg(t("settings.loadFail") + "：" + String(e && e.message || e)));
@@ -1197,20 +1754,29 @@ window.__ModuleLoader__.load({
 
       if (!cfg) return React.createElement("div", { className: "dsh-voice-settings" }, msg || "…");
 
-      function setField(path, value) {
+      function setFields(entries) {
         const next = JSON.parse(JSON.stringify(cfg));
-        const keys = path.split(".");
-        let o = next;
-        for (let i = 0; i < keys.length - 1; i++) o = o[keys[i]];
-        o[keys[keys.length - 1]] = value;
+        for (const [path, value] of entries) {
+          const keys = path.split(".");
+          let o = next;
+          for (let i = 0; i < keys.length - 1; i++) o = o[keys[i]];
+          o[keys[keys.length - 1]] = value;
+        }
         setCfg(next);
         setMsg("");
+      }
+      function setField(path, value) {
+        setFields([[path, value]]);
       }
       async function onSave() {
         setBusy(true); setMsg("");
         try {
           const res = await rpc("setConfig", { patch: cfg });
-          if (res && res.ok) { setCfg(res.config); setMsg(t("settings.saved")); }
+          if (res && res.ok) {
+            setCfg(res.config);
+            applyChimeConfig(res.config.chime);
+            setMsg(t("settings.saved"));
+          }
           else setMsg(t("settings.saveFail") + (res && res.error ? String(res.error) : "unknown"));
         } catch (e) { setMsg(t("settings.saveFail") + String(e && e.message || e)); }
         setBusy(false);
@@ -1272,6 +1838,12 @@ window.__ModuleLoader__.load({
       const speakerKnown = voices.some((v) => v.id === cfg.tts.volcengine.speaker);
       // local 子配置（旧 Host/缓存无该对象时补默认，避免 UI 读空崩溃）
       if (!cfg.tts.local) cfg.tts.local = { sid: 48, speed: 1, numThreads: 4, modelDir: "", timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 };
+      // 提示音子配置（旧 Host 没有 chime 时补默认：整层关着，不改变现有行为）
+      if (!cfg.chime) cfg.chime = { enabled: false, volume: 0.3, work: null, done: null, ask: null };
+      CHIME_KINDS.forEach((kind) => {
+        if (!cfg.chime[kind] || typeof cfg.chime[kind] !== "object") cfg.chime[kind] = { enabled: false, source: "default", file: "" };
+        if (typeof cfg.chime.volume !== "number") cfg.chime.volume = 0.3;
+      });
       const kokoroVoiceKnown = kokoroVoices.some((v) => v.id === String(cfg.tts.local.sid));
       // 转写模型路由下拉数据（Host routeInfo 提供；未就绪时退化为文本输入）
       const providerList = info && Array.isArray(info.providers) && info.providers.length ? info.providers : null;
@@ -1345,6 +1917,12 @@ window.__ModuleLoader__.load({
         .replace("{seg}", cfg.tts.local.streaming !== false ? t("layer.value.on") : t("layer.value.off"))
         .replace("{threads}", String(cfg.tts.local.numThreads))
         .replace("{dir}", cfg.tts.local.modelDir ? t("layer.value.custom") : t("layer.value.auto"));
+      const chimeRowsOn = CHIME_KINDS.filter((kind) => cfg.chime[kind] && cfg.chime[kind].enabled).length;
+      const l5Summary = cfg.chime.enabled
+        ? t("layer.l5.summary.on")
+            .replace("{n}", String(chimeRowsOn))
+            .replace("{volume}", String(Math.round(Number(cfg.chime.volume) * 100)))
+        : t("layer.l5.summary.off");
       // 首屏一行状态：只报当前引擎最关键的一件事；本地没装时给下载入口（点开 L2，安装行在层头）
       let statusLine = "";
       let statusCta = false;
@@ -1554,6 +2132,41 @@ window.__ModuleLoader__.load({
               React.createElement(TextInput, { value: cfg.tts.local.modelDir || "", onChange: (v) => setField("tts.local.modelDir", v), placeholder: "自动 / auto" }),
               React.createElement("span", { className: "dsh-voice-dim" }, t("local.modelDirHint"))))),
 
+        // —— L5 提示音：总开关在层头（收起也能开关）；体内 = 总音量 + 三种音各一行 ——
+        React.createElement(Collapse, {
+          id: "l5",
+          title: t("layer.l5.title"),
+          summary: l5Summary,
+          defaultOpen: false,
+          extra: React.createElement(CheckInput, {
+            value: !!cfg.chime.enabled,
+            label: t("row.chimeEnabled"),
+            onChange: (v) => setField("chime.enabled", v),
+          }),
+        },
+          cfg.chime.enabled ? React.createElement(React.Fragment, null,
+            React.createElement("p", { className: "dsh-voice-dim" }, t("hint.chime")),
+            chimeSupported() ? null : React.createElement("p", { className: "dsh-voice-warn" }, t("chime.audioUnavailable")),
+            React.createElement(Row, { label: t("row.chimeVolume") },
+              React.createElement(SliderInput, {
+                value: Number(cfg.chime.volume),
+                onChange: (v) => setField("chime.volume", v),
+                min: 0, max: 1, step: 0.05,
+                format: (v) => Math.round(v * 100) + "%",
+              })),
+            CHIME_KINDS.map((kind) => React.createElement(ChimeRow, {
+              key: kind,
+              kind: kind,
+              row: cfg.chime[kind],
+              volume: Number(cfg.chime.volume),
+              onToggle: (v) => setField("chime." + kind + ".enabled", v),
+              onSource: (v) => setField("chime." + kind + ".source", v),
+              onUploaded: (file) => setFields([
+                ["chime." + kind + ".file", file],
+                ["chime." + kind + ".source", "custom"],
+              ]),
+            }))) : null),
+
         React.createElement("div", { className: "dsh-voice-actions" },
           React.createElement("button", { className: "dsh-voice-read-btn on", onClick: onSave, disabled: busy }, t("settings.save")),
           React.createElement("button", { className: "dsh-voice-read-btn", onClick: onRefreshRoute, disabled: busy }, t("settings.refresh")),
@@ -1564,6 +2177,7 @@ window.__ModuleLoader__.load({
 
     // ---------- apply ----------
     function apply(ctx) {
+      pluginCtx = ctx;
       // i18n 词典
       if (ctx.locale && ctx.locale.register && ctx.locale.bind) {
         ctx.effect(() => ctx.locale.register(NS, { zh, en }), "voice: dictionaries");
@@ -1603,6 +2217,12 @@ window.__ModuleLoader__.load({
           ".dsh-voice-layer-body{display:flex;flex-direction:column;gap:2px;padding:2px 0 4px;}",
           ".dsh-voice-status{margin:2px 0 0 120px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;opacity:.75;}",
           ".dsh-voice-sub{margin-left:120px;padding-left:10px;border-left:1px solid rgba(127,127,127,.18);}",
+          // 提示音三行：行内开关 + 音源 + 上传 + 试听（关着时整行只剩开关）
+          ".dsh-voice-chime-row{display:flex;flex-direction:column;gap:2px;padding:2px 0 2px 120px;}",
+          ".dsh-voice-chime-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
+          ".dsh-voice-chime-name{flex:none;min-width:58px;opacity:.8;}",
+          ".dsh-voice-chime-file{margin:0;max-width:420px;font-size:12px;opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+          ".dsh-voice-chime-warn{margin:0;font-size:12px;color:#d97706;}",
           ".dsh-voice-row{display:flex;align-items:flex-start;gap:10px;padding:4px 0;}",
           ".dsh-voice-label{flex:none;width:110px;text-align:right;padding-top:4px;opacity:.8;}",
           ".dsh-voice-field{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
@@ -1696,6 +2316,13 @@ window.__ModuleLoader__.load({
         { name: "shell.overlay", id: "voice-toast", order: 40, label: "语音提示" },
         VoiceToast,
       ));
+
+      // 提示音：独立 AudioContext + sessionStatus 订阅。
+      // uiSession / sessions 都是可选服务：缺了就静默不发提示音，播报链完全不受影响。
+      ctx.effect(() => () => { try { disposeChime(); } catch (e) {} }, "voice: chime dispose");
+      armChimePreheat();
+      loadChimeConfig();
+      startChimeWatch();
 
       console.log("[voice] client half applied (icons + badge + i18n + resilience)");
     }

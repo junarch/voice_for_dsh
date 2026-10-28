@@ -335,6 +335,12 @@ voice:
       # 历史字段 baseUrl / voice / autoStart / pythonPath 已随 Python 服务退役：
       #   读到也不再生效（schema 里已删），存量配置里的值会被忽略、下次保存时被清掉。
   stopOnNewTurn: true
+  chime:                      # 提示音（设置页第五层）；默认整层关闭，与朗读互不依赖
+    enabled: false
+    volume: 0.3               # 总音量 0–1（客户端 master gain）
+    work: { enabled: false, source: default, file: "" }   # 工作音：顶层会话在跑时循环
+    done: { enabled: false, source: default, file: "" }   # 完成音：顶层会话 running 真→假
+    ask:  { enabled: false, source: default, file: "" }   # 提问音：question / plan-review（审批不算）
 ```
 
 ### 6.1 配置演进约定（升级纪律）
@@ -345,6 +351,31 @@ voice:
 2. **改字段语义 / 删字段** → 必须加兼容层（读新名、读不到读旧名，如 `pitchOf` 的 `pitch`→`pitchLevel`）+ **升大版本** + CHANGELOG 顶部写"升级指引"；
 3. **字段淘汰优先"UI 隐藏 + schema 保留"**（零风险、向后兼容）；确需真删才写迁移；
 4. **兼容/归一逻辑集中在 `lib/voice-compat.js`**（`ttsProviderOf`/`pitchOf`/`normalizeVoiceConfig`），新增归一只往这里加；Client 半同步维护内联镜像。
+
+### 6.2 提示音（chime）
+
+- **信号只从客户端来**，Host 不推送：`uiSession.sessionStatus`（`Map<sessionId, {running, pendingInteraction, completionUnread}>`，
+  有 `getSnapshot/subscribe`）。三种音全部由这个快照对账得出，`turn/end` 不参与（它只服务自动播报）。
+- **工作音**：顶层会话 `running` 计数 `0→>0` 起、`>0→0` 停。素材 ≥2 秒用 `loop=true` 单条循环；
+  短于 2 秒不 loop（会变蜂鸣），改成每 2 秒响一次。
+- **完成音**：顶层会话 `running` 由真变假触发；领先播放 + 1 秒抑制窗（多条会话几乎同时结束只响一次）。
+- **提问音**：`pendingInteraction.kind` 只认 `question` 与 `plan-review`；**审批（`approval`）不响**。
+  按 interaction `key` 去重，交互消失时清 key（同一个 key 再出现会再响）。
+- **只认顶层会话**：子代理也会写同一个 status store，必须 join `ctx.sessions.list` 的快照，
+  过滤 `origin === 'subagent'` 与带 `parentId` 的行；拿不到会话表时按顶层处理（不因缺信息丢音）。
+- **上下文独立**：提示音用自己的 `AudioContext` + master gain。播报上下文固定 24kHz 且会被
+  `stopPlaybackOnly` 连坐，两者不能共用；提示音不参与播报的停止/中断，播报也压不掉提示音（叠放）。
+- **默认三音程序合成**（正弦振荡 + 指数衰减包络，按上下文缓存），不随包带音频文件；自定义音走
+  `GET /voice/sounds/<file>` 取回后 `decodeAudioData` 解码，读不到时回落默认音（设置页同时提示）。
+- **素材存储**：`POST /voice/sounds?kind=work|done|ask&name=<原名>` 上传（`application/octet-stream`，
+  累加 ≤10MB，魔数白名单 mp3/wav/ogg/m4a/aac/flac/opus/webm，文件名白名单并拒绝 `..`），
+  落盘 `<DSH_HOME>/voice/sounds/<kind>-<uuid>.<ext>`（tmp + rename，GET 永远看不到半个文件）；
+  config 里 `chime.*.file` 只存**文件名**（相对路径 → 重启后仍读得到，DSH_HOME 搬家也不丢）。
+  `GET /voice/sounds/<file>` 只读不删（要反复取），按扩展名给 Content-Type，拒绝路径穿越。
+- **启动清扫**：目录里未被 `chime.*.file` 引用、且超过 1 天的文件删掉；引用着的、以及刚上传还没保存的都留着。
+- **前端先体检再上传**：`new Audio(URL.createObjectURL(file))` 读时长 >60 秒直接拒；
+  `decodeAudioData` 试解一次，解不了提示"这个格式浏览器解不了"；通过后才 POST。Host 只管大小与魔数。
+- **缺 `uiSession` 服务时静默降级**：不建上下文、不发提示音，播报链完全不受影响。
 
 ## 7. 必须守住的不变式（regression 防线）
 
@@ -382,6 +413,12 @@ voice:
     完整稿必须落缓存，保证下次点击零 LLM（"听两秒就停"不能变成每次都从头转写）。
 19. **段落情感指令必须有成本上限**——每两句话一次 LLM 会让长稿的辅助调用数失控；
     上限 `MAX_PARAGRAPH_INSTRUCTIONS` 之外沿用最后一次指令，run 停止后不再发起。
+20. **提示音不得与播报共用播放链**——独立 `AudioContext`（不指定 24kHz）+ 独立实例表；
+    提示音不受 `stopPlaybackOnly`/停止播报影响，播报也不会被提示音打断（两者叠放）。
+21. **提示音只认顶层会话与提问交互**——按 `ctx.sessions.list` 过滤 `origin==='subagent'` 与带 `parentId` 的行；
+    `pendingInteraction` 只认 `question`/`plan-review`，**审批 `approval` 不响**；缺 `uiSession` 时静默降级。
+22. **提示音素材只能落在 `<DSH_HOME>/voice/sounds`**——上传按魔数认格式（不信扩展名）、≤10MB、
+    文件名白名单拒绝 `..` 与路径分隔符；GET 只读不删、拒绝路径穿越；未被配置引用且超过 1 天的文件在启动时清扫。
 
 ## 8. 设计决策（为什么）
 
