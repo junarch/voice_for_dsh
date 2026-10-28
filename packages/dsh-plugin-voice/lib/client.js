@@ -43,6 +43,9 @@ window.__ModuleLoader__.load({
       "status.browser": "浏览器自带语音：免费，不用装东西",
       "status.volcengine.ok": "豆包：按量计费，试听会真的调用",
       "status.volcengine.noKey": "豆包：还没填 API Key，试听会失败",
+      "status.volcengine.autoNoKey": "豆包：还没填 API Key——自动播报会先失败，再退回浏览器语音",
+      "status.volcengine.gated": "自动播报被成本门控关掉了（autoSpeakCloudTts=false）：把播报引擎切走再切回豆包即可恢复",
+      "gateway.wsHint": " 自定义端点暂不支持边说边播：会整段合成完再播",
       "status.local.installed": "本地模型已装好，可以直接播报",
       "status.local.missing": "本地模型还没装，先下载才能出声",
       "status.local.busy": "正在装本地模型：{percent}%",
@@ -104,6 +107,7 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS 合成失败（服务返回错误）",
       "row.stylePreset": "风格预设", "row.prompt": "转写 prompt",
       "row.rate": "语速 rate", "row.pitch": "音调 pitch", "row.voiceName": "语音名 voice",
+      "browser.voiceHint": " 留空=系统默认；名字对不上系统里的语音就按默认音播",
       "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
       "speaker.hint": "只列会说当前语种/方言的音色；手填音色 ID 也能用，但不保证方言 / only voices that speak the picked language; custom ids allowed (dialects untested)",
       "language.hint": "不支持的方言不会出现在这里；固定语种会覆盖原文语言 / unsupported dialects are hidden; fixed language overrides source",
@@ -157,6 +161,9 @@ window.__ModuleLoader__.load({
       "status.browser": "Built-in browser voice: free, nothing to install",
       "status.volcengine.ok": "Doubao: pay per use; preview calls the real API",
       "status.volcengine.noKey": "Doubao: no API Key yet; preview will fail",
+      "status.volcengine.autoNoKey": "Doubao: no API Key — auto-speak fails first, then falls back to the browser voice",
+      "status.volcengine.gated": "Auto-speak is gated off (autoSpeakCloudTts=false): switch the engine away and back to Doubao to restore",
+      "gateway.wsHint": " Custom endpoints cannot stream: audio is synthesized as one piece, then played",
       "status.local.installed": "Local model installed - ready to speak",
       "status.local.missing": "Local model not installed - download it first",
       "status.local.busy": "Installing local model: {percent}%",
@@ -218,6 +225,7 @@ window.__ModuleLoader__.load({
       "toast.ttsHttp": "TTS synthesis failed (service error)",
       "row.stylePreset": "Style preset", "row.prompt": "Transcribe prompt",
       "row.rate": "Rate", "row.pitch": "Pitch", "row.voiceName": "Voice name",
+      "browser.voiceHint": " Empty = system default; a name the system does not know falls back to the default voice",
       "row.apiKey": "apiKey", "row.speaker": "Speaker",
       "speaker.hint": "Only voices that speak the picked language/dialect are listed; custom ids allowed (dialects untested)",
       "language.hint": "Unsupported dialects are hidden here; a fixed language overrides the source language",
@@ -2060,12 +2068,20 @@ window.__ModuleLoader__.load({
             .replace("{volume}", String(Math.round(Number(cfg.chime.volume) * 100)))
         : t("layer.l5.summary.off");
       // 首屏一行状态：只报当前引擎最关键的一件事；本地没装时给下载入口（点开 L2，安装行在层头）
+      // statusWarn：状态行下面再加一句"为什么这个开关现在不起作用"——豆包的两条前置条件
+      // （缺 API Key、成本门控）从界面上看不出来，只报状态不报原因，用户只会以为坏了。
       let statusLine = "";
       let statusCta = false;
+      let statusWarn = "";
       if (ttsEngine === "browser") {
         statusLine = t("status.browser");
       } else if (ttsEngine === "volcengine") {
-        statusLine = cfg.tts.volcengine.apiKey ? t("status.volcengine.ok") : t("status.volcengine.noKey");
+        const hasKey = !!cfg.tts.volcengine.apiKey;
+        statusLine = hasKey
+          ? t("status.volcengine.ok")
+          : (cfg.autoSpeak ? t("status.volcengine.autoNoKey") : t("status.volcengine.noKey"));
+        // 成本门控：只有手改配置/迁移旧配置才会落到"自动播报开着但不碰豆包"这个状态
+        if (cfg.autoSpeak && cfg.autoSpeakCloudTts === false) statusWarn = t("status.volcengine.gated");
       } else if (deployState) {
         const phase = deployState.phase || "idle";
         if (deployState.installed) statusLine = t("status.local.installed");
@@ -2098,7 +2114,8 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "dsh-voice-dim" }, t("hint.autoSpeak"))),
             statusLine ? React.createElement("p", { className: "dsh-voice-status" },
               React.createElement("span", null, statusLine),
-              statusCta ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => setL2Open(true) }, t("cta.install")) : null) : null)),
+              statusCta ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => setL2Open(true) }, t("cta.install")) : null) : null,
+            statusWarn ? React.createElement("p", { className: "dsh-voice-warn" }, statusWarn) : null)),
 
         // —— L2 当前引擎的声音：默认收起，切引擎自动展开；本地安装行常驻层头（收起也不卸载轮询）——
         React.createElement(Collapse, {
@@ -2117,7 +2134,8 @@ window.__ModuleLoader__.load({
               React.createElement(Row, { label: t("row.pitch") },
                 React.createElement(SliderInput, { value: cfg.tts.browser.pitch, onChange: (v) => setField("tts.browser.pitch", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) })),
               React.createElement(Row, { label: t("row.voiceName") },
-                React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }))) : null,
+                React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("browser.voiceHint")))) : null,
 
             // —— 本地 Kokoro（中英，免费；安装行在层头，收起也不卸载轮询）——
             ttsEngine === "local" ? React.createElement(React.Fragment, null,
@@ -2156,6 +2174,10 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "dsh-voice-dim" }, t("gateway.hint"))),
             (cfg.tts.volcengine.gateway === "custom" ? React.createElement(Row, { label: t("row.httpUrl") },
               React.createElement(TextInput, { value: cfg.tts.volcengine.httpUrl || "", onChange: (v) => setField("tts.volcengine.httpUrl", v), placeholder: "https://…/api/v3/tts/unidirectional" })) : null),
+            // 自定义端点没有双向流地址（wsUrl 无界面）时，边说边播会静默失效——在这里说明降级后果
+            (cfg.tts.volcengine.gateway === "custom" && !cfg.tts.volcengine.wsUrl
+              ? React.createElement("p", { className: "dsh-voice-dim" }, t("gateway.wsHint"))
+              : null),
             React.createElement(Row, { label: t("row.apiKey") },
               React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
             React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
@@ -2247,8 +2269,9 @@ window.__ModuleLoader__.load({
                   onChange: (e) => isCustom && setField("transcribe.prompt", e.target.value),
                 })))) : null),
 
-        // —— L4 高级：本地合成细节（标题带当前值摘要）——
-        React.createElement(Collapse, {
+        // —— L4 高级：本地合成细节（标题带当前值摘要）；三项都只对本地 Kokoro 生效，
+        //    换到豆包/系统 TTS 时整层不出现，免得让人以为在线合成也吃 CPU 线程 ——
+        ttsEngine === "local" ? React.createElement(Collapse, {
           id: "l4",
           title: t("layer.l4.title"),
           summary: l4Summary,
@@ -2263,7 +2286,7 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "dsh-voice-dim" }, t("local.streamingHint"))),
             React.createElement(Row, { label: t("local.modelDir") },
               React.createElement(TextInput, { value: cfg.tts.local.modelDir || "", onChange: (v) => setField("tts.local.modelDir", v), placeholder: "自动 / auto" }),
-              React.createElement("span", { className: "dsh-voice-dim" }, t("local.modelDirHint"))))),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("local.modelDirHint"))))) : null,
 
         // —— L5 提示音：总开关在层头（收起也能开关）；体内 = 总音量 + 三种音各一行 ——
         React.createElement(Collapse, {
