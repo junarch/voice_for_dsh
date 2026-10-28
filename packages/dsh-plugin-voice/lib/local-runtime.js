@@ -35,6 +35,8 @@ const RULE_FILES = ['date-zh.fst', 'number-zh.fst', 'phone-zh.fst']
 const LEXICON_FILES = ['lexicon-us-en.txt', 'lexicon-zh.txt']
 /** 模型加载上限：SSD 上 fp32 约 2–4s，慢盘留足余量。 */
 const LOAD_TIMEOUT_MS = 60000
+/** 加载失败后的冷却：这段时间内直接重抛上次的错误，不重新加载（避免每次朗读都白等一轮）。 */
+const LOAD_RETRY_COOLDOWN_MS = 30000
 /** 找不到模型时给用户看的动作指引（下载归第二块，这里只说去哪儿看）。 */
 const MODEL_MISSING_HINT = '本地模型未安装：请把 kokoro-multi-lang-v1_1 解包到模型目录（见 docs/local-tts.md）'
 
@@ -172,6 +174,15 @@ let engineLoaderForTest = null
 export function setEngineLoaderForTest(fn) {
   engineLoaderForTest = fn
 }
+/** 引擎加载器的身份（负缓存要认"是谁把加载搞挂了"：换了加载器/换了目录就该重试）。 */
+let loaderSeq = 0
+const loaderIds = new WeakMap()
+function loaderKeyOf(fn) {
+  if (!fn) return 'native'
+  let id = loaderIds.get(fn)
+  if (!id) { id = 'L' + (++loaderSeq); loaderIds.set(fn, id) }
+  return id
+}
 
 /**
  * 本地 TTS 运行时（懒加载单例语义：一个插件实例一个引擎）。
@@ -183,8 +194,12 @@ export function createLocalRuntime(options = {}) {
   const { pluginUrl = '', getConfig = () => ({}), loadEngine = null } = options
   let instance = null      // 已加载的 OfflineTts
   let loading = null       // in-flight 加载（并发去重）
-  let loadError = null     // 最近一次加载失败
+  let loadGen = 0          // 卸载代数：dispose 后，迟到的加载结果不许再占住模型文件
+  let loadFailedAt = 0     // 上次加载失败的时间（负缓存，见 ensureLoaded）
+  let loadFailure = null   // 上次加载失败的错误（负缓存期间原样重抛，不重新加载）
+  let loadFailureKey = ''  // 失败对应的"模型目录 + 加载器"：换目录或换加载器就该允许重试
   let loadErrorLogged = false // 失败只报一次（避免每次朗读都刷屏）
+  let settleWarned = false   // "结果没交回但音频已收齐"只提示一次（Electron 运行时已知）
   let loadMs = 0
   let loadedDir = ''
 
@@ -246,8 +261,13 @@ export function createLocalRuntime(options = {}) {
       throw speakError('model-missing', MODEL_MISSING_HINT + '；模型目录：' + info.dir
         + (info.missing && info.missing.length ? '（缺少 ' + info.missing.join('、') + '）' : ''))
     }
+    // 负缓存：刚失败过（30s 内、同一模型目录 + 同一加载器）就原样重抛，
+    // 别每次朗读都去加载一遍 407MB 模型。换了目录或换了加载器（测试替身）则允许立刻重试。
+    const failureKey = info.dir + '|' + loaderKeyOf(loadEngine || engineLoaderForTest)
+    if (loadFailure && loadFailureKey === failureKey && Date.now() - loadFailedAt < LOAD_RETRY_COOLDOWN_MS) throw loadFailure
     const v = localCfg()
     const started = Date.now()
+    const myGen = loadGen
     if (!loading) {
       // 并发去重：同一时刻只有一个加载在飞（restart 后重新可试）
       const p = (async () => {
@@ -273,20 +293,28 @@ export function createLocalRuntime(options = {}) {
             }
             tts = await sherpa.OfflineTts.createAsync(engineConfig(info, v))
           }
+          if (myGen !== loadGen) {
+            // 加载期间被 dispose（删除模型）：不认这个实例，否则它又会占住模型文件
+            throw speakError('load-failed', '本地 TTS 已卸载，加载结果作废')
+          }
           instance = tts
           loadedDir = info.dir
           loadMs = Date.now() - started
-          loadError = null
+          loadFailure = null
+          loadFailureKey = ''
           loadErrorLogged = false
           console.log('[voice] local tts ready: ' + info.dir + '（' + loadMs + 'ms，' + (instance.numSpeakers || 0) + ' 音色）')
           return instance
         } catch (error) {
-          loadError = error && error.kind ? error : speakError('load-failed', '本地 TTS 加载失败：' + String(error && error.message || error))
+          const err = error && error.kind ? error : speakError('load-failed', '本地 TTS 加载失败：' + String(error && error.message || error))
+          loadFailure = err
+          loadFailureKey = failureKey
+          loadFailedAt = Date.now()
           if (!loadErrorLogged) { // 同一个加载失败只报一次，避免每次朗读都刷屏
             loadErrorLogged = true
-            console.error('[voice] local tts load failed:', loadError.message)
+            console.error('[voice] local tts load failed:', err.message)
           }
-          throw loadError
+          throw err
         }
       })()
       loading = p
@@ -330,6 +358,7 @@ export function createLocalRuntime(options = {}) {
 
     let timedOut = false
     let aborted = false
+    let lastProgress = 0
     const pending = []
     let resolvePending = null
     const wake = () => { if (resolvePending) { const r = resolvePending; resolvePending = null; r() } }
@@ -339,6 +368,8 @@ export function createLocalRuntime(options = {}) {
     // onProgress 是 sherpa 的唯一中断点：返回 0 = 停止生成（已生成的部分照常回调）
     const push = (info) => {
       if (timedOut || aborted) return 0
+      if (!info || !info.samples) return 1
+      if (typeof info.progress === 'number') lastProgress = info.progress
       pending.push(info.samples)
       wake()
       return 1
@@ -377,7 +408,22 @@ export function createLocalRuntime(options = {}) {
       if (!yielded && !failure && finalAudio && finalAudio.samples && finalAudio.samples.length) {
         yield float32ToInt16Pcm(finalAudio.samples)
       }
-      if (failure) throw failure
+      if (failure) {
+        // dsh 桌面端是 Electron 运行时：sherpa 的 generateAsync 在那边会以
+        // "TTS settlement failed" 拒绝——但音频已经通过 onProgress 全部给到（progress 走到 1）。
+        // 这属于"结果没交回来"，不是"合成失败"：按成功收尾，否则桌面端本地合成整条不可用
+        // （试听、整段兜底、分句流式全挂），而用户听到的音频其实一个字节都不缺。
+        const settleQuirk = yielded > 0 && lastProgress >= 0.98
+          && /settlement failed/i.test(String(failure && failure.message || failure))
+        if (settleQuirk) {
+          if (!settleWarned) {
+            settleWarned = true
+            console.warn('[voice] local tts：最终结果未交回（Electron 运行时已知），已用分块回调的音频收尾')
+          }
+        } else {
+          throw failure
+        }
+      }
       if (timedOut) throw speakError('timeout', '本地合成超时（' + timeoutMs + 'ms）')
       if (aborted) throw speakError('timeout', '本地播报已中止')
     } catch (error) {
@@ -444,6 +490,18 @@ export function createLocalRuntime(options = {}) {
     return instance ? loadedDir : ''
   }
 
-  return { ensureLoaded, streamPcm, synthesizeWav, status, inspect, loadedModelDir }
+  /** 卸载已加载的引擎（删除模型之前必须调）：原生模块会持有模型文件句柄，
+   *  Windows 下带着句柄删目录会半删。置空引用 + 升代数（迟到的加载结果不再认领）。 */
+  function dispose() {
+    const had = !!instance
+    loadGen++
+    instance = null
+    loadedDir = ''
+    loadFailure = null
+    loadErrorLogged = false
+    return had
+  }
+
+  return { ensureLoaded, streamPcm, synthesizeWav, status, inspect, loadedModelDir, dispose }
 }
 //#endregion

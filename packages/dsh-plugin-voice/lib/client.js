@@ -115,7 +115,7 @@ window.__ModuleLoader__.load({
       "layer.l5.title": "提示音",
       "layer.l5.summary.on": "开 · {n}/3 种 · 音量 {volume}%", "layer.l5.summary.off": "关",
       "row.chimeEnabled": "开启提示音", "row.chimeVolume": "总音量",
-      "hint.chime": "有会话在跑就循环工作音，会话结束响一次完成音，DSH 弹出提问等你回答响一次提问音；与朗读互不影响。",
+      "hint.chime": "任何会话在跑（含子代理）就循环工作音；你等的那一轮结束响一次完成音；DSH 弹出提问等你回答响一次提问音。与朗读互不影响。",
       "chime.work": "工作音", "chime.done": "完成音", "chime.ask": "提问音",
       "chime.source.default": "默认音（程序合成）", "chime.source.custom": "自定义",
       "chime.upload": "上传", "chime.uploading": "上传中…", "chime.uploaded": "✅ 已上传：{file}（记得保存）",
@@ -226,7 +226,7 @@ window.__ModuleLoader__.load({
       "layer.l5.title": "Chimes",
       "layer.l5.summary.on": "On · {n}/3 sounds · volume {volume}%", "layer.l5.summary.off": "Off",
       "row.chimeEnabled": "Enable chimes", "row.chimeVolume": "Master volume",
-      "hint.chime": "Loop a work sound while sessions run, a done sound when one finishes, and an ask sound when DSH is waiting on your answer. Independent of readout.",
+      "hint.chime": "Loop a work sound while any session runs (subagents included); a done sound when the turn you are waiting on finishes; an ask sound when DSH is waiting on your answer. Independent of readout.",
       "chime.work": "Work", "chime.done": "Done", "chime.ask": "Question",
       "chime.source.default": "Default (synthesized)", "chime.source.custom": "Custom",
       "chime.upload": "Upload", "chime.uploading": "Uploading…", "chime.uploaded": "✅ Uploaded: {file} (remember to save)",
@@ -334,30 +334,38 @@ window.__ModuleLoader__.load({
     var spokenState = {};
     var spokenListeners = new Set();
     var playingMessageId = null;
+    /** 正在播的是哪个会话的消息：停播只看这个会话有没有开新 turn，
+     *  别处（子代理、别的工作区）开一轮不该掐断这里的朗读。 */
+    var playingSessionId = null;
     function markSpoken(messageId, state) {
       var id = String(messageId);
       if (state) spokenState[id] = state; else delete spokenState[id];
       spokenListeners.forEach(function (f) { f(); });
     }
-    function beginPlayback(messageId) {
+    function beginPlayback(messageId, sessionId) {
       playingMessageId = messageId ? String(messageId) : null;
+      playingSessionId = sessionId ? String(sessionId) : null;
       if (playingMessageId) markSpoken(playingMessageId, "speaking");
     }
     function finishPlayback(messageId, state) {
       var id = messageId ? String(messageId) : playingMessageId;
-      if (playingMessageId === id) playingMessageId = null;
+      if (playingMessageId === id) { playingMessageId = null; playingSessionId = null; }
       if (id) markSpoken(id, state || null);
     }
     /** 停止播放：必须同时清掉"朗读中"状态。播放被中断时浏览器不会回调 onend/onended，
      *  只停音频不清状态 → 徽标永远停在"朗读中"（且会诱导用户重复点播、重复烧 token）。 */
     function stopPlaybackOnly(opts) {
       var wasPlaying = !!(playingMessageId || currentAudio || streamRunId);
+      var playingSid = playingSessionId;   // finishPlayback 会把它清掉，先记下来
       if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
       if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
       stopStream();
       if (playingMessageId) finishPlayback(playingMessageId, null);
-      // 只有确实有播报在跑时才通知 Host 中止：避免"新 turn 开始"无脑打断别的会话正在跑的管线。
-      if (wasPlaying && opts && opts.notifyHost) { try { rpc("stop").catch(function () {}); } catch (e) {} }
+      // 只有确实有播报在跑时才通知 Host 中止，而且只中止**这个会话**：
+      // 无参 stop 是全局的，会把别的窗口正在跑的朗读与待播一起杀掉（多窗口互相连坐）。
+      if (wasPlaying && opts && opts.notifyHost) {
+        try { rpc("stop", playingSid ? { sessionId: playingSid } : {}).catch(function () {}); } catch (e) {}
+      }
     }
     function stopAll() {
       stopPlaybackOnly();
@@ -701,7 +709,7 @@ window.__ModuleLoader__.load({
       if (res && res.degraded) { console.warn("[voice]", t("read.degraded")); showToast(t("read.degraded")); }
       if (res && res.effortMapped) console.warn("[voice]", res.effortNote || "configured reasoning effort not applied");
       if (res && res.warn) console.warn("[voice]", res.warn);
-      if (res && res.messageId) beginPlayback(res.messageId);
+      if (res && res.messageId) beginPlayback(res.messageId, res.sessionId);
       diag("play-result", { mode: res && res.mode || "", engine: res && res.engine || "", ttsError: (res && res.ttsError ? String(res.ttsError).slice(0, 100) : ""), degraded: !!(res && res.degraded), notice: (res && res.notice ? String(res.notice).slice(0, 100) : "") });
       const done = hooks && hooks.onEnd;
       const wrapped = {
@@ -977,6 +985,7 @@ window.__ModuleLoader__.load({
     var CHIME_VOLUME_DEFAULT = 0.3;
     var CHIME_MIN_LOOP_SEC = 2;         // 素材短于 2 秒时 loop 会变蜂鸣 → 改成每 2 秒一次
     var CHIME_DONE_SUPPRESS_MS = 2500;  // 完成音抑制窗（> 账本轮询周期）：三路信号看到同一次结束也只响一声
+    var CHIME_WORK_STOP_DELAY_MS = 800; // 工作音停止去抖：状态抖一下不掐声音，真停了 0.8s 内收尾
     var CHIME_MAX_BYTES = 10 * 1024 * 1024;
     var CHIME_MAX_SEC = 60;
 
@@ -987,15 +996,17 @@ window.__ModuleLoader__.load({
     var chimeNodes = {};       // slot → { src, gain }（正在响的实例；先停后起）
     var chimeBuffers = {};     // "kind|file" → AudioBuffer（默认音同样缓存）
     var chimeWorkTimer = null; // 短素材工作音的重复定时器
+    var chimeWorkStopTimer = null; // 工作音停止去抖定时器
     var chimeWorkPending = false; // 工作音素材正在加载（防同一次状态变化叠两条）
     var chimeWorkGen = 0;      // 加载途中被停过 → 迟到的加载结果不许起播
     var chimeDoneAt = 0;       // 上一次完成音的时间（抑制窗）
-    var chimePrevRunning = {}; // sessionId → 上一次 running（判真→假）
-    var chimeRemoteRunning = {}; // 全局 api-session/status 记下的 running（含其他工作区）
-    var chimeGlobalCount = 0;    // Host 账本的 running 数（补齐已开跑未变化的会话）
-    var chimeGlobalEndedAt = 0;  // Host 账本的最近结束时间
-    var chimeGlobalPrevCount = 0; // 上一轮账本计数（只在 >0→0 时补完成音）
-    var chimeLedgerPrimed = false; // 首次轮询只当基线：刷页/重开不凭空响
+    // 三路信号各自记"谁在跑"，每拍并成一个集合再判断——不各自触发完成音。
+    var chimeRemoteRunning = {}; // 全局 api-session/status（含别的工作区、含子代理）
+    var chimeLedgerRunning = {}; // Host 账本里的 sid（含子代理与别的工作区）
+    var chimeLedgerTop = {};     // Host 账本里的顶层会话 sid（完成音只认这组）
+    var chimeTopPrev = {};       // 上一拍"顶层会话在跑"的集合（少一个成员 = 那一轮跑完了）
+    var chimeLedgerEpoch = "";   // Host 账本实例标识：变了说明 Host 重载，账本归零不是"跑完了"
+    var chimeLedgerPrimed = false; // 首次轮询只当基线：刷页/重开/重载不凭空响
     var chimeDisposed = false;   // 已卸载：迟到的轮询结果不许再起播
     var chimePollTimer = null;   // 轮询 Host 账本的定时器
     var chimeAskKeys = {};     // interaction key → true（同一交互只响一次）
@@ -1223,57 +1234,69 @@ window.__ModuleLoader__.load({
       stopChime("ask");
       playChime("ask", {});
     }
-    /** 只认顶层会话：子代理也写同一个 status，不按 origin/parentId 过滤就会多响。 */
-    function isTopLevelSession(id) {
+    /** 会话层级：'top' 顶层 / 'sub' 子代理 / 'unknown' 列表里还没有这一行。
+     *  字段真相（DSH 0.2.1）：会话头是 `origin` + `parentSession`，列表行是 `origin` + `parentSessionId`；
+     *  以前这里读 `parentId`，那个字段不存在，真正生效的一直只有 `origin`。
+     *  unknown 只进工作音、不进顶层集合：别的工作区的会话只有 id 没有行，
+     *  把它当顶层会让"别的工作区的子代理结束"误响一声完成音；宁可漏一声，不可误响。 */
+    function sessionLayer(id) {
       var sessions = clientService("sessions");
       var list = null;
       try {
         if (sessions && sessions.list && sessions.list.getSnapshot) list = sessions.list.getSnapshot();
-      } catch (e) { return true; }
-      if (!list || !list.byId) return true;      // 拿不到会话表：不因缺信息丢音
+      } catch (e) { return "unknown"; }
+      if (!list || !list.byId) return "unknown";
       var row = list.byId[id];
-      if (!row) return true;                     // status 里可能有列表还没收到的 id
-      if (row.origin === "subagent") return false;
-      if (row.parentId !== undefined && row.parentId !== null) return false;
-      return true;
+      if (!row) return "unknown";
+      if (row.origin === "subagent") return "sub";
+      var parent = row.parentSessionId !== undefined ? row.parentSessionId : row.parentId;
+      if (parent !== undefined && parent !== null && parent !== "") return "sub";
+      return "top";
     }
-    /** 全局 running 事件（api-session/status）记录：其他工作区的会话不在 sessionStatus 里，
-     *  只靠当前工作区的快照会漏掉"别处还有活在跑"的情况。 */
+    /** 全局 running 事件（api-session/status）：别的工作区与会话层级都在这里过一遍。
+     *  只记录"谁在跑"，不在这里判完成——完成音统一由 chimeTick 的「顶层数 >0→0」决定，
+     *  否则子代理结束、或同一个会话的两路信号先后到达，都会各响一声。 */
     function chimeRemoteStatus(id, running) {
       if (!chimeCfg || !chimeCfg.enabled || chimeDisposed) return;
       var sid = String(id);
-      if (!isTopLevelSession(sid)) return;   // 本工作区能识别的子代理：不响
-      if (running) {
-        if (!chimeRemoteRunning[sid]) { chimeRemoteRunning[sid] = true; chimeTick(); }
-        return;
-      }
-      if (!chimeRemoteRunning[sid]) return;
-      delete chimeRemoteRunning[sid];
-      chimePrevRunning[sid] = false;
-      triggerDoneChime();
+      if (running) chimeRemoteRunning[sid] = true;
+      else delete chimeRemoteRunning[sid];
       chimeTick();
     }
-    /** 轮询 Host 的全局账本：补上"已经开跑、之后没有状态变化"的会话（切工作区后尤其需要）。
-     *  完成音只在计数 >0→0 时补一次：中途 steer 的 turn/end 不算结束，子代理结束也不响。 */
+    function countKeys(map) {
+      var n = 0;
+      for (var k in map) { if (map[k]) n += 1; }
+      return n;
+    }
+    /** 轮询 Host 的全局账本：补上"已经开跑、之后没有状态变化"的会话（切工作区、子代理尤其需要）。
+     *  首轮与 epoch 变化（Host 重载）只重建基线，不让账本归零冒充"跑完了"。 */
     function pollChimeStatus() {
       if (!chimeCfg || !chimeCfg.enabled || chimeDisposed) return;
       if (!chimeRowEnabled("work") && !chimeRowEnabled("done")) return;
       rpc("chimeStatus").then(function (res) {
         if (!res || !res.ok || chimeDisposed) return;
-        var count = typeof res.count === "number" ? res.count : (Array.isArray(res.running) ? res.running.length : 0);
-        var endedAt = res.lastEndedAt || 0;
-        if (!chimeLedgerPrimed) {          // 首轮只当基线：刷新/重开不凭空响
+        var ledger = {};
+        if (res.running && typeof res.running.length === "number") {
+          for (var i = 0; i < res.running.length; i++) ledger[String(res.running[i])] = true;
+        } else if (typeof res.count === "number" && res.count > 0) {
+          ledger["__host__"] = true; // 旧 Host 只给 count：当成"有一个不知名的会话在跑"
+        }
+        var top = {};
+        if (res.top && typeof res.top.length === "number") {
+          for (var j = 0; j < res.top.length; j++) top[String(res.top[j])] = true;
+        } else if (!res.running && typeof res.count === "number" && res.count > 0) {
+          top["__host__"] = true;
+        }
+        chimeLedgerRunning = ledger;
+        chimeLedgerTop = top;
+        var epoch = typeof res.epoch === "string" ? res.epoch : "";
+        if (!chimeLedgerPrimed || (epoch && chimeLedgerEpoch && epoch !== chimeLedgerEpoch)) {
           chimeLedgerPrimed = true;
-          chimeGlobalPrevCount = count;
-          chimeGlobalCount = count;
-          chimeGlobalEndedAt = endedAt;
-          chimeTick();
+          chimeLedgerEpoch = epoch;
+          chimeTick({ noDone: true });
           return;
         }
-        if (count === 0 && chimeGlobalPrevCount > 0) triggerDoneChime();
-        chimeGlobalPrevCount = count;
-        chimeGlobalCount = count;
-        chimeGlobalEndedAt = endedAt;
+        if (epoch) chimeLedgerEpoch = epoch;
         chimeTick();
       }).catch(function () {});
     }
@@ -1284,56 +1307,82 @@ window.__ModuleLoader__.load({
     }
     function stopChimePoll() {
       if (chimePollTimer) { clearInterval(chimePollTimer); chimePollTimer = null; }
-      chimeGlobalCount = 0;
-      chimeGlobalEndedAt = 0;
-      chimeGlobalPrevCount = 0;
+      if (chimeWorkStopTimer) { clearTimeout(chimeWorkStopTimer); chimeWorkStopTimer = null; }
+      chimeLedgerRunning = {};
+      chimeLedgerTop = {};
+      chimeTopPrev = {};
+      chimeLedgerEpoch = "";
       chimeLedgerPrimed = false;
     }
-    /** 状态对账：work 计数、done 真→假、ask 按 key 去重。
-     *  running 取三处并集：uiSession.sessionStatus（当前工作区，含 pendingInteraction）、
-     *  全局 api-session/status 事件、Host 的 chimeStatus 账本（含已开跑未变化与别的工作区）。 */
-    function chimeTick() {
-      if (!chimeCfg || !chimeCfg.enabled) { stopChimes(); return; }
+    /** 状态对账：三路信号并成一个集合，再决定"工作音响不响 / 完成音响不响"。
+     *  工作音 = 有任何会话在跑（含子代理、含别的工作区）：DSH 有活在跑就该响。
+     *  完成音 = 顶层会话（用户等的那一轮）从有到没有：子代理结束而主会话还在跑时不响。
+     *  提问音 = 只认顶层会话的 question / plan-review，按 interaction key 去重。 */
+    function chimeTick(opts) {
+      if (!chimeCfg || !chimeCfg.enabled) {
+        chimeTopPrev = {};
+        if (chimeWorkStopTimer) { clearTimeout(chimeWorkStopTimer); chimeWorkStopTimer = null; }
+        stopChimes();
+        return;
+      }
       if (chimeDisposed) return;
       var uiSession = clientService("uiSession");
       var snap = null;
       if (uiSession && uiSession.sessionStatus) {
         try { snap = uiSession.sessionStatus.getSnapshot(); } catch (e) { snap = null; }
       }
-      var runningCount = 0;
+      var running = {};   // 全部在跑（工作音）
+      var top = {};       // 顶层在跑（完成音）
       var liveAsk = {};
-      var seen = {};
       if (snap && typeof snap.forEach === "function") {
         snap.forEach(function (st, id) {
-          if (isTopLevelSession(id)) {
-            seen[id] = true;
-            var running = !!(st && st.running);
-            if (running) runningCount += 1;
-            if (running) chimePrevRunning[id] = true;
-            else {
-              if (chimePrevRunning[id] === true) triggerDoneChime();
-              chimePrevRunning[id] = false;
-            }
-            var interaction = st && st.pendingInteraction;
-            if (interaction && typeof interaction === "object") {
-              var kind = interaction.kind;
-              if (kind === "question" || kind === "plan-review") {
-                var key = String(interaction.key || (id + ":pending"));
-                liveAsk[key] = true;
-                triggerAskChime(key);
-              }
+          var sid = String(id);
+          var layer = sessionLayer(sid);
+          if (st && st.running) {
+            running[sid] = true;
+            if (layer === "top") top[sid] = true;
+          }
+          var interaction = st && st.pendingInteraction;
+          // 提问音对"层级未知"放行（漏一声比静默更糟）；已判定是子代理的不响
+          if (interaction && typeof interaction === "object" && layer !== "sub") {
+            var kind = interaction.kind;
+            if (kind === "question" || kind === "plan-review") {
+              var key = String(interaction.key || (sid + ":pending"));
+              liveAsk[key] = true;
+              triggerAskChime(key);
             }
           }
         });
       }
       for (var rid in chimeRemoteRunning) {
-        if (!seen[rid]) runningCount += 1;     // 已在快照里的不重复计数
+        if (!chimeRemoteRunning[rid]) continue;
+        running[rid] = true;
+        // 别的工作区的会话只有 id、没有列表行 → 层级未知 → 只进工作音，不进顶层集合
+        if (sessionLayer(rid) === "top") top[rid] = true;
       }
-      if (chimeGlobalCount > 0) runningCount += 1;
-      for (var sid in chimePrevRunning) { if (!seen[sid]) delete chimePrevRunning[sid]; }
+      for (var lid in chimeLedgerRunning) { if (chimeLedgerRunning[lid]) running[lid] = true; }
+      for (var tid in chimeLedgerTop) { if (chimeLedgerTop[tid]) top[tid] = true; }
+      var runningCount = countKeys(running);
+      // 完成音唯一判据：**顶层集合里少了一个成员**（那一轮跑完了）。
+      //  - 用集合差而不是"计数归零"：两个会话同时跑、结束一个也要响一声；
+      //  - 子代理不在顶层集合里，它结束不会让集合变小 → 不会多响；
+      //  - 三路信号并集：某一源短暂漏报不会让集合变小（不会误响），要两源都同意才 drop。
+      var finished = 0;
+      for (var pid in chimeTopPrev) { if (chimeTopPrev[pid] && !top[pid]) finished += 1; }
+      if (!(opts && opts.noDone) && finished > 0) triggerDoneChime();
+      chimeTopPrev = top;
       for (var k in chimeAskKeys) { if (!liveAsk[k]) delete chimeAskKeys[k]; }
-      if (runningCount > 0) startWorkChime();
-      else stopWorkChime();
+      if (runningCount > 0) {
+        // 有活在跑：立即起；同时撤销还没到点的停止（抖动不掐声音）
+        if (chimeWorkStopTimer) { clearTimeout(chimeWorkStopTimer); chimeWorkStopTimer = null; }
+        startWorkChime();
+      } else if (!chimeWorkStopTimer) {
+        chimeWorkStopTimer = setTimeout(function () {
+          chimeWorkStopTimer = null;
+          if (!chimeCfg || !chimeCfg.enabled || chimeDisposed) return;
+          stopWorkChime();
+        }, CHIME_WORK_STOP_DELAY_MS);
+      }
     }
     /** 应用一份 chime 配置：关掉立即停；打开按当前状态立刻起（不用等下一次状态变化）。 */
     function applyChimeConfig(chime) {
@@ -1346,8 +1395,7 @@ window.__ModuleLoader__.load({
       } else {
         stopChimePoll();
         stopChimes();
-        chimeRemoteRunning = {};   // 关着时收不到结束事件：清掉旧记录，免得重开后卡住工作音
-        chimePrevRunning = {};
+        chimeRemoteRunning = {};   // 关着时收不到会话状态变化：清掉旧记录，免得重开后卡住工作音
         chimeAskKeys = {};
       }
       if (!chimeRowEnabled("work")) stopWorkChime();
@@ -2072,7 +2120,9 @@ window.__ModuleLoader__.load({
 
             // —— 本地 Kokoro（中英，免费；安装行在层头，收起也不卸载轮询）——
             ttsEngine === "local" ? React.createElement(React.Fragment, null,
-              React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
+              // 模型已装时不再说"先点下载把模型装好"——那句话只在未装时才有意义
+              (deployState && deployState.installed) ? null
+                : React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
 
               React.createElement(Row, { label: t("row.localVoice") },
                 React.createElement(SelectInput, {
@@ -2347,21 +2397,30 @@ window.__ModuleLoader__.load({
         return () => stopNavIconPatching();
       }, "voice: settings nav icon");
 
-      // 自动播报轮询 + stopOnNewTurn（gen 变化 → 停旧播报）
+      // 自动播报轮询 + stopOnNewTurn（只停"正在播的那个会话"的旧播报）
       let pollBusy = false;
-      let lastGen = null;
+      let lastGens = null;
       async function pollAutoSpeak() {
         if (pollBusy) return;
         pollBusy = true;
         try {
           const res = await rpc("pollSpeak");
           if (res && res.ok) {
-            if (lastGen !== null && typeof res.gen === "number" && res.gen !== lastGen && res.stopOnNewTurn !== false) {
-              // 新 turn 开始：停旧播报，并让 Host 中止后台管线（否则被放弃的播报还会继续跑
-              // 段落指令 LLM / 合成，白烧 token 与 TTS）
-              stopPlaybackOnly({ notifyHost: true });
+            // gens = 每个会话各自的 turn 计数。只比对自己正在播的那个会话：
+            // 用全局计数会让子代理/别的工作区开一轮就掐断这里的朗读（还会 abort Host 侧管线）。
+            const gens = res.gens && typeof res.gens === "object" ? res.gens : null;
+            if (gens) {
+              if (lastGens && playingSessionId && res.stopOnNewTurn !== false) {
+                const before = typeof lastGens[playingSessionId] === "number" ? lastGens[playingSessionId] : 0;
+                const now = typeof gens[playingSessionId] === "number" ? gens[playingSessionId] : 0;
+                if (now !== before) {
+                  // 本会话开了新 turn：停旧播报，并让 Host 中止后台管线
+                  // （否则被放弃的播报还会继续跑段落指令 LLM / 合成，白烧 token 与 TTS）
+                  stopPlaybackOnly({ notifyHost: true });
+                }
+              }
+              lastGens = gens;
             }
-            if (typeof res.gen === "number") lastGen = res.gen;
             if (res.pending) {
               const p = res.pending;
               const r = await rpc("speak", { sessionId: p.sessionId, messageId: p.messageId });

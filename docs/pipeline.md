@@ -238,9 +238,12 @@ idle → transcribing(转写中) → speaking(播报中) → idle
      fallback(直读)或 error     → idle
 ```
 
-- 全局单播：新播报打断当前播报；`voice.stopOnNewTurn`（turn/start 自增 `turnGeneration`，Client 发现 gen 变化停旧播报）。
-- **停止要停到 Host**：客户端停播（停止按钮/新 turn/"朗读中"徽标）要调 `/voice/api/stop` 中止后台管线；
-  只停浏览器音频会让 Host 继续跑段落指令 LLM 与合成，白花钱。
+- 全局单播：新播报打断当前播报（同一窗口）；`voice.stopOnNewTurn` = **按会话**判：
+  Host 给每个会话各记一份 turn 计数（`pollSpeak` 返回 `gens`），Client 只比"正在播的那个会话"有没有开新 turn——
+  别处（子代理、别的工作区）开一轮不会掐断本窗口的朗读。
+- **停止要停到 Host，而且只停这个会话**：客户端停播（停止按钮/新 turn/"朗读中"徽标）调
+  `/voice/api/stop {sessionId}` 中止后台管线；无参才是全局停（插件卸载时用）。只停浏览器音频会让 Host 继续跑
+  段落指令 LLM 与合成，白花钱；停成全局则会把别的窗口正在播的朗读一起杀掉。
 - **徽标状态必须能收尾**：播放开始 → `speaking`；自然结束 → `done`；停止/出错/被打断 → 清除。
   状态变更通知所有订阅者（徽标、消息按钮），否则 React 不会重渲染，界面会停在"朗读中…"。
 - 双向流：`speak` 立即返回 `{mode:'stream', runId}`，管线后台跑；Client 经 `streamNext` 取段播放；
@@ -340,7 +343,8 @@ voice:
       segmentChars: 220        # 分句流式的每段目标字符数（无 UI，高级）
       segmentTimeoutMs: 30000  # 单个音频段的超时（流式路径；替代整段死线）
       # 历史字段 baseUrl / voice / autoStart / pythonPath 已随 Python 服务退役：
-      #   读到也不再生效（schema 里已删），存量配置里的值会被忽略、下次保存时被清掉。
+      #   读到也不再生效（schema 里已删），存量配置里的值会被忽略——它们仍留在 profile patch 里，
+      #   插件既不读也不主动清，想清爽就手动删掉那几行。
   stopOnNewTurn: true
   chime:                      # 提示音（设置页第五层）；默认整层关闭，与朗读互不依赖
     enabled: false
@@ -363,14 +367,17 @@ voice:
 
 - **信号只从客户端来**，Host 不推送：`uiSession.sessionStatus`（`Map<sessionId, {running, pendingInteraction, completionUnread}>`，
   有 `getSnapshot/subscribe`）。快照为主；另加全局 `api-session/status` 事件与 Host 的 `chimeStatus` 账本，
-覆盖「冷启动前已开跑」和「其他工作区」两类快照看不到的会话。`turn/end` 只在 Host 侧记账，不驱动播报。
-- **工作音**：顶层会话 `running` 计数 `0→>0` 起、`>0→0` 停。素材 ≥2 秒用 `loop=true` 单条循环；
-  短于 2 秒不 loop（会变蜂鸣），改成每 2 秒响一次。
-- **完成音**：顶层会话 `running` 由真变假触发；领先播放 + 1 秒抑制窗（多条会话几乎同时结束只响一次）。
+  覆盖「冷启动前已开跑」和「其他工作区」两类快照看不到的会话。`turn/end` 在 Host 侧记账（并驱动自动播报），
+  不直接触发提示音。
+- **工作音**：**任何会话**在跑就响——含子代理、含别的工作区。DSH 有活在跑就该让用户知道。
+  计数 `0→>0` 起、`>0→0` 停。素材 ≥2 秒用 `loop=true` 单条循环；短于 2 秒不 loop（会变蜂鸣），改成每 2 秒响一次。
+- **完成音**：**顶层会话**（用户正在等的那一轮）的 running 集合里少一个成员时响一次；2.5 秒抑制窗合并同一次结束的多路信号。
+  子代理不在顶层集合里，它结束不会响；两个会话同时跑、结束其中一个也会响。
 - **提问音**：`pendingInteraction.kind` 只认 `question` 与 `plan-review`；**审批（`approval`）不响**。
   按 interaction `key` 去重，交互消失时清 key（同一个 key 再出现会再响）。
-- **只认顶层会话**：子代理也会写同一个 status store，必须 join `ctx.sessions.list` 的快照，
-  过滤 `origin === 'subagent'` 与带 `parentId` 的行；拿不到会话表时按顶层处理（不因缺信息丢音）。
+- **顶层判定**：Host 按 `session.header.origin === 'subagent'`（或带 `parentId`）判层级，账本同时返回
+  `running`（全部会话）与 `top`（顶层会话）两组口径，并带 `epoch`（Host 重载后客户端据此重建基线，不把归零当成"跑完了"）；
+  客户端三路信号各自取顶层。拿不到会话表时按顶层处理（不因缺信息丢音）。
 - **上下文独立**：提示音用自己的 `AudioContext` + master gain。播报上下文固定 24kHz 且会被
   `stopPlaybackOnly` 连坐，两者不能共用；提示音不参与播报的停止/中断，播报也压不掉提示音（叠放）。
 - **默认三音程序合成**（正弦振荡 + 指数衰减包络，按上下文缓存），不随包带音频文件；自定义音走
@@ -423,8 +430,8 @@ voice:
     上限 `MAX_PARAGRAPH_INSTRUCTIONS` 之外沿用最后一次指令，run 停止后不再发起。
 20. **提示音不得与播报共用播放链**——独立 `AudioContext`（不指定 24kHz）+ 独立实例表；
     提示音不受 `stopPlaybackOnly`/停止播报影响，播报也不会被提示音打断（两者叠放）。
-21. **提示音只认顶层会话与提问交互**——按 `ctx.sessions.list` 过滤 `origin==='subagent'` 与带 `parentId` 的行；
-    `pendingInteraction` 只认 `question`/`plan-review`，**审批 `approval` 不响**；缺 `uiSession` 时静默降级。
+21. **提示音必须分清"有活在跑"与"这一轮跑完了"**——工作音按全部会话（含子代理、含别的工作区），
+    完成音只按顶层会话；子代理结束不得响完成音。账本的 `running` 与 `top` 两组口径不得混用。
 22. **提示音素材只能落在 `<DSH_HOME>/voice/sounds`**——上传按魔数认格式（不信扩展名）、≤10MB、
     文件名白名单拒绝 `..` 与路径分隔符；GET 只读不删、拒绝路径穿越；未被配置引用且超过 1 天的文件在启动时清扫。
 

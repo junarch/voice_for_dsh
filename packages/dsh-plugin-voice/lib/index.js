@@ -397,7 +397,7 @@ const Config = z.object({
     timeoutMs: z.number().default(60000), // 单次转写超时；超时/失败降级为直读
   }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }).volatile(),
   tts: z.object({
-    provider: z.string().default('browser'), // TTS 引擎：browser（免费系统）| volcengine（豆包付费）| local（本地 Kokoro 英文，免费）；其余旧值归一为 browser
+    provider: z.string().default('browser'), // TTS 引擎：browser（免费系统）| volcengine（豆包付费）| local（本地 Kokoro，中英混读，免费）；其余旧值归一为 browser
     browser: z.object({
       rate: z.number().default(1),
       pitch: z.number().default(1),
@@ -492,6 +492,8 @@ function apply(ctx, config) {
       const info = localRuntime.inspect()
       return { source: info.source, dir: info.dir }
     },
+    // 删除前先卸运行时：Windows 下原生模块持有 model.onnx 句柄，带着句柄删会半删
+    onBeforeRemove: () => localRuntime.dispose(),
   })
   try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
 
@@ -519,7 +521,10 @@ function apply(ctx, config) {
   }
 
   const latestBySession = new Map()
-  let pendingSpeak = null
+  // 自动播报待播队列（不是单槽）：两个会话在同一个轮询窗口里结束，单槽会静默丢掉前一条。
+  // 上限 8：客户端 2 秒一轮，正常不会积压；积压说明前端没在消费，丢弃更旧的即可。
+  const pendingSpeakQueue = []
+  const PENDING_SPEAK_MAX = 8
   const transcriptCache = loadTranscriptCache()
   /** 转写缓存命中（键：messageId + 路由 + prompt + effort 全一致；HTTP 与流式共用同一形状）。
    * 缓存条目形状：{ transcript(净化稿), provider, model, prompt, effort, sourceChars, at, instruction, emotion, intensity }。 */
@@ -549,7 +554,12 @@ function apply(ctx, config) {
   }
   let busySpeak = false // 非流式 speak 管线互斥（防并发触发付费 LLM+TTS）
   let currentAbort = null // 进行中的转写，voice.stop 中止
-  let turnGeneration = 0 // 每个 turn/start 自增：stopOnNewTurn 的客户端停播信号
+  let currentAbortSession = '' // 这次转写属于哪个会话（stop 只 abort 本会话的）
+  // stopOnNewTurn 的客户端停播信号：**按会话**计 turn/start 次数。
+  // 全局计数（turnGeneration）会让别处（子代理、别的工作区）开一轮就掐断本窗口正在播的朗读，
+  // 所以停播判断只看 gens[正在播的那个会话]；turnGeneration 保留给兼容字段与诊断。
+  const turnGenBySession = new Map() // sid → turn/start 次数
+  let turnGeneration = 0             // 全局 turn/start 次数（兼容字段）
   // 双向流流式播报：run 注册表（runId → { queue, done, error, ... }）
   const streamRuns = new Map()
   let currentStreamRun = null
@@ -558,10 +568,24 @@ function apply(ctx, config) {
   const clientDiagLog = []
   // 引用上文状态：每会话最近的用户输入与已播报文稿（供转写语境 + TTS 上文引用）
   const turnBySession = new Map()        // sid → 当前 turn（turn/start）
-  // 全局"有会话在跑"账本：Host 收到所有会话的事件（含别的工作区），客户端只看得到当前工作区，
+  // 全局"有会话在跑"账本：Host 收到所有会话的事件（含子代理、含别的工作区），客户端只看得到当前工作区，
   // 所以由 Host 记这份账，客户端轮询 /voice/api/chimeStatus 补齐。
-  const chimeRunning = new Set()         // sid 集合
-  let chimeLastEndedAt = 0               // 最近一次 turn 结束的时间戳（客户端据此响完成音）
+  // 同时记"是不是顶层会话"：工作音按全部会话算（子代理在跑也算有活在跑），
+  // 完成音只在顶层会话（用户等的那一轮）全部停下时响一次。
+  const chimeRunning = new Map()         // sid → { top: boolean }
+  const chimeMisses = new Map()          // sid → 连续对账取不到会话的次数（连续两次才清，防瞬态误删）
+  let chimeLastEndedAt = 0               // 最近一次 turn 结束的时间戳（诊断用）
+  // 账本实例标识：Host 重载/插件重载后变化。客户端据此重建基线，
+  // 否则"账本突然归零"会被误判成"全部跑完了"，补响一声假的完成音。
+  const chimeEpoch = randomUUID().slice(0, 8)
+  /** 顶层会话 = 用户正在等的那一轮（不是子代理派生的）。DSH 在 session header 里用 origin 标子代理；
+   *  parentId 只在会话列表行里有，这里一并认（拿不到就当顶层，不因缺信息丢音）。 */
+  function isTopLevelSession(session) {
+    const header = (session && session.header) || session || {}
+    if (header.origin === 'subagent') return false
+    if (header.parentId !== undefined && header.parentId !== null && header.parentId !== '') return false
+    return true
+  }
   const userTurnsBySession = new Map()   // sid → [{ turn, text }]（上限 6）
   const transcriptsBySession = new Map() // sid → [{ turn, text }]（上限 4）
 
@@ -593,7 +617,9 @@ function apply(ctx, config) {
     if (event.type === 'turn/start') {
       if (d && typeof d.turn === 'number') turnBySession.set(sid, d.turn)
       turnGeneration++
-      chimeRunning.add(sid)
+      turnGenBySession.set(sid, (turnGenBySession.get(sid) || 0) + 1)
+      chimeRunning.set(sid, { top: isTopLevelSession(session) })
+      chimeMisses.delete(sid)
       return
     }
     if (event.type === 'user/message') {
@@ -616,7 +642,10 @@ function apply(ctx, config) {
       return
     }
     if (event.type === 'turn/end') {
-      if (chimeRunning.delete(sid)) chimeLastEndedAt = Date.now()
+      if (chimeRunning.delete(sid)) {
+        chimeMisses.delete(sid)
+        chimeLastEndedAt = Date.now()
+      }
       const kind = d && d.reason && d.reason.kind
       const turn = d && d.turn
       let cfg
@@ -630,7 +659,11 @@ function apply(ctx, config) {
       }
       const entry = latestBySession.get(sid)
       if (entry && entry.turn === turn) {
-        pendingSpeak = { sessionId: entry.sessionId, messageId: entry.messageId, turn: entry.turn }
+        const item = { sessionId: entry.sessionId, messageId: entry.messageId, turn: entry.turn }
+        if (!pendingSpeakQueue.some((p) => p.messageId === item.messageId)) {
+          pendingSpeakQueue.push(item)
+          if (pendingSpeakQueue.length > PENDING_SPEAK_MAX) pendingSpeakQueue.shift()
+        }
         console.log('[voice] auto-speak pending:', entry.messageId)
       }
     }
@@ -638,7 +671,12 @@ function apply(ctx, config) {
 
   // 会话被回收时把账本里的残留清掉（漏一个 turn/end 会让所有窗口一直响工作音）
   ctx.on('session/disposed', (session) => {
-    try { chimeRunning.delete(String(session && session.header && session.header.id)) } catch { /* 结构异常：忽略 */ }
+    try {
+      const sid = String(session && session.header && session.header.id)
+      chimeRunning.delete(sid)
+      chimeMisses.delete(sid)
+      turnGenBySession.delete(sid)
+    } catch { /* 结构异常：忽略 */ }
   })
 
   // ---- 转写 ------------------------------------------------------------------
@@ -1047,6 +1085,7 @@ function apply(ctx, config) {
       let finishKind = 'stop'
       const timer = setTimeout(() => a2.abort(), timeoutMs)
       currentAbort = a2
+      currentAbortSession = run.sessionId
       try {
         const config = { provider: rt.provider, model: rt.model, temperature: cfg.transcribe.temperature, maxTokens: tokens }
         if (effort) config.reasoningEffort = effort
@@ -1633,6 +1672,7 @@ function apply(ctx, config) {
       async function attempt(rt, tokens, effort) {
         const ac = new AbortController()
         currentAbort = ac
+        currentAbortSession = sessionId
         let timedOut = false
         const timer = setTimeout(() => { timedOut = true; ac.abort() }, timeoutMs)
         try {
@@ -1834,19 +1874,28 @@ function apply(ctx, config) {
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
     }),
-    /** 全局"有会话在跑"账本：客户端轮询它补齐别的工作区的会话（自建订阅只在状态变化时触发）。
-     *  返回前先对账：会话已经不在活列表里就清掉，避免漏一个 turn/end 让所有窗口一直响。 */
+    /** 全局"有会话在跑"账本：客户端轮询它补齐子代理与别的工作区的会话（自建订阅只在状态变化时触发）。
+     *  返回 running（全部会话，工作音用）与 top（顶层会话，完成音用）。
+     *  返回前对账：会话已经不在活列表里就清掉，避免漏一个 turn/end 让所有窗口一直响工作音。
+     *  对账要连续两次取不到才清——瞬态取不到就清，会让工作音提前停、完成音误响。 */
     chimeStatus: async () => {
-      for (const sid of Array.from(chimeRunning)) {
-        try {
-          if (!sessions.get(sid)) chimeRunning.delete(sid)
-        } catch { /* 会话服务不可用：保留原样，下次再对账 */ }
+      for (const sid of Array.from(chimeRunning.keys())) {
+        let alive = true
+        try { alive = !!sessions.get(sid) } catch { /* 会话服务不可用：保留原样，下次再对账 */ }
+        if (alive) { chimeMisses.delete(sid); continue }
+        const miss = (chimeMisses.get(sid) || 0) + 1
+        if (miss >= 2) { chimeRunning.delete(sid); chimeMisses.delete(sid) } else chimeMisses.set(sid, miss)
       }
+      const running = Array.from(chimeRunning.keys())
+      const top = running.filter((sid) => (chimeRunning.get(sid) || {}).top)
       return {
         ok: true,
-        running: Array.from(chimeRunning),
-        count: chimeRunning.size,
+        running,
+        top,
+        count: running.length,
+        topCount: top.length,
         lastEndedAt: chimeLastEndedAt,
+        epoch: chimeEpoch,
       }
     },
     localStatus: async () => {
@@ -1893,7 +1942,7 @@ function apply(ctx, config) {
     },
     getState: async () => {
       const cfg = readConfig()
-      return { ok: true, autoSpeak: cfg.autoSpeak, pending: !!pendingSpeak, tts: cfg.tts }
+      return { ok: true, autoSpeak: cfg.autoSpeak, pending: pendingSpeakQueue.length > 0, tts: cfg.tts }
     },
     getConfig: async () => ({ ok: true, config: normalizeVoiceConfig(readConfig()) }),
     setConfig: async (args) => {
@@ -1936,15 +1985,16 @@ function apply(ctx, config) {
     },
     setAuto: async (args) => {
       await ctx.settings.update('voice', { autoSpeak: !!(args && args.enabled) })
-      if (pendingSpeak && !(args && args.enabled)) pendingSpeak = null
+      if (!(args && args.enabled)) pendingSpeakQueue.length = 0
       return { ok: true, autoSpeak: readConfig().autoSpeak }
     },
     pollSpeak: async () => {
-      const p = pendingSpeak
-      pendingSpeak = null
+      const p = pendingSpeakQueue.length ? pendingSpeakQueue.shift() : null
       let stopOnNewTurn = true
       try { stopOnNewTurn = readConfig().stopOnNewTurn !== false } catch { /* 按默认 true */ }
-      return { ok: true, pending: p, gen: turnGeneration, stopOnNewTurn }
+      // gens：按会话的 turn 计数。客户端只用"正在播的那个会话"的那一条判断该不该停播，
+      // 免得子代理/别的工作区开一轮就把本窗口的朗读掐断。
+      return { ok: true, pending: p, gen: turnGeneration, gens: Object.fromEntries(turnGenBySession), stopOnNewTurn }
     },
     preview: async () => {
       const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（试听与实际发声一致）
@@ -1958,13 +2008,29 @@ function apply(ctx, config) {
         const audioUrl = await synthToRoute(text, cfg, '', { sectionId: cfg.tts.volcengine && cfg.tts.volcengine.useSectionId ? randomUUID() : '' })
         return { ok: true, mode: 'audio', audioUrl }
       } catch (error) {
+        // 试听失败要留证据：这条路径不走 transcribe，不打印就只剩界面上一句 toast
+        console.error('[voice] preview failed:', (error && error.stack) || error)
         return { ok: false, error: String(error && error.message || error), errorKind: (error && error.kind) || '' }
       }
     },
-    stop: async () => {
-      if (currentAbort) currentAbort.abort()
-      stopRun(currentStreamRun)
-      pendingSpeak = null
+    stop: async (args) => {
+      // 无参 = 全局停（插件卸载、显式全停）；带 sessionId = 只停这个会话，
+      // 免得一个窗口停播把别的窗口正在跑的朗读与待播一起杀掉。
+      const sid = args && args.sessionId ? String(args.sessionId) : ''
+      if (!sid) {
+        if (currentAbort) currentAbort.abort()
+        for (const run of streamRuns.values()) stopRun(run)
+        pendingSpeakQueue.length = 0
+        return { ok: true }
+      }
+      for (const run of streamRuns.values()) {
+        if (run.sessionId === sid) stopRun(run)
+      }
+      for (let i = pendingSpeakQueue.length - 1; i >= 0; i--) {
+        if (pendingSpeakQueue[i].sessionId === sid) pendingSpeakQueue.splice(i, 1)
+      }
+      // 转写中的那次没有 runId 归属：只在"确实属于这个会话"时才 abort
+      if (currentAbort && (!currentAbortSession || currentAbortSession === sid)) currentAbort.abort()
       return { ok: true }
     },
     /** 客户端播放链路上报（浏览器半调用；失败无副作用）。 */

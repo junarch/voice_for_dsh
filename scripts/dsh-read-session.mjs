@@ -96,19 +96,25 @@ function scanFrames(buf) {
   return frames;
 }
 
-/** 解压会话文件（兼容 .jsonl.zstd 与明文 .jsonl），返回事件对象数组。 */
+/** 解压会话文件，返回事件对象数组。
+ *  DSH 的日志文件名带格式版本（`session.v4.jsonl.zstd`），换过几次名字：
+ *  v4 / v3 / 无版本三种都要认，否则读最新那几次会话会直接报"没有日志"。 */
+const SESSION_LOG_NAMES = ['session.v4.jsonl.zstd', 'session.v3.jsonl.zstd', 'session.jsonl.zstd', 'session.jsonl'];
 function loadEvents(sessionDir) {
-  const zstd = join(sessionDir, 'session.jsonl.zstd');
-  const plain = join(sessionDir, 'session.jsonl');
+  let file = ''
+  for (const name of SESSION_LOG_NAMES) {
+    if (existsSync(join(sessionDir, name))) { file = join(sessionDir, name); break }
+  }
   let text;
-  if (existsSync(zstd)) {
-    const buf = readFileSync(zstd);
+  if (file && file.endsWith('.zstd')) {
+    const buf = readFileSync(file);
     const parts = scanFrames(buf).map(([s, e]) => zstdDecompressSync(buf.subarray(s, e)).toString('utf8'));
     text = parts.join('');
-  } else if (existsSync(plain)) {
-    text = readFileSync(plain, 'utf8');
+  } else if (file) {
+    text = readFileSync(file, 'utf8');
   } else {
-    throw new Error(`no session log found in ${sessionDir}`);
+    const seen = readdirSync(sessionDir).filter((n) => n.endsWith('.jsonl') || n.endsWith('.jsonl.zstd'));
+    throw new Error(`no session log found in ${sessionDir}` + (seen.length ? `（目录里有：${seen.join(', ')}）` : ''));
   }
   return text.split('\n').filter(Boolean).map((l) => {
     try { return JSON.parse(l); } catch { return null; }

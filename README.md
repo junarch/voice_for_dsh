@@ -39,23 +39,27 @@
 
 ## 截图
 
-<img src="docs/screenshots/Screenshot_20260822224837.png" width="640" alt="消息朗读按钮与自动朗读开关">
+<img src="docs/screenshots/conversation-read-button.png" width="880" alt="消息朗读按钮与自动朗读开关">
 
-*对话：每条消息的朗读按钮、已朗读徽标与自动朗读开关*
+*对话：每条消息操作行里的「朗读」喇叭按钮（红框），输入框左侧的「自动」开关（红框）*
 
-<img src="docs/screenshots/Screenshot_20260822225031.png" width="640" alt="语音设置页">
+<img src="docs/screenshots/settings-5layers.png" width="880" alt="语音播报设置页（五层）">
 
-*设置页五层，逐层展开：常用（引擎 + 自动播报）／当前引擎的声音（音色、语速、试听）／转写／高级／提示音*
+*设置页五层：常用（引擎 + 自动播报 + 一行状态）→ 当前引擎的声音（本地 Kokoro，已装 407MB 模型，含「运行时自检」）→ 转写 → 高级 → 提示音。其余四层收起，层头带当前值摘要*
+
+<img src="docs/screenshots/settings-chime.png" width="880" alt="提示音设置层">
+
+*提示音层：总开关与总音量，工作音／完成音／提问音各自一行（可上传自定义音）*
 
 ---
 
 ## 平台支持
 
 - **Windows**：✅ 已实测（开发与发布均基于 Windows）。
-- **macOS / Linux**：⚠️ 未实测。Host 半与 Client 半的零成本测试（`test-host.mjs` / `test-client.mjs`）
-  已在 CI（`ubuntu-latest`）上跑通；未验证的是浏览器语音引擎行为（`speechSynthesis`）、界面交互，
-  以及本地 Kokoro 的原生模块在你机器上能不能装上。欢迎在 Mac/Linux 上试用并反馈
-  （见 [`docs/ROADMAP.md`](docs/ROADMAP.md)）。
+- **macOS / Linux**：⚠️ 未实测。零成本测试（`test-host.mjs` / `test-client.mjs` / 两个提示音套件）
+  在 CI（`ubuntu-latest`）里配置并运行过，最近一次结果看页面顶部的徽章；未验证的是浏览器语音引擎行为
+  （`speechSynthesis`）、界面交互，以及本地 Kokoro 的原生模块在你机器上能不能装上。欢迎在 Mac/Linux 上
+  试用并反馈（见 [`docs/ROADMAP.md`](docs/ROADMAP.md)）。
 
 ## 安装
 

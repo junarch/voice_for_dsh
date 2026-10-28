@@ -53,10 +53,12 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 - **`link:` 的相对路径由 CLI 自己解析**，锚定到哪个目录以 CLI 的实际行为为准（本仓库不对方向作承诺）：
   写成相对路径若被解析到别处（例如 `profiles\desktop\packages\...`，不存在），装的时候会报
   `cannot resolve profile bundle "dsh-plugin-voice"`。报这个错就换成绝对路径。
-- **装完（或升级依赖后）要重启桌面端**：Host 半会随 Loader 热加载进来，但 **Client 半不会**——
-  实测在运行中的应用里刚装好的插件，`/plugins/<id>/client.js?rev=…` 一直 404（rev 按上游
-  `artifactRevision` 算法复算过、与冷启动后的 rev 一致），只有整个应用重启后才进 boot 图。
-  所以"刷新页面"不够，得先重启应用。
+- **装完（或升级依赖后）要重启桌面端**：**两半都只有重启才换**——
+  Client 半是明确的（`/plugins/<id>/client.js?rev=…` 在运行中的应用里一直 404，rev 按上游
+  `artifactRevision` 算法复算过、与冷启动后的 rev 一致）；Host 半**也不要指望热加载**：
+  实测改完 `lib/index.js` 后，运行中的进程里新加的 `/voice/api/*` 方法仍然 404
+  （用 `node scripts/verify-installed.mjs --url …` 一眼能看出来），只有重启才生效。
+  所以"刷新页面"不够，得先重启应用；验收前先确认跑的是不是当前代码。
 
 ### 冷启动/端到端自验（不碰 desktop profile 的做法）
 桌面 profile 被 Electron 独占（CLI 会拒绝 `--dump-config` 等操作），但可以用桌面端自带的 CLI

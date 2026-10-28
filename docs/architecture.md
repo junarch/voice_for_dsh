@@ -112,12 +112,13 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
   放层头（收起也能开关）；第二层只渲染**当前引擎**的字段，三套配置互不干扰。
 - **提示音的运行态以客户端为主、Host 只补账本**：主信号是 `uiSession.sessionStatus` 快照（`running` /
   `pendingInteraction` / `completionUnread`），另订阅全局 `api-session/status` 事件、轮询 Host 的
-  `chimeStatus` 账本，补上「冷启动前已开跑」与「其他工作区」两类快照看不到的会话；`turn/end` 只在
-  Host 侧记账，不驱动播报。理由：提示音要在**播报关闭、没读过任何
-  一句话**时照常工作，也要覆盖"子代理在跑""DSH 弹提问等你答"这些与朗读无关的状态；挂在播报链上就会
-  互相牵连。子代理会话三层信号都要过滤（快照按 `origin`/`parentId`，Host 账本按结束事件与层级）。
-  已知限制：多窗口/多标签各自出声（没有跨窗口互斥）；别的工作区的子代理单独在跑时，工作音仍会响
-  （按"确实有活在跑"处理），但完成音只在计数归零时补一次。
+  `chimeStatus` 账本，补上「冷启动前已开跑」与「其他工作区」两类快照看不到的会话。理由：提示音要在**播报关闭、
+  没读过任何一句话**时照常工作，也要覆盖"子代理在跑""DSH 弹提问等你答"这些与朗读无关的状态；
+  挂在播报链上就会互相牵连。
+- **工作音与完成音是两套口径**：工作音 = 任何会话在跑（含子代理、含别的工作区）——"dsh 有活在跑"它就响；
+  完成音 = 顶层会话（`session.header.origin !== 'subagent'` 且不带 `parentId`）少一个，子代理结束不响。
+  Host 账本同时返回 `running`（全部）/ `top`（顶层）/ `epoch`（重载识别），三路信号在客户端并成集合再判断。
+  已知限制：多窗口/多标签各自出声（没有跨窗口互斥）。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
 - 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，
   其余回退齿轮（源码硬编码，无扩展点）；`settings.section` 注册仅 id/order/label，不支持自定义 icon。

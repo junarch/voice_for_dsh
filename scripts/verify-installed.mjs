@@ -160,8 +160,10 @@ if (dj) {
     !!(dj.manifest && dj.manifest.sourceLabel && dj.manifest.archiveLabel && dj.manifest.extractedLabel),
     dj.manifest ? dj.manifest.archiveLabel + ' → ' + dj.manifest.extractedLabel + ' · ' + dj.manifest.sourceLabel : '')
   if (dj.installed) {
+    // 版本用清单里的展示版本（v1.1）；installVersion 存的是模型目录名，直接打会像是版本号
+    const ver = (dj.manifest && dj.manifest.displayVersion) || dj.installedVersion || '?';
     console.log('  --   模型已装：' + dj.installDir + '（' + Math.round((dj.installedBytes || 0) / (1024 * 1024))
-      + 'MB，版本 ' + (dj.installedVersion || '?') + '，可删=' + dj.deletable + '）')
+      + 'MB，版本 ' + ver + '，可删=' + dj.deletable + '）')
   } else {
     console.log('  --   模型未安装：设置页点「下载模型」（348MB，装完不用重启）')
   }

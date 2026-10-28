@@ -324,6 +324,10 @@ async function soundsRequest(method, url, body, headers) {
 function fire(event) {
   for (const fn of eventListeners.get('session/event') || []) fn({ header: { id: 's1' } }, event)
 }
+/** 用指定会话头发事件（子代理 / 第二个会话用；header.origin='subagent' 就是 DSH 的子代理标记）。 */
+function fireFor(sid, event, header) {
+  for (const fn of eventListeners.get('session/event') || []) fn({ header: Object.assign({ id: sid }, header || {}) }, event)
+}
 const msgEvent = (id, turn, text) => ({ type: 'assistant/message', data: { turn, message: { id, content: [{ type: 'text', text }] } } })
 
 // ---------- 测试数据：一份"用户配置"（原始 config）和几条"历史消息" ----------
@@ -1159,6 +1163,7 @@ const engineState = {
   failFromCall: 0,      // 从第 N 次合成（1-based）起一直失败
   failOnlyCall: 0,      // 只让第 N 次合成失败
   hangFromCall: 0,      // 从第 N 次合成起挂住（不回调、不返回）
+  settleFailAfterChunks: false, // 分块回调全给完，但最终 promise 拒绝（Electron 运行时的真实表现）
 }
 /** 造一块 Float32 采样：正弦波，便于断言"确实是 16bit 小端 PCM"。 */
 function fakeSamples(seed) {
@@ -1182,6 +1187,7 @@ function fakeEngine(config) {
       for (let i = 0; i < engineState.chunksPerCall; i++) {
         if (onProgress) onProgress({ samples: fakeSamples(i * 7), progress: (i + 1) / engineState.chunksPerCall })
       }
+      if (engineState.settleFailAfterChunks) return Promise.reject(new Error('TTS settlement failed'))
       return Promise.resolve({ samples: fakeSamples(0), sampleRate: engineState.sampleRate })
     },
   }
@@ -1366,6 +1372,18 @@ await rpc('setConfig', localCfg({ modelDir: path.join(MODEL_FIXTURE, 'no-such-di
 const st21b = await rpc('localStatus')
 check('localStatus：模型缺失 → installed=false + 中文说明（不抛错）', st21b.ok === true && st21b.installed === false && /模型未安装/.test(String(st21b.error)), st21b)
 await rpc('setConfig', localCfg())
+
+// —— Electron 运行时怪状：分块回调把音频给了，最终 promise 却拒绝（实测 dsh 桌面端）——
+// 真实读数：ELECTRON_RUN_AS_NODE 下 generateAsync 抛 "TTS settlement failed"，
+// 但 onProgress 已回调 5 块、progress 走到 1、样本数与纯 Node 一致（273194）。
+// 不吞这个拒绝，桌面端本地合成整条不可用（试听、整段兜底、分句流式全挂）。
+{
+  engineState.settleFailAfterChunks = true
+  const quirk = await rpc('preview')
+  check('Electron settlement 怪状：音频已收齐就按成功收尾（不报 synth-failed）',
+    quirk.ok === true && quirk.mode === 'audio' && typeof quirk.audioUrl === 'string', quirk)
+  engineState.settleFailAfterChunks = false
+}
 
 // —— 停止：流式播报中途 stop → run 正常收尾，队列不再增长 ——
 await rpc('setConfig', localCfg({ streaming: true, segmentChars: 60 }))
@@ -1864,6 +1882,23 @@ async function waitDeploy(installer, timeoutMs = 8000) {
   check('deployRemove：我们装的那一份删得掉（目录消失）', removed.ok === true && removed.removed === true && !existsSync(modelDirOf(root)), removed)
   const dsAfter = await rpc('deployStatus')
   check('删除后 deployStatus 回到未装态', dsAfter.installed === false && dsAfter.deletable === false, dsAfter)
+
+  // 残缺目录：装好后被打坏（缺关键文件）→ installed=false，但仍该能删（带装机标记）。
+  // 否则用户只能自己去文件管理器里删那个半截目录。
+  const reStart = await rpc('deployStart')
+  check('重装一次（为残缺目录用例准备）', reStart.ok === true && reStart.started === true, reStart)
+  let reDs = await rpc('deployStatus')
+  for (let i = 0; i < 400 && ['downloading', 'verifying', 'extracting'].indexOf(reDs.phase) >= 0; i++) {
+    await sleep(10)
+    reDs = await rpc('deployStatus')
+  }
+  const brokenDir = modelDirOf(root)
+  rmSync(path.join(brokenDir, 'voices.bin'), { force: true })
+  const brokenDs = await rpc('deployStatus')
+  check('残缺目录：installed=false 但仍然可删（带装机标记）', brokenDs.installed === false && brokenDs.deletable === true, { installed: brokenDs.installed, deletable: brokenDs.deletable, missing: brokenDs.missing })
+  const brokenRemoved = await rpc('deployRemove')
+  check('残缺目录：删得掉（不留半截）', brokenRemoved.ok === true && !existsSync(brokenDir), brokenRemoved)
+
   setInstallerHooksForTest(null)
   if (savedEnvModelDir !== undefined) process.env.VOICE_LOCAL_MODEL_DIR = savedEnvModelDir
   rmSync(root, { recursive: true, force: true })
@@ -1960,6 +1995,87 @@ fire({ type: 'turn/start', data: { turn: 90 } })
   fire({ type: 'turn/end', data: { turn: 90, reason: { kind: 'completed' } } })
   const b = await rpc('chimeStatus', {})
   check('chimeStatus：turn/end 后账本归零并给出结束时间', b.ok === true && b.count === 0 && b.lastEndedAt > 0, b)
+}
+
+// —— 账本要"准"：子代理也记进工作账本（工作音要响），但不算顶层（完成音不响） ——
+{
+  const base = await rpc('chimeStatus', {})
+  sessionsState.sessions['sub-1'] = { header: { id: 'sub-1', origin: 'subagent' }, snapshotEvents: () => [] }
+  fireFor('sub-1', { type: 'turn/start', data: { turn: 1 } }, { origin: 'subagent' })
+  const a = await rpc('chimeStatus', {})
+  check('账本：子代理开跑也记进 running（有活在跑，工作音要响）', a.running.includes('sub-1') && a.count === base.count + 1, a)
+  check('账本：子代理不进 top（完成音不因它响）', Array.isArray(a.top) && !a.top.includes('sub-1'), a.top)
+  check('账本：带 epoch（Host 重载后客户端据此重建基线）', typeof a.epoch === 'string' && a.epoch.length > 0, a.epoch)
+
+  fire({ type: 'turn/start', data: { turn: 91 } })
+  const b = await rpc('chimeStatus', {})
+  check('账本：顶层会话同时在 running 与 top 里', b.running.includes('s1') && b.top.includes('s1'), b)
+  check('账本：topCount 只数顶层会话', b.topCount === 1 && b.count === 2, { count: b.count, topCount: b.topCount })
+
+  fireFor('sub-1', { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+  const c = await rpc('chimeStatus', {})
+  check('账本：子代理结束只减 running，顶层照旧', c.count === 1 && c.topCount === 1 && c.top.includes('s1'), c)
+  fire({ type: 'turn/end', data: { turn: 91, reason: { kind: 'completed' } } })
+}
+
+// —— 停播信号按会话：别处（子代理）开一轮不许动本会话的 gen ——
+{
+  const g1 = (await rpc('pollSpeak')).gens
+  const s1Before = g1['s1'] || 0
+  fireFor('sub-2', { type: 'turn/start', data: { turn: 1 } }, { origin: 'subagent' })
+  const g2 = (await rpc('pollSpeak')).gens
+  check('停播信号按会话：子代理 turn/start 不动 s1 的 gen', (g2['s1'] || 0) === s1Before, { before: s1Before, after: g2['s1'] })
+  check('停播信号按会话：子代理自己的 gen 记到了', (g2['sub-2'] || 0) === 1, g2)
+  fireFor('sub-2', { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+}
+
+// —— 自动播报待播改队列：同一窗口里两个会话结束都要排上，不能只留后一条 ——
+{
+  await rpc('setConfig', { patch: { autoSpeak: true, tts: { provider: 'browser' } } })
+  sessionsState.sessions['s2'] = { header: { id: 's2' }, snapshotEvents: () => [] }
+  await rpc('stop', {}) // 清掉前面段落可能残留的待播
+  fire({ type: 'turn/start', data: { turn: 200 } })
+  fire(msgEvent('mq1', 200, '第一条'))
+  fireFor('s2', { type: 'turn/start', data: { turn: 201 } })
+  fireFor('s2', msgEvent('mq2', 201, '第二条'))
+  fire({ type: 'turn/end', data: { turn: 200, reason: { kind: 'completed' } } })
+  fireFor('s2', { type: 'turn/end', data: { turn: 201, reason: { kind: 'completed' } } })
+  const q1 = await rpc('pollSpeak')
+  const q2 = await rpc('pollSpeak')
+  check('两个会话在同一轮询窗口结束：两条待播都在（不丢前一条）',
+    !!(q1.pending && q2.pending) && new Set([q1.pending.messageId, q2.pending.messageId]).size === 2,
+    { q1: q1.pending, q2: q2.pending })
+  check('待播队列消费完就空', (await rpc('pollSpeak')).pending === null)
+  await rpc('stop', {})
+}
+
+// —— 对账要防瞬态：会话第一次取不到不清，连续两次才清（否则工作音提前停、完成音误响） ——
+{
+  sessionsState.sessions['gone-1'] = { header: { id: 'gone-1' }, snapshotEvents: () => [] }
+  fireFor('gone-1', { type: 'turn/start', data: { turn: 1 } })
+  delete sessionsState.sessions['gone-1']
+  const a = await rpc('chimeStatus', {})
+  check('对账：第一次取不到不清（防瞬态误删）', a.running.includes('gone-1'), a.running)
+  const b = await rpc('chimeStatus', {})
+  check('对账：连续两次取不到才清', !b.running.includes('gone-1'), b.running)
+}
+
+// —— 停播按会话：stop(sessionId) 不许连坐别的会话的待播 ——
+{
+  await rpc('setConfig', { patch: { autoSpeak: true, tts: { provider: 'browser' } } })
+  sessionsState.sessions['s3'] = { header: { id: 's3' }, snapshotEvents: () => [] }
+  await rpc('stop', {})
+  fire({ type: 'turn/start', data: { turn: 300 } })
+  fire(msgEvent('ms1', 300, '会话一的待播'))
+  fireFor('s3', { type: 'turn/start', data: { turn: 301 } })
+  fireFor('s3', msgEvent('ms3', 301, '会话三的待播'))
+  fire({ type: 'turn/end', data: { turn: 300, reason: { kind: 'completed' } } })
+  fireFor('s3', { type: 'turn/end', data: { turn: 301, reason: { kind: 'completed' } } })
+  await rpc('stop', { sessionId: 's3' })
+  const q = await rpc('pollSpeak')
+  check('stop(sessionId)：只清掉该会话的待播，别人的留着', !!q.pending && q.pending.sessionId === 's1' && q.pending.messageId === 'ms1', q.pending)
+  check('stop(sessionId)：被停的那个会话的待播不在了', (await rpc('pollSpeak')).pending === null)
+  await rpc('stop', {})
 }
 
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）

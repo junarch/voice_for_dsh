@@ -16,13 +16,13 @@
 
 ## 1. 自动化门槛（零成本，每次必跑）
 
-- [ ] `node scripts/test-host.mjs` 全绿（当前 355 条）。
+- [ ] `node scripts/test-host.mjs` 全绿。
 - [ ] `node scripts/test-client.mjs` 通过（i18n zh/en 键数一致）。
-- [ ] `node scripts/test-chime-ui.mjs` 与 `node scripts/test-chime-playback.mjs` 全绿（35 / 39 条）。
+- [ ] `node scripts/test-chime-ui.mjs` 与 `node scripts/test-chime-playback.mjs` 全绿。
 - [ ] `node --check` 覆盖 `lib/` 下全部 8 个手写模块（CI 已含）。
 - [ ] CI（`.github/workflows/test.yml`）在 PR 上跑过一遍。
 
-> 断言数以最新输出为准，文档里不写死历史数字。
+> 断言数以脚本末尾的输出为准，文档里不写死历史条数（改了断言不用回来改这一页）。
 
 ## 2. 防 Token 浪费专项（最高优先级）
 

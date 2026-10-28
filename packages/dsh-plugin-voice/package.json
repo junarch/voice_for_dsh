@@ -41,24 +41,40 @@
     "sherpa-onnx-node": "1.13.8"
   },
   "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-client-connection": "^0.2.1-rc.3",
     "@deepseek-ai/dsh-client-locale": "^0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-conversation": "^0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-settings": "^0.2.1-rc.3",
-        "@deepseek-ai/dsh-settings": "^0.2.1-rc.3",
-    "@deepseek-ai/dsh-session": "^0.2.1-rc.3",
     "@deepseek-ai/dsh-llm": "^0.2.1-rc.3",
-    "@deepseek-ai/cordis": "~4.0.4"
+    "@deepseek-ai/dsh-session": "^0.2.1-rc.3",
+    "@deepseek-ai/dsh-settings": "^0.2.1-rc.3"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-client-connection": { "optional": true },
-    "@deepseek-ai/dsh-client-locale": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
-    "@deepseek-ai/dsh-client-ui-settings": { "optional": true },
-        "@deepseek-ai/dsh-settings": { "optional": true },
-    "@deepseek-ai/dsh-session": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/cordis": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-connection": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    }
   },
   "license": "MIT"
 }

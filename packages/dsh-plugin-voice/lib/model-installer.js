@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import {
-  createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync,
+  createReadStream, createWriteStream, existsSync, lstatSync, mkdirSync, readdirSync,
   readFileSync, renameSync, rmSync, statSync, writeFileSync, statfsSync,
 } from 'node:fs'
 import path from 'node:path'
@@ -212,6 +212,7 @@ export function createModelInstaller(options = {}) {
       minFreeBytes: MIN_FREE_BYTES,
       rootDir: () => userModelRoot(),
       getActive: () => ({ source: '', dir: '' }),
+      onBeforeRemove: null, // 删除前先卸运行时（Windows 文件句柄）
     }, options, testHooks || {})
   }
 
@@ -240,10 +241,15 @@ export function createModelInstaller(options = {}) {
     }
   }
 
-  /** 删除范围：只删"有装机标记 + 当前没被别处占用"的那一份。 */
+  /** 删除范围：只删"有装机标记 + 当前没被别处占用"的那一份。
+   *  判据是"有没有装机标记"而不是"文件完整"：解包失败留下的残缺目录同样带标记，
+   *  也必须能删——否则用户只能自己去文件管理器里删那个半截目录。 */
   function removeScope(active, info) {
-    if (!info.installed) return { deletable: false, reason: '' }
-    if (!info.marker) return { deletable: false, reason: '这份模型不是从设置页装的（没有安装标记），不在可删范围' }
+    if (!info.marker) {
+      if (info.installed) return { deletable: false, reason: '这份模型不是从设置页装的（没有安装标记），不在可删范围' }
+      return { deletable: false, reason: '' }
+    }
+    if (!existsSync(info.dir)) return { deletable: false, reason: '' }
     if (active.source === 'config') {
       return { deletable: false, reason: '当前模型来自自定义目录（' + active.dir + '），不在可删范围' }
     }
@@ -295,10 +301,12 @@ export function createModelInstaller(options = {}) {
     }
   }
 
-  /** 清扫上次留下的解包临时目录（启动时与每次安装开始时都调）。 */
+  /** 清扫上次留下的解包临时目录（启动时与每次安装开始时都调）。
+   *  断点数据 `.partial` 只在"模型已经装好"时回收：装好了它就彻底没用了，
+   *  不回收的话一次失败的下载会永久占着 348MB 且界面上看不到；没装好时留着续传。 */
   function sweep() {
     const c = cfg()
-    const { root } = dirs(c)
+    const { root, partial } = dirs(c)
     let entries = []
     try { entries = readdirSync(root, { withFileTypes: true }) } catch { return 0 }
     let removed = 0
@@ -306,6 +314,7 @@ export function createModelInstaller(options = {}) {
       if (!entry.isDirectory() || !entry.name.startsWith(TMP_PREFIX)) continue
       try { rmSync(path.join(root, entry.name), { recursive: true, force: true }); removed++ } catch { /* 占用中就下次再清 */ }
     }
+    try { if (installedInfo(c).installed) rmSync(partial, { recursive: true, force: true }) } catch { /* 占用中下次再清 */ }
     return removed
   }
 
@@ -422,6 +431,11 @@ export function createModelInstaller(options = {}) {
       if (j.cancelRequested || (error && error.kind === 'cancel')) throw installError('cancel', '已取消安装')
       if (error && error.name === 'AbortError') throw installError('cancel', '已取消安装')
       if (error && error.kind === 'network') throw error
+      // 磁盘写满不是网络问题：归 disk，别让它走"重试两次 → 报连不上服务器"那条歧路
+      const sig = String((error && (error.code || error.errno)) || '') + ' ' + String((error && error.message) || '')
+      if (/ENOSPC|no space left|disk full/i.test(sig)) {
+        throw installError('disk', '磁盘空间不够，写入失败：清理一些文件后再点下载')
+      }
       throw installError('network', '下载中断：' + String(error && error.message || error))
     }
     j.received = statSafe(archive) ? statSync(archive).size : got
@@ -579,14 +593,31 @@ export function createModelInstaller(options = {}) {
     }
     const active = c.getActive() || {}
     const info = installedInfo(c)
-    if (!info.installed) {
-      return { ok: false, errorKind: 'not-installed', error: '本地模型没装，没有可删除的目录', state: status() }
-    }
     const scope = removeScope(active, info)
     if (!scope.deletable) {
-      return { ok: false, errorKind: 'not-removable', error: scope.reason || '不在可删范围', state: status() }
+      const nothing = !info.marker && !info.installed
+      return {
+        ok: false,
+        errorKind: nothing ? 'not-installed' : 'not-removable',
+        error: nothing ? '本地模型没装，没有可删除的目录' : (scope.reason || '不在可删范围'),
+        state: status(),
+      }
     }
+    // 先卸运行时：原生模块持有模型文件句柄时，Windows 会删到一半抛错，留个半截目录
+    try { if (typeof c.onBeforeRemove === 'function') c.onBeforeRemove() } catch { /* 卸载失败不阻断删除 */ }
+    // 删之前再核一次边界：只删模型根下那一份，且不跟着符号链接/junction 跑到别处去
+    const rootResolved = path.resolve(dirs(c).root)
+    const dirResolved = path.resolve(info.dir)
+    if (dirResolved.indexOf(rootResolved + path.sep) !== 0) {
+      return { ok: false, errorKind: 'not-removable', error: '目标目录不在模型根下，拒绝删除：' + dirResolved, state: status() }
+    }
+    try {
+      if (lstatSync(info.dir).isSymbolicLink()) {
+        return { ok: false, errorKind: 'not-removable', error: '目标目录是符号链接/junction，拒绝删除：' + dirResolved, state: status() }
+      }
+    } catch { /* 取不到属性就按普通目录处理 */ }
     rmSync(info.dir, { recursive: true, force: true })
+    try { rmSync(dirs(c).partial, { recursive: true, force: true }) } catch { /* 断点数据一并回收 */ }
     clearJob()
     return { ok: true, removed: true, state: status() }
   }

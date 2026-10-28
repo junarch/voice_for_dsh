@@ -206,7 +206,7 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   check('审批弹窗（kind=approval）不响提问音', env.started.filter((s) => Math.abs(s.duration - 0.62) < 0.05).length === 0, env.started)
 }
 
-// ============ 场景 3：子代理会话不触发工作音/完成音 ============
+// ============ 场景 3：子代理也算"有活在跑"（工作音响），但不触发完成音 ============
 {
   const env = makeEnv(baseChime())
   await boot(env)
@@ -214,13 +214,16 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   env.setRow('sub1', { id: 'sub1', origin: 'subagent', parentId: 's1' })
   env.setStatus('sub1', { running: true })
   await settle()
-  check('只有子代理在跑：不起工作音', env.started.length === 0, env.started)
+  check('只有子代理在跑：工作音也响（子代理也算有活在跑）', workStarts(env).length === 1, env.started)
   env.setStatus('sub1', { running: false })
   await settle()
-  check('子代理结束：不响完成音', env.started.length === 0, env.started)
+  check('子代理结束：不响完成音', startsByDuration(env, 0.7).length === 0, env.started)
+  await sleep(900) // 工作音停止有 800ms 去抖
+  check('子代理结束后没有活：工作音停', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
+  const before = workStarts(env).length
   env.setStatus('s1', { running: true })
   await settle()
-  check('顶层会话在跑：工作音照常起', env.started.filter((s) => s.loop).length === 1, env.started)
+  check('顶层会话在跑：工作音重新起来（只一条）', workStarts(env).length === before + 1, env.started)
 }
 
 // ============ 场景 4：提问音按 interaction key 去重，消失后清 key ============
@@ -259,6 +262,7 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   env.setStatus('s2', { running: false })
   await settle()
   check('两条会话几乎同时结束：完成音只响一次', env.started.filter((s) => Math.abs(s.duration - 0.7) < 0.05).length === 1, env.started)
+  await sleep(900) // 工作音停止有 800ms 去抖
   check('两个都结束后：工作音停掉', env.stopped.filter((s) => s.loop).length === 1, env.stopped)
 }
 
@@ -360,8 +364,35 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   const doneBefore = startsByDuration(env, 0.7).length
   env.emitRemote('api-session/status', 'other-ws-1', false)
   await settle()
-  check('别的工作区的会话结束：响一次完成音', startsByDuration(env, 0.7).length === doneBefore + 1, env.started)
+  // 只有 id、没有列表行 → 判不出是顶层还是子代理。宁可漏一声，不误响：
+  // 别的工作区的顶层会话结束，靠 Host 账本的 top 列表补（见场景 13b）。
+  check('层级未知的会话结束：不响完成音（判不出层级宁可不响）', startsByDuration(env, 0.7).length === doneBefore, env.started)
+  await sleep(900)
   check('都停了以后：工作音停掉', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
+}
+
+// ============ 场景 13b：别的工作区的顶层会话结束——Host 账本的 top 说了算 ============
+{
+  const env = makeEnv(baseChime())
+  const baseFetch = env.fetch
+  let phase = 1
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      const body = phase === 1
+        ? { ok: true, running: ['other-ws-9'], top: ['other-ws-9'], count: 1, topCount: 1, lastEndedAt: 0, epoch: 'e1' }
+        : { ok: true, running: [], top: [], count: 0, topCount: 0, lastEndedAt: 999, epoch: 'e1' }
+      return { ok: true, status: 200, json: async () => body }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  await boot(env)
+  await sleep(300)
+  check('账本 top 里有别的工作区的会话：工作音起', env.started.filter((s) => s.loop).length === 1, env.started)
+  phase = 2
+  await sleep(2400)
+  check('账本 top 掉了别的工作区的会话：响一次完成音', startsByDuration(env, 0.7).length === 1, env.started)
 }
 
 // ============ 场景 13：Host 账本里有会话在跑（已开跑、之后没有状态变化）也要响 ============
@@ -371,7 +402,7 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   env.fetch = async (url) => {
     const target = String(url)
     if (target.indexOf('/voice/api/chimeStatus') >= 0) {
-      return { ok: true, status: 200, json: async () => ({ ok: true, running: ['host-1'], count: 1, lastEndedAt: 0 }) }
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: ['host-1'], top: ['host-1'], count: 1, topCount: 1, lastEndedAt: 0, epoch: 'e0' }) }
     }
     return baseFetch(url)
   }
@@ -380,11 +411,11 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   await settle()
   check('Host 账本说有会话在跑：工作音起（补上已开跑的情况）', env.started.filter((s) => s.loop).length === 1, env.started)
 
-  // 账本掉到 0 并给出结束时间 → 完成音 + 工作音停
+  // 账本掉到 0 → 完成音 + 工作音停
   env.fetch = async (url) => {
     const target = String(url)
     if (target.indexOf('/voice/api/chimeStatus') >= 0) {
-      return { ok: true, status: 200, json: async () => ({ ok: true, running: [], count: 0, lastEndedAt: 123456 }) }
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: [], top: [], count: 0, topCount: 0, lastEndedAt: 123456, epoch: 'e0' }) }
     }
     return baseFetch(url)
   }
@@ -395,6 +426,34 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   await sleep(3400)
   check('Host 账本报结束：响一次完成音', startsByDuration(env, 0.7).length >= doneBefore + 1, env.started)
   check('账本归零后工作音停下', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
+}
+
+// ============ 场景 13c：Host 重载（epoch 变了、账本归零）不补响完成音 ============
+{
+  const env = makeEnv(baseChime())
+  const baseFetch = env.fetch
+  let epoch = 'e1'
+  let run = ['host-1']
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ ok: true, running: run, top: run, count: run.length, topCount: run.length, lastEndedAt: 0, epoch }),
+      }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  await boot(env)
+  await sleep(300)
+  check('重载前：账本说在跑，工作音起', env.started.filter((s) => s.loop).length === 1, env.started)
+  // 模拟 Host 重载：插件实例换了（epoch 变），账本从零开始
+  epoch = 'e2'
+  run = []
+  await sleep(2400)
+  check('Host 重载导致账本归零：不响完成音（epoch 变了只重建基线）', startsByDuration(env, 0.7).length === 0, env.started)
+  check('Host 重载后工作音收尾', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
 }
 
 // ============ 场景 14：刷新/重开不凭空响完成音（账本基线只记不响） ============
@@ -441,17 +500,40 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   check('一次结束：3 秒内只响一声完成音（快照 + 账本不重复）', doneCount === 1, { doneCount })
 }
 
-// ============ 场景 16：子代理（remote 那一路）不触发 ============
+// ============ 场景 16：子代理（remote 那一路）也响工作音，但不响完成音 ============
 {
   const env = makeEnv(baseChime())
   await boot(env)
   env.setRow('sub-a', { id: 'sub-a', origin: 'subagent' })
   env.emitRemote('api-session/status', 'sub-a', true)
   await settle()
-  check('子代理开跑：不起工作音', env.started.filter((s) => s.loop).length === 0, env.started)
+  check('子代理开跑：工作音照响', env.started.filter((s) => s.loop).length === 1, env.started)
   env.emitRemote('api-session/status', 'sub-a', false)
   await settle()
   check('子代理结束：不响完成音', startsByDuration(env, 0.7).length === 0, env.started)
+}
+
+// ============ 场景 17：主会话与子代理同时在跑——完成音只在主会话结束时响一次 ============
+{
+  const env = makeEnv(baseChime())
+  await boot(env)
+  env.setRow('s1', { id: 's1', origin: 'session' })
+  env.setRow('sub2', { id: 'sub2', origin: 'subagent', parentId: 's1' })
+  env.setStatus('s1', { running: true })
+  env.setStatus('sub2', { running: true })
+  await settle()
+  check('主会话 + 子代理：只起一份工作音', workStarts(env).length === 1, env.started)
+
+  env.setStatus('s1', { running: false })   // 主会话这一轮跑完，子代理还在跑
+  await settle()
+  check('主会话结束：响一次完成音', startsByDuration(env, 0.7).length === 1, env.started)
+  check('子代理还在跑：工作音不停', env.stopped.filter((s) => s.loop).length === 0, env.stopped)
+
+  env.setStatus('sub2', { running: false }) // 子代理收尾
+  await settle()
+  check('子代理结束：不再补第二声完成音', startsByDuration(env, 0.7).length === 1, env.started)
+  await sleep(900) // 工作音停止有 800ms 去抖
+  check('全停了：工作音停掉', env.stopped.filter((s) => s.loop).length === 1, env.stopped)
 }
 
 console.log('\n结果: ' + (cases.length - failed) + ' passed, ' + failed + ' failed')

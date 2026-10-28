@@ -23,7 +23,7 @@
   （逐项清单见 `docs/local-tts.md` §5.1）。**不需要**再装 Python、不用再起本地服务、不用管端口。
 - **配置不用改**：`tts.local.sid`/`speed` 继续生效；旧的 `provider: local-cosyvoice` 会自动归一到
   `local`（旧配置的意图就是"用本地引擎"）；已退役的 `baseUrl`/`voice`/`autoStart`/`pythonPath`
-  读到会被忽略，下次保存时被清掉。
+  读到会被忽略——它们仍留在 patch 里（插件不读、也不主动清），想清爽就手动删掉那几行。
 - **豆包不受影响**：`tts.volcengine.apiKey` 的位置与写法完全不变（仍是 profile `cordis.patch.yml` 里的明文）。
 
 ### 升级指引（0.1.x → 0.2.0，配置位置变更）
@@ -65,11 +65,11 @@
 - **设置页改五层渐进展开**：常用（引擎 + 自动播报 + 一行引擎状态）／当前引擎的声音（按引擎只渲染它自己的
   字段，本地模型安装行常驻层头）／转写／高级（线程数、分句流式、模型目录）／提示音。
   除第一层外默认收起，层头带当前值摘要；转写与提示音的主开关放在层头，不展开也能开关。
-- **提示音**（`voice.chime`，默认整层关闭）：工作音（顶层会话在跑时）、完成音（running 真→假）、
-  提问音（`pendingInteraction` 为 `question`/`plan-review`，审批不响）。运行态以客户端
-  `uiSession.sessionStatus` 快照为主，另加全局 `api-session/status` 事件与 Host 的 `chimeStatus` 账本，
-  覆盖「冷启动前已开跑」和「其他工作区」的会话；播报关掉也照响。子代理三层信号都过滤掉，
-  完成音按 2.5 秒窗合并、刷新页面不补响。
+- **提示音**（`voice.chime`，默认整层关闭）：工作音（**任何会话**在跑时，含子代理与别的工作区）、
+  完成音（**顶层会话**少一个时）、提问音（`pendingInteraction` 为 `question`/`plan-review`，审批不响）。
+  运行态以客户端 `uiSession.sessionStatus` 快照为主，另加全局 `api-session/status` 事件与 Host 的
+  `chimeStatus` 账本，覆盖「冷启动前已开跑」和「其他工作区」的会话；播报关掉也照响。
+  子代理在跑会响工作音（有活在跑），但子代理结束不响完成音；完成音按 2.5 秒窗合并、刷新页面不补响。
   - 默认三种音都是程序合成（正弦 + 指数衰减包络），不随包带音频文件。
   - 可上传自定义音：`POST /voice/sounds?kind=work|done|ask&name=<原名>`（≤10MB，按魔数认 mp3/wav/ogg/
     m4a/aac/flac/opus/webm，文件名白名单拒绝 `..`），落盘 `<DSH_HOME>/voice/sounds`；
