@@ -114,8 +114,8 @@ function extractVoiceTags(text) {
 /** 火山豆包 2.0 可选音色（精选：中文 4 女 4 男 + 英文，均经
  * scripts/tts-voice-avail-probe.mjs 在 plan 网关 + 双向流实测可用；
  * 设置页下拉 + 允许自定义输入）。
- * 说明：8 种方言统一走 vv（explicit_dialect 实测仅 vv 支持），因此方言模式下
- * 音色锚定 vv（音色↔语种双向自适应，不锁定/不禁用）；English 下自动切英文音色。 */
+ * 说明：8 种方言是音色能力（官方 2.0 音色表里只有 Vivi/小何/云舟/小天 标了方言），
+ * 设置页只对这几个音色显示方言项；英文音色只配 English。能力矩阵见 lib/voice-compat.js。 */
 const VOLC_VOICES = [
   // 中文女声
   { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0（女）' },
@@ -796,7 +796,7 @@ function apply(ctx, config) {
    *   > 内容驱动生成指令（generated.instruction，主通道）
    *   > 预设机械指令（preset.instruct，最后兜底）。
    * 注意：方言不再拼进 context_texts（探针实测无效），改走
-   * additions.explicit_dialect（8 种方言统一 vv 音色，双向流+HTTP 实测全部生效）。
+   * additions.explicit_dialect（只对支持方言的音色下发；双向流+HTTP 均实测生效）。
    */
   function buildVoiceInstruction(cfg, extractedCmd, generated) {
     const parts = []
