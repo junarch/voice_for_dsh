@@ -397,5 +397,62 @@ const startsByDuration = (env, d) => env.started.filter((s) => Math.abs(s.durati
   check('账本归零后工作音停下', env.stopped.filter((s) => s.loop).length >= 1, env.stopped)
 }
 
+// ============ 场景 14：刷新/重开不凭空响完成音（账本基线只记不响） ============
+{
+  const env = makeEnv(baseChime())
+  const baseFetch = env.fetch
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      // 这个 Host 进程里以前结束过 turn，但当前没有任何会话在跑
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: [], count: 0, lastEndedAt: 987654321 }) }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  await boot(env)
+  await sleep(2200)
+  check('刷新后首轮只建基线：不凭空响完成音', startsByDuration(env, 0.7).length === 0, env.started)
+  check('刷新后没有会话在跑：不起工作音', env.started.filter((s) => s.loop).length === 0, env.started)
+}
+
+// ============ 场景 15：一次结束只响一次（观察 3 秒，覆盖三路信号重复触发） ============
+{
+  const env = makeEnv(baseChime())
+  const baseFetch = env.fetch
+  let ledgerCount = 1
+  env.fetch = async (url) => {
+    const target = String(url)
+    if (target.indexOf('/voice/api/chimeStatus') >= 0) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, running: [], count: ledgerCount, lastEndedAt: 555 }) }
+    }
+    return baseFetch(url)
+  }
+  globalThis.fetch = env.fetch
+  await boot(env)
+  await settle()
+  env.setRow('s1', { id: 's1', origin: 'session' })
+  env.setStatus('s1', { running: true })
+  await settle()
+  ledgerCount = 0
+  env.setStatus('s1', { running: false })
+  await sleep(3200)
+  const doneCount = startsByDuration(env, 0.7).length
+  check('一次结束：3 秒内只响一声完成音（快照 + 账本不重复）', doneCount === 1, { doneCount })
+}
+
+// ============ 场景 16：子代理（remote 那一路）不触发 ============
+{
+  const env = makeEnv(baseChime())
+  await boot(env)
+  env.setRow('sub-a', { id: 'sub-a', origin: 'subagent' })
+  env.emitRemote('api-session/status', 'sub-a', true)
+  await settle()
+  check('子代理开跑：不起工作音', env.started.filter((s) => s.loop).length === 0, env.started)
+  env.emitRemote('api-session/status', 'sub-a', false)
+  await settle()
+  check('子代理结束：不响完成音', startsByDuration(env, 0.7).length === 0, env.started)
+}
+
 console.log('\n结果: ' + (cases.length - failed) + ' passed, ' + failed + ' failed')
 process.exit(failed ? 1 : 0)

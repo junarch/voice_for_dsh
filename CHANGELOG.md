@@ -66,8 +66,10 @@
   字段，本地模型安装行常驻层头）／转写／高级（线程数、分句流式、模型目录）／提示音。
   除第一层外默认收起，层头带当前值摘要；转写与提示音的主开关放在层头，不展开也能开关。
 - **提示音**（`voice.chime`，默认整层关闭）：工作音（顶层会话在跑时）、完成音（running 真→假）、
-  提问音（`pendingInteraction` 为 `question`/`plan-review`，审批不响）。信号只从客户端
-  `uiSession.sessionStatus` 快照对账，`turn/end` 不参与，播报关掉也照响；子代理会话会被过滤掉。
+  提问音（`pendingInteraction` 为 `question`/`plan-review`，审批不响）。运行态以客户端
+  `uiSession.sessionStatus` 快照为主，另加全局 `api-session/status` 事件与 Host 的 `chimeStatus` 账本，
+  覆盖「冷启动前已开跑」和「其他工作区」的会话；播报关掉也照响。子代理三层信号都过滤掉，
+  完成音按 2.5 秒窗合并、刷新页面不补响。
   - 默认三种音都是程序合成（正弦 + 指数衰减包络），不随包带音频文件。
   - 可上传自定义音：`POST /voice/sounds?kind=work|done|ask&name=<原名>`（≤10MB，按魔数认 mp3/wav/ogg/
     m4a/aac/flac/opus/webm，文件名白名单拒绝 `..`），落盘 `<DSH_HOME>/voice/sounds`；

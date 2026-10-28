@@ -636,6 +636,11 @@ function apply(ctx, config) {
     }
   })
 
+  // 会话被回收时把账本里的残留清掉（漏一个 turn/end 会让所有窗口一直响工作音）
+  ctx.on('session/disposed', (session) => {
+    try { chimeRunning.delete(String(session && session.header && session.header.id)) } catch { /* 结构异常：忽略 */ }
+  })
+
   // ---- 转写 ------------------------------------------------------------------
   async function discoverRoute() {
     const providers = llm.listProviders()
@@ -1829,13 +1834,21 @@ function apply(ctx, config) {
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, prompt: p.prompt })),
       rateStops: RATE_STOPS,
     }),
-    /** 全局"有会话在跑"账本：客户端轮询它补齐别的工作区的会话（自建订阅只在状态变化时触发）。 */
-    chimeStatus: async () => ({
-      ok: true,
-      running: Array.from(chimeRunning),
-      count: chimeRunning.size,
-      lastEndedAt: chimeLastEndedAt,
-    }),
+    /** 全局"有会话在跑"账本：客户端轮询它补齐别的工作区的会话（自建订阅只在状态变化时触发）。
+     *  返回前先对账：会话已经不在活列表里就清掉，避免漏一个 turn/end 让所有窗口一直响。 */
+    chimeStatus: async () => {
+      for (const sid of Array.from(chimeRunning)) {
+        try {
+          if (!sessions.get(sid)) chimeRunning.delete(sid)
+        } catch { /* 会话服务不可用：保留原样，下次再对账 */ }
+      }
+      return {
+        ok: true,
+        running: Array.from(chimeRunning),
+        count: chimeRunning.size,
+        lastEndedAt: chimeLastEndedAt,
+      }
+    },
     localStatus: async () => {
       // 运行时自检：模型目录/有没有加载/音色数/采样率/线程数（模型已装则顺手加载一次，
       // 把真实读数带回去；这不是"拉起服务"，进程内本来就没有服务）。

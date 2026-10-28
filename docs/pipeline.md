@@ -362,7 +362,8 @@ voice:
 ### 6.2 提示音（chime）
 
 - **信号只从客户端来**，Host 不推送：`uiSession.sessionStatus`（`Map<sessionId, {running, pendingInteraction, completionUnread}>`，
-  有 `getSnapshot/subscribe`）。三种音全部由这个快照对账得出，`turn/end` 不参与（它只服务自动播报）。
+  有 `getSnapshot/subscribe`）。快照为主；另加全局 `api-session/status` 事件与 Host 的 `chimeStatus` 账本，
+覆盖「冷启动前已开跑」和「其他工作区」两类快照看不到的会话。`turn/end` 只在 Host 侧记账，不驱动播报。
 - **工作音**：顶层会话 `running` 计数 `0→>0` 起、`>0→0` 停。素材 ≥2 秒用 `loop=true` 单条循环；
   短于 2 秒不 loop（会变蜂鸣），改成每 2 秒响一次。
 - **完成音**：顶层会话 `running` 由真变假触发；领先播放 + 1 秒抑制窗（多条会话几乎同时结束只响一次）。

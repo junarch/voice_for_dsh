@@ -976,7 +976,7 @@ window.__ModuleLoader__.load({
     var CHIME_KINDS = ["work", "done", "ask"];
     var CHIME_VOLUME_DEFAULT = 0.3;
     var CHIME_MIN_LOOP_SEC = 2;         // 素材短于 2 秒时 loop 会变蜂鸣 → 改成每 2 秒一次
-    var CHIME_DONE_SUPPRESS_MS = 1000;  // 完成音抑制窗：一段时间内多次结束只响一次
+    var CHIME_DONE_SUPPRESS_MS = 2500;  // 完成音抑制窗（> 账本轮询周期）：三路信号看到同一次结束也只响一声
     var CHIME_MAX_BYTES = 10 * 1024 * 1024;
     var CHIME_MAX_SEC = 60;
 
@@ -994,6 +994,9 @@ window.__ModuleLoader__.load({
     var chimeRemoteRunning = {}; // 全局 api-session/status 记下的 running（含其他工作区）
     var chimeGlobalCount = 0;    // Host 账本的 running 数（补齐已开跑未变化的会话）
     var chimeGlobalEndedAt = 0;  // Host 账本的最近结束时间
+    var chimeGlobalPrevCount = 0; // 上一轮账本计数（只在 >0→0 时补完成音）
+    var chimeLedgerPrimed = false; // 首次轮询只当基线：刷页/重开不凭空响
+    var chimeDisposed = false;   // 已卸载：迟到的轮询结果不许再起播
     var chimePollTimer = null;   // 轮询 Host 账本的定时器
     var chimeAskKeys = {};     // interaction key → true（同一交互只响一次）
     var chimeMissing = {};     // kind → 配置里的文件名（读不到、已回落默认音）
@@ -1237,8 +1240,9 @@ window.__ModuleLoader__.load({
     /** 全局 running 事件（api-session/status）记录：其他工作区的会话不在 sessionStatus 里，
      *  只靠当前工作区的快照会漏掉"别处还有活在跑"的情况。 */
     function chimeRemoteStatus(id, running) {
-      if (!chimeCfg || !chimeCfg.enabled) return;
+      if (!chimeCfg || !chimeCfg.enabled || chimeDisposed) return;
       var sid = String(id);
+      if (!isTopLevelSession(sid)) return;   // 本工作区能识别的子代理：不响
       if (running) {
         if (!chimeRemoteRunning[sid]) { chimeRemoteRunning[sid] = true; chimeTick(); }
         return;
@@ -1249,16 +1253,27 @@ window.__ModuleLoader__.load({
       triggerDoneChime();
       chimeTick();
     }
-    /** 轮询 Host 的全局账本：补上"已经开跑、之后没有状态变化"的会话（切工作区后尤其需要）。 */
+    /** 轮询 Host 的全局账本：补上"已经开跑、之后没有状态变化"的会话（切工作区后尤其需要）。
+     *  完成音只在计数 >0→0 时补一次：中途 steer 的 turn/end 不算结束，子代理结束也不响。 */
     function pollChimeStatus() {
-      if (!chimeCfg || !chimeCfg.enabled) return;
+      if (!chimeCfg || !chimeCfg.enabled || chimeDisposed) return;
+      if (!chimeRowEnabled("work") && !chimeRowEnabled("done")) return;
       rpc("chimeStatus").then(function (res) {
-        if (!res || !res.ok) return;
-        chimeGlobalCount = typeof res.count === "number" ? res.count : (Array.isArray(res.running) ? res.running.length : 0);
-        if (res.lastEndedAt && res.lastEndedAt !== chimeGlobalEndedAt) {
-          chimeGlobalEndedAt = res.lastEndedAt;
-          triggerDoneChime();
+        if (!res || !res.ok || chimeDisposed) return;
+        var count = typeof res.count === "number" ? res.count : (Array.isArray(res.running) ? res.running.length : 0);
+        var endedAt = res.lastEndedAt || 0;
+        if (!chimeLedgerPrimed) {          // 首轮只当基线：刷新/重开不凭空响
+          chimeLedgerPrimed = true;
+          chimeGlobalPrevCount = count;
+          chimeGlobalCount = count;
+          chimeGlobalEndedAt = endedAt;
+          chimeTick();
+          return;
         }
+        if (count === 0 && chimeGlobalPrevCount > 0) triggerDoneChime();
+        chimeGlobalPrevCount = count;
+        chimeGlobalCount = count;
+        chimeGlobalEndedAt = endedAt;
         chimeTick();
       }).catch(function () {});
     }
@@ -1271,12 +1286,15 @@ window.__ModuleLoader__.load({
       if (chimePollTimer) { clearInterval(chimePollTimer); chimePollTimer = null; }
       chimeGlobalCount = 0;
       chimeGlobalEndedAt = 0;
+      chimeGlobalPrevCount = 0;
+      chimeLedgerPrimed = false;
     }
     /** 状态对账：work 计数、done 真→假、ask 按 key 去重。
      *  running 取三处并集：uiSession.sessionStatus（当前工作区，含 pendingInteraction）、
      *  全局 api-session/status 事件、Host 的 chimeStatus 账本（含已开跑未变化与别的工作区）。 */
     function chimeTick() {
       if (!chimeCfg || !chimeCfg.enabled) { stopChimes(); return; }
+      if (chimeDisposed) return;
       var uiSession = clientService("uiSession");
       var snap = null;
       if (uiSession && uiSession.sessionStatus) {
@@ -1328,6 +1346,9 @@ window.__ModuleLoader__.load({
       } else {
         stopChimePoll();
         stopChimes();
+        chimeRemoteRunning = {};   // 关着时收不到结束事件：清掉旧记录，免得重开后卡住工作音
+        chimePrevRunning = {};
+        chimeAskKeys = {};
       }
       if (!chimeRowEnabled("work")) stopWorkChime();
     }
@@ -1351,6 +1372,7 @@ window.__ModuleLoader__.load({
       document.addEventListener("keydown", chimePreheat, true);
     }
     function disposeChime() {
+      chimeDisposed = true;
       stopChimePoll();
       stopChimes();
       if (typeof document !== "undefined" && chimePreheat) {

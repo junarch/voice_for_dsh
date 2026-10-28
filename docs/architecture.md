@@ -110,10 +110,14 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
   参数（豆包鉴权、转写路由、本地线程数）。平铺四十来个字段，每次进来都要从头扫一遍才能确认"还是原来那样"。
   所以：常用项常驻第一层；其余四层收起，层头带当前值摘要（不展开也知道现在是什么）；转写/提示音的主开关
   放层头（收起也能开关）；第二层只渲染**当前引擎**的字段，三套配置互不干扰。
-- **提示音的信号只来自客户端**：`uiSession.sessionStatus` 快照（`running` / `pendingInteraction` /
-  `completionUnread`）对账，不订阅 `turn/end`、不经过 Host 管线。理由：提示音要在**播报关闭、没读过任何
+- **提示音的运行态以客户端为主、Host 只补账本**：主信号是 `uiSession.sessionStatus` 快照（`running` /
+  `pendingInteraction` / `completionUnread`），另订阅全局 `api-session/status` 事件、轮询 Host 的
+  `chimeStatus` 账本，补上「冷启动前已开跑」与「其他工作区」两类快照看不到的会话；`turn/end` 只在
+  Host 侧记账，不驱动播报。理由：提示音要在**播报关闭、没读过任何
   一句话**时照常工作，也要覆盖"子代理在跑""DSH 弹提问等你答"这些与朗读无关的状态；挂在播报链上就会
-  互相牵连。代价是必须在客户端过滤掉子代理会话（否则子代理每跑一轮都响）。
+  互相牵连。子代理会话三层信号都要过滤（快照按 `origin`/`parentId`，Host 账本按结束事件与层级）。
+  已知限制：多窗口/多标签各自出声（没有跨窗口互斥）；别的工作区的子代理单独在跑时，工作音仍会响
+  （按"确实有活在跑"处理），但完成音只在计数归零时补一次。
 - 命名空间/服务名统一用 `voice`，避免与既有插件冲突。
 - 设置页"语音播报"导航图标 = **CSS 遮罩替身**：shell 的 `navIcon(id)` 只识别 models/agent-presets/plugins，
   其余回退齿轮（源码硬编码，无扩展点）；`settings.section` 注册仅 id/order/label，不支持自定义 icon。
