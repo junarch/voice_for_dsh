@@ -1451,35 +1451,43 @@ await rpc('speak', { sessionId: 's1', messageId: 'm40' })
 const sysLocal40 = llmState.streamOpts[llmState.streamOpts.length - 1].system
 check('本地 prompt：带"本地按文字发音"段', sysLocal40.includes('本地语音按文字发音'))
 check('本地 prompt：不含豆包情绪段', !sysLocal40.includes('情绪：把内容里的情绪信号'))
-check('篇幅=极简：prompt 里带绝对上限（≤200 字、最多 3 句）',
-  sysLocal40.includes('不超过 200 字') && sysLocal40.includes('最多 3 句'))
-check('篇幅句之后压着优先级声明（语言 > 篇幅 > 语气）',
-  sysLocal40.includes('执行优先级：输出语言 > 篇幅上限 > 语气与文采')
-  && sysLocal40.indexOf('执行优先级') > sysLocal40.indexOf('不超过 200 字'), sysLocal40.slice(-80))
-await rpc('setConfig', { patch: { transcribe: { lengthLevel: 'brief' } } })
-llmState.responses = [{ text: '本地简单稿', finish: 'stop' }]
-await rpc('speak', { sessionId: 's1', messageId: 'm40' })
-const sysLedgerBrief = llmState.streamOpts[llmState.streamOpts.length - 1].system
-check('篇幅=简单：prompt 里带"不超过 450 字、最多 8 句"',
-  sysLedgerBrief.includes('不超过 450 字') && sysLedgerBrief.includes('最多 8 句'))
-await rpc('setConfig', { patch: { transcribe: { lengthLevel: 'full' } } })
-llmState.responses = [{ text: '本地详细稿', finish: 'stop' }]
-const LONG_TEXT_40 = '这是一段用来量篇幅上限的原文，'.repeat(8)
-sessionEvents.push(msgEvent('m41', 42, LONG_TEXT_40))
-await rpc('speak', { sessionId: 's1', messageId: 'm41' })
-const sysLedgerFull = llmState.streamOpts[llmState.streamOpts.length - 1].system
-{
-  const m = /不超过原文长度（(\d+) 字以内）/.exec(sysLedgerFull)
-  check('篇幅=详细：按原文长度给出数字上限（≈1.1 倍）',
-    !!m && Number(m[1]) >= Math.round(LONG_TEXT_40.length), m && m[1])
+// —— 篇幅档位：按原文比例 + 上下限（不是固定字数）——
+const capOf = (sys) => { const m = /不超过 (\d+) 字/.exec(sys); return m ? Number(m[1]) : -1 }
+const makeMsg = (id, turn, n) => { const text = '测'.repeat(n); sessionEvents.push(msgEvent(id, turn, text)); return text }
+const LEVEL_CASES = [
+  // [档位, 原文长度, 期望上限]（minimal: min(M, clamp(.3M,50,200))；brief: min(M, clamp(.5M,80,450))；full: min(1500, 1.1M)）
+  ['minimal', 300, 90], ['minimal', 1000, 200], ['minimal', 5000, 200],
+  ['brief', 300, 150], ['brief', 1000, 450], ['brief', 5000, 450],
+  ['full', 300, 330], ['full', 1000, 1100], ['full', 5000, 1500],
+]
+for (let i = 0; i < LEVEL_CASES.length; i++) {
+  const [lvl, n, want] = LEVEL_CASES[i]
+  const id = 'mL' + i
+  makeMsg(id, 60 + i, n)
+  await rpc('setConfig', { patch: { transcribe: { lengthLevel: lvl } } })
+  llmState.responses = [{ text: '篇幅稿', finish: 'stop' }]
+  await rpc('speak', { sessionId: 's1', messageId: id })
+  const sys = llmState.streamOpts[llmState.streamOpts.length - 1].system
+  check('篇幅 ' + lvl + ' × 原文 ' + n + ' → 上限 ' + want + ' 字', capOf(sys) === want, capOf(sys))
 }
+// 原文很短时不给数字（给了反而比原文长）
+{
+  makeMsg('mShort', 80, 40)
+  await rpc('setConfig', { patch: { transcribe: { lengthLevel: 'minimal' } } })
+  llmState.responses = [{ text: '短稿', finish: 'stop' }]
+  await rpc('speak', { sessionId: 's1', messageId: 'mShort' })
+  const sys = llmState.streamOpts[llmState.streamOpts.length - 1].system
+  check('原文很短（40 字）：不给字数上限，改说"直接讲结论"',
+    sys.includes('原文很短') && capOf(sys) === -1, sys.slice(-60))
+}
+check('篇幅句之后压着优先级声明（语言 > 篇幅 > 语气）', sysLocal40.includes('执行优先级：输出语言 > 篇幅上限 > 语气与文采'))
 // 自定义本地提示词：只影响本地，豆包那份不动
 await rpc('setConfig', { patch: { transcribe: { promptLocal: '这是我的本地自定义规则。' } } })
 llmState.responses = [{ text: '自定义稿', finish: 'stop' }]
 await rpc('speak', { sessionId: 's1', messageId: 'm40' })
 const sysCustom = llmState.streamOpts[llmState.streamOpts.length - 1].system
 check('自定义本地提示词生效（整份替换）', sysCustom.startsWith('这是我的本地自定义规则。'), sysCustom.slice(0, 40))
-check('自定义本地提示词仍自动附加篇幅与语言', sysCustom.includes('不超过原文长度') && sysCustom.includes('本地语音按文字发音') === false, sysCustom.slice(-60))
+check('自定义本地提示词仍自动附加篇幅与优先级', sysCustom.includes('篇幅：') && sysCustom.includes('执行优先级'), sysCustom.slice(-60))
 // 豆包：带情绪段，且不出现本地的"按文字发音"
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine' }, transcribe: { promptLocal: '', lengthLevel: 'full' } } })
 // 豆包路径会多一次"演绎指令"调用，取最后一条转写 prompt（含"口播稿改写器"）
@@ -1492,7 +1500,7 @@ await rpc('speak', { sessionId: 's1', messageId: 'm40' })
 const sysCloud40 = lastTranscribeSys()
 check('豆包 prompt：带情绪段、不含本地"按文字发音"',
   sysCloud40.includes('情绪：把内容里的情绪信号') && !sysCloud40.includes('本地语音按文字发音'), sysCloud40.slice(-60))
-check('豆包 prompt：带原文长度上限（详细档）', sysCloud40.includes('不超过原文长度'))
+check('豆包 prompt：带篇幅约束与优先级', sysCloud40.includes('篇幅：') && sysCloud40.includes('执行优先级'))
 await rpc('setConfig', { patch: { tts: { provider: 'local' } } })
 
 // —— 模型未安装：一条明确的"模型未安装"，不静默失败 ——

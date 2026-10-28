@@ -56,30 +56,26 @@ const TRANSCRIBE_LOCAL_EXTRA = '\n8. 本地语音按文字发音：英文术语�
 const TRANSCRIBE_PROMPT_CLOUD = TRANSCRIBE_SHARED + TRANSCRIBE_CLOUD_EXTRA
 const TRANSCRIBE_PROMPT_LOCAL = TRANSCRIBE_SHARED + TRANSCRIBE_LOCAL_EXTRA
 
-/** 篇幅档位：**绝对上限 + 句子骨架**。不用"原文的百分之几"——那指标跨语言就崩：
- *  同一份中文改写成英文，字符数天然 2–3 倍，"三成"永远不达标。
- *  只往 prompt 里加一句约束，不截断、不动 maxTokens（流式首声与"各段拼回等于全文"靠这条）。 */
+/** 篇幅档位：**按原文比例 + 上下限**（不是固定字数）。
+ *  回复本身长短差别很大：写死 200 字会把长回答压成短讯，短回答又被撑长，所以用
+ *  `min(原文, clamp(比例×原文, 下限, 上限))`——非详细档的上限永不超过原文。
+ *  full 另有 1500 字天花板：5000 字原文按 1.1 倍要念二十分钟，那不是"详细"是折磨。
+ *  只往 prompt 里加约束，不截断、不动 maxTokens（流式首声与"各段拼回等于全文"靠这条）。 */
 const LENGTH_LEVELS = [
-  {
-    id: 'full', name: '详细播报', ratio: 1.1,
-    clause: (cap) => '\n篇幅：保留结论、关键细节与下一步；整稿不超过原文长度（' + cap + ' 字以内）。',
-  },
-  {
-    id: 'brief', name: '简单播报', charCap: 450, sentenceCap: 8,
-    clause: () => '\n篇幅：整稿不超过 450 字（英文按 300 词算）、最多 8 句；只讲结论、关键信息、下一步，细节一句话带过。',
-  },
-  {
-    id: 'minimal', name: '极简播报', charCap: 200, sentenceCap: 3,
-    clause: () => '\n篇幅：整稿不超过 200 字（英文按 130 词算）、**最多 3 句**：'
-      + '第一句给结论，第二句给最关键的一条信息或数字，第三句给下一步（没有就两句结束）。',
-  },
+  { id: 'full', name: '详细播报', ratio: 1.1, ceil: 1500 },
+  { id: 'brief', name: '简单播报', ratio: 0.5, floor: 80, ceil: 450, sentenceDiv: 60 },
+  { id: 'minimal', name: '极简播报', ratio: 0.3, floor: 50, ceil: 200, sentenceDiv: 45 },
 ]
-/** 给某档位算"目标字数上限"（写进 prompt 的数字，也用于超长日志）。 */
+/** 算某档位的目标上限（字）、句数，以及给英文用的词数（≈字×0.6）。 */
 function lengthBudget(levelId, sourceChars) {
   const lvl = LENGTH_LEVELS.find((l) => l.id === levelId) || LENGTH_LEVELS[0]
-  if (lvl.charCap) return { level: lvl.id, cap: lvl.charCap, sentences: lvl.sentenceCap }
   const m = Math.max(1, Math.round(Number(sourceChars) || 0))
-  return { level: lvl.id, cap: Math.round(m * (lvl.ratio || 1)), sentences: 0 }
+  let cap = Math.round(m * (lvl.ratio || 1))
+  // 非详细档：上限永不超过原文（短消息不能因为 floor 被撑长）；详细档只封顶
+  if (lvl.id !== 'full') cap = Math.min(m, Math.max(lvl.floor || 0, cap))
+  if (lvl.ceil) cap = Math.min(cap, lvl.ceil)
+  const sentences = lvl.sentenceDiv ? Math.max(3, Math.min(6, Math.round(cap / lvl.sentenceDiv))) : 0
+  return { level: lvl.id, cap, sentences, words: Math.round(cap * 0.6), short: m < 120 }
 }
 
 /**
@@ -818,7 +814,7 @@ function apply(ctx, config) {
       if (tone && tone.tone) base += tone.tone
     }
     const lvl = LENGTH_LEVELS.find((l) => l.id === (t.lengthLevel || 'full'))
-    if (lvl) base += lvl.clause(lengthBudget(lvl.id, sourceChars).cap)
+    if (lvl) base += lengthClause(lvl.id, sourceChars)
     const lang = LANGUAGE_OPTIONS.find((l) => l.id === cfg.language)
     // local 跟随原文语言（Kokoro v1.1 中英混读）：不做语言改写，转写稿保持原文语言。
     // 语种/方言属于豆包发音专属：仅豆包 TTS 时叠加转写语言要求（系统 TTS / 本地按原文即可）
@@ -839,14 +835,31 @@ function apply(ctx, config) {
     base += '\n执行优先级：输出语言 > 篇幅上限 > 语气与文采。'
     return base
   }
+  /** 把篇幅预算翻译成一句 prompt。原文很短时不给数字（给了反而比原文长）。 */
+  function lengthClause(levelId, sourceChars) {
+    const b = lengthBudget(levelId, sourceChars)
+    if (b.short) return '\n篇幅：原文很短，直接讲结论与下一步，不要展开。'
+    if (b.level === 'full') {
+      return '\n篇幅：保留结论、关键细节与下一步；整稿不超过 ' + b.cap + ' 字（英文 ' + b.words
+        + ' 词以内）。上限不是目标——没有实质内容就写短。'
+    }
+    if (b.level === 'brief') {
+      return '\n篇幅：整稿不超过 ' + b.cap + ' 字（英文 ' + b.words + ' 词）、约 ' + b.sentences
+        + ' 句；只讲结论、关键信息、下一步，细节一句带过。'
+    }
+    return '\n篇幅：整稿不超过 ' + b.cap + ' 字（英文 ' + b.words + ' 词）、约 ' + b.sentences
+      + ' 句：第一句结论，第二句最关键的一条信息或数字，第三句下一步（没有就两句结束）。'
+  }
   /** 转写超长时打一条日志（不改稿、不截断）：用于判断"档位是否真的生效"。 */
   function logLengthBudget(levelId, sourceChars, actualChars) {
     try {
       const budget = lengthBudget(levelId, sourceChars)
       if (!actualChars || !budget.cap) return
-      if (actualChars > budget.cap * 1.25) {
-        console.warn('[voice] length overshoot: ' + actualChars + '/' + budget.cap
-          + ' (level=' + budget.level + ', source=' + sourceChars + ')')
+      // 绝对余量 + 比例：短预算（cap=60）下纯比例会让每两句话就报警
+      const slack = Math.max(40, budget.cap * 0.25)
+      if (actualChars > budget.cap + slack) {
+        console.warn('[voice] length overshoot: actual=' + actualChars + ' cap=' + budget.cap
+          + ' level=' + budget.level + ' source=' + sourceChars)
       }
     } catch { /* 日志失败不影响播报 */ }
   }
@@ -1516,7 +1529,7 @@ function apply(ctx, config) {
         transcript: spokenTranscript,
         provider: route.provider, model: route.model,
         prompt: promptUsed, effort: effortUsed,
-        sourceChars: found.text.length, at: Date.now(),
+        sourceChars: found.text.length, plainChars: sourceChars, cap: lengthBudget(cfg.transcribe.lengthLevel, sourceChars).cap, at: Date.now(),
         instruction: firstDynamicInstruction || currentInstruction || undefined,
         emotion: firstDynamicEmotion || currentEmotion || undefined,
         intensity: firstDynamicIntensity || currentIntensity || 4,
@@ -1679,7 +1692,7 @@ function apply(ctx, config) {
         transcriptCache.set(String(run.messageId), {
           transcript, provider: route.provider, model: route.model,
           prompt: promptUsed, effort: effortUsed,
-          sourceChars: found.text.length, at: Date.now(),
+          sourceChars: found.text.length, plainChars: sourceChars, cap: lengthBudget(cfg.transcribe.lengthLevel, sourceChars).cap, at: Date.now(),
         })
         saveTranscriptCache(transcriptCache)
       }
@@ -1876,7 +1889,7 @@ function apply(ctx, config) {
             model: route.model,
             prompt: promptUsed,
             effort: effortUsed,
-            sourceChars: found.text.length,
+            sourceChars: found.text.length, plainChars: sourceChars, cap: lengthBudget(cfg.transcribe.lengthLevel, sourceChars).cap,
             at: Date.now(),
             ttsFp: ttsFpOf(cfg, cfg.tts.volcengine), // 服务端缓存命中判据（重播时参数指纹未变才命中，防串音）
           })
@@ -1929,7 +1942,7 @@ function apply(ctx, config) {
             transcriptCache.set(String(messageId), {
               transcript, provider: route.provider, model: route.model,
               prompt: promptUsed, effort: effortUsed,
-              sourceChars: found.text.length, at: Date.now(),
+              sourceChars: found.text.length, plainChars: sourceChars, cap: lengthBudget(cfg.transcribe.lengthLevel, sourceChars).cap, at: Date.now(),
               instruction: generated.instruction, emotion: generated.emotion || '', intensity: generated.intensity || 4,
               ttsFp: ttsFpOf(cfg, cfg.tts.volcengine),
             })
