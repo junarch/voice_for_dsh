@@ -27,28 +27,39 @@ window.__ModuleLoader__.load({
       "auto.title": "打开后，每轮回答结束自动转写并朗读",
       "badge.speaking": "朗读中…", "badge.done": "已朗读 ✓", "badge.replay": "点击重播此轮播报",
       "settings.title": "语音播报",
-      "settings.intro": "每轮回答结束后先做口语化转写再播报；配置写入 settings.yaml 的 voice: 节，保存即热生效。",
-      "settings.save": "保存", "settings.saved": "✅ 已保存到 settings.yaml",
+      "settings.intro": "每轮回答结束后，先把回答改写成口语稿再念出来。设置存在本机 DSH 的 profile 配置里（cordis.patch.yml），保存后立刻生效。",
+      "settings.save": "保存", "settings.saved": "✅ 已保存，立刻生效",
       "settings.saveFail": "❌ 保存失败：", "settings.loadFail": "读取配置失败",
       "settings.refresh": "刷新模型/档位列表", "settings.refreshed": "已拉取 provider/model/思考档位列表",
       "settings.preview": "▶ 试听", "settings.stopAll": "⏹ 停止播报",
       "settings.previewFail": "❌ 试听失败：", "settings.previewBrowser": "▶ 试听中（浏览器语音）…", "settings.previewCloud": "▶ 试听中（云 TTS）…", "settings.previewAudio": "▶ 试听中…",
-      "sec.basic": "基本配置", "sec.transcribe": "转写（口语化）",
-      "row.transcribeEnabled": "需要转写模型",
-      "tts.section.browser": "播报引擎 · 系统 TTS（免费）", "tts.section.volcengine": "播报引擎 · 豆包 TTS",
-      "tts.section.local": "播报引擎 · 本地 Kokoro（中英，免费）",
-      "transcribe.hint.on": "开=LLM 口语化转写（风格/情绪/自动跳过代码与表格）",
-      "transcribe.hint.off": "关=不调模型，输出什么直接读；表格和代码块自动跳过",
+      "layer.l1.title": "常用", "layer.l2.title": "当前引擎的声音", "layer.l3.title": "转写", "layer.l4.title": "高级",
+      "layer.l2.summary.browser": "系统 TTS · 语速 {rate}",
+      "layer.l2.summary.local": "本地 Kokoro · 音色 {sid} · 语速 {rate}",
+      "layer.l2.summary.volcengine": "豆包 · {speaker}",
+      "layer.l3.summary.on": "开：先改写成口语稿", "layer.l3.summary.off": "关：直接念原文",
+      "layer.l4.summary": "分句={seg} · 线程={threads} · 目录={dir}",
+      "layer.value.on": "开", "layer.value.off": "关", "layer.value.auto": "自动", "layer.value.custom": "自定义",
+      "status.browser": "浏览器自带语音：免费，不用装东西",
+      "status.volcengine.ok": "豆包云 TTS：按量计费，试听会真的调用",
+      "status.volcengine.noKey": "豆包云 TTS：还没填 API Key，试听会失败",
+      "status.local.installed": "本地模型已装好，可以直接播报",
+      "status.local.missing": "本地模型还没装，先下载才能出声",
+      "status.local.busy": "正在装本地模型：{percent}%",
+      "cta.install": "去安装",
+      "hint.engine": "系统 TTS 免费、离线；豆包按量计费、要填 API Key；本地 Kokoro 免费，先下模型",
+      "hint.autoSpeak": "每轮回答结束自动念一遍",
+      "hint.transcribe": "开：模型先把回答改写成口语稿，更顺耳，但多一次模型调用。关：直接念原文，表格和代码自动跳过。",
+      "row.transcribeEnabled": "开启转写",
       "group.auth": "鉴权", "group.pronounce": "发音",
       "row.autoSpeak": "自动播报", "row.engine": "播报引擎", "row.language": "语种/方言",
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
-      "temperature.hint": " 值越大，转写越有创意、越发散，但准确度越低；越小越忠实原文（默认 0.3）/ higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "engine.hint": " 系统=免费离线；豆包=付费云 TTS（自动播报受“云TTS”成本门控）；本地=Kokoro 中英模型，在 dsh 进程内合成、免费离线，需先装模型 / system=free; Doubao=paid; local=Kokoro (Chinese+English), in-process & free, model required",
+      "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
       "engine.browser": "系统 TTS（免费）", "engine.volcengine": "豆包云 TTS（付费）", "engine.local": "本地 Kokoro（中英·免费）",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localNumThreads": "合成线程数",
-      "local.hint": "中英文都按原文朗读，数据不出本机（dsh 进程内合成，不需要 Python、不需要启动服务）。模型约 387MB，首次使用需先下载并解包到模型目录，见 docs/local-tts.md",
+      "local.hint": "中英文都能念，音频不出本机；先点上面的「下载模型」把模型装好。",
       "local.sidHint": " 模型只有数字音色编号（0–102），没有官方名字；下拉是精选几档，想换音色直接手填 sid 试听",
       "local.customSid": "手填 sid（0–102）",
       "local.numThreadsHint": " 多线程更吃 CPU；线程多首声更快，默认 4",
@@ -56,8 +67,7 @@ window.__ModuleLoader__.load({
       "local.streamingHint": " 开=按句切段逐段合成，约 1 秒出声、长稿边算边播（推荐）；关=整段合成完才播，长稿要等 / on = segment-by-segment, first sound ~1s",
       "local.modelDir": "模型目录",
       "local.modelDirHint": " 空=自动找（用户目录 → 仓库 local/models）；也可在这里指定自己解包的目录",
-      "local.notInstalled": "⚠ 本地模型未安装：点上面的「下载模型」直接装到用户目录，或把解包好的目录填到「模型目录」",
-      "row.localModel": "本地模型",
+      "local.notInstalled": "⚠ 本地模型还没装：点上面的「下载模型」直接装；也可以把已解包的目录填到「模型目录」",
       "local.deploy.hint": "来源：{source} · 下载 {download} · 解包后 {extract} · 含声学模型、103 个音色、中英词典和 espeak 数据",
       "local.deploy.checking": "正在检查模型状态…",
       "local.deploy.notInstalled": "还没装模型，本地引擎现在不能出声",
@@ -112,28 +122,39 @@ window.__ModuleLoader__.load({
       "auto.title": "When on, each finished turn is transcribed and read aloud",
       "badge.speaking": "Reading…", "badge.done": "Read ✓", "badge.replay": "Click to replay this turn",
       "settings.title": "Voice Readout",
-      "settings.intro": "Each finished turn is transcribed into spoken-style text and read aloud. Settings persist to the voice: section of settings.yaml and take effect on save.",
-      "settings.save": "Save", "settings.saved": "✅ Saved to settings.yaml",
+      "settings.intro": "Each finished turn is rewritten into spoken style, then read aloud. Settings live in this machine's DSH profile config (cordis.patch.yml) and take effect on save.",
+      "settings.save": "Save", "settings.saved": "✅ Saved; takes effect now",
       "settings.saveFail": "❌ Save failed: ", "settings.loadFail": "Failed to load config",
       "settings.refresh": "Refresh models/efforts", "settings.refreshed": "Provider/model/effort lists refreshed",
       "settings.preview": "▶ Preview", "settings.stopAll": "⏹ Stop playback",
       "settings.previewFail": "❌ Preview failed: ", "settings.previewBrowser": "▶ Previewing (browser voice)…", "settings.previewCloud": "▶ Previewing (cloud TTS)…", "settings.previewAudio": "▶ Previewing…",
-      "sec.basic": "General", "sec.transcribe": "Transcription",
-      "row.transcribeEnabled": "Use transcription model",
-      "tts.section.browser": "Engine · System TTS (free)", "tts.section.volcengine": "Engine · Doubao TTS",
-      "tts.section.local": "Engine · Local Kokoro (Chinese + English)",
-      "transcribe.hint.on": "On = LLM spoken-style rewrite (style/emotion, code & tables auto-skipped)",
-      "transcribe.hint.off": "Off = read the text as-is; tables and code blocks are skipped",
+      "layer.l1.title": "Basics", "layer.l2.title": "Current engine voice", "layer.l3.title": "Transcription", "layer.l4.title": "Advanced",
+      "layer.l2.summary.browser": "System TTS · rate {rate}",
+      "layer.l2.summary.local": "Local Kokoro · voice {sid} · rate {rate}",
+      "layer.l2.summary.volcengine": "Doubao · {speaker}",
+      "layer.l3.summary.on": "On: rewritten into speech", "layer.l3.summary.off": "Off: read as written",
+      "layer.l4.summary": "segments={seg} · threads={threads} · dir={dir}",
+      "layer.value.on": "on", "layer.value.off": "off", "layer.value.auto": "auto", "layer.value.custom": "custom",
+      "status.browser": "Built-in browser voice: free, nothing to install",
+      "status.volcengine.ok": "Doubao cloud TTS: pay per use; preview calls the real API",
+      "status.volcengine.noKey": "Doubao cloud TTS: no API Key yet; preview will fail",
+      "status.local.installed": "Local model installed - ready to speak",
+      "status.local.missing": "Local model not installed - download it first",
+      "status.local.busy": "Installing local model: {percent}%",
+      "cta.install": "Install",
+      "hint.engine": "System TTS is free and offline; Doubao is pay-per-use and needs an API Key; local Kokoro is free but needs the model",
+      "hint.autoSpeak": "Read each finished turn aloud automatically",
+      "hint.transcribe": "On: the model rewrites the answer into spoken style first (nicer, one extra model call). Off: read as written; tables and code are skipped.",
+      "row.transcribeEnabled": "Enable transcription",
       "group.auth": "Auth", "group.pronounce": "Pronunciation",
       "row.autoSpeak": "Auto-read", "row.engine": "TTS engine", "row.language": "Language/Dialect",
       "row.provider": "Provider", "row.model": "Model",
       "row.temperature": "temperature",
-      "temperature.hint": " Higher = more varied & creative but less accurate; lower = more faithful (default 0.3)",
-      "engine.hint": " System = free & offline; Doubao = paid cloud TTS (auto-read cost-gated); Local = Kokoro (Chinese+English), in-process & free, model required",
+      "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
       "engine.browser": "System TTS (free)", "engine.volcengine": "Doubao cloud TTS (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
       "row.localNumThreads": "Synthesis threads",
-      "local.hint": "Chinese and English are both read as written; audio never leaves this machine (synthesized inside dsh, no Python, no server). The model is ~387MB - unpack it into the model directory first, see docs/local-tts.md",
+      "local.hint": "Reads Chinese and English; audio never leaves this machine. Click Download model above to install it first.",
       "local.sidHint": " The model only exposes numeric voice ids (0-102) with no official names; the dropdown lists a few picks, type any sid to audition more",
       "local.customSid": "Custom sid (0-102)",
       "local.numThreadsHint": " More threads use more CPU; more threads start speaking sooner. Default 4",
@@ -141,8 +162,7 @@ window.__ModuleLoader__.load({
       "local.streamingHint": " on = sentence-by-sentence synthesis, first sound in ~1s, long texts play while still synthesizing (recommended); off = wait for the whole text",
       "local.modelDir": "Model directory",
       "local.modelDirHint": " empty = auto (user dir, then repo local/models); you can also point it at your own unpacked directory",
-      "local.notInstalled": "⚠ Local model not installed: click \"Download model\" above, or point \"Model directory\" at an unpacked copy",
-      "row.localModel": "Local model",
+      "local.notInstalled": "⚠ Local model not installed: click Download model above, or point Model directory at an unpacked copy",
       "local.deploy.hint": "Source: {source} · download {download} · {extract} unpacked · acoustic model, 103 voices, CN/EN lexicons and espeak data",
       "local.deploy.checking": "Checking model status…",
       "local.deploy.notInstalled": "Model not installed yet - the local engine cannot speak",
@@ -942,6 +962,7 @@ window.__ModuleLoader__.load({
     function CheckInput(props) {
       return React.createElement("input", {
         type: "checkbox", checked: !!props.value,
+        "aria-label": props.label,
         onChange: (e) => props.onChange(e.target.checked),
       });
     }
@@ -951,6 +972,36 @@ window.__ModuleLoader__.load({
         value: props.value,
         onChange: (e) => props.onChange(e.target.value),
       }, props.children);
+    }
+    /**
+     * 可折叠的一层：层头左侧是 <button>（带 aria-expanded，可 Tab 聚焦、Enter/Space 展开），
+     * 右侧 extra 放主开关或 CTA（不在按钮里，避免点控件顺带折叠）；展开后才渲染 children。
+     * 不传 open 时自己管状态（只存在组件内，不写 Config）；传 open 则由外部控制。
+     */
+    function Collapse(props) {
+      var pair = React.useState(!!props.defaultOpen);
+      var innerOpen = pair[0], setInnerOpen = pair[1];
+      var controlled = typeof props.open === "boolean";
+      var open = controlled ? props.open : innerOpen;
+      var bodyId = "dsh-voice-layer-" + (props.id || "x");
+      function onToggle() {
+        if (controlled) { if (props.onToggle) props.onToggle(!open); }
+        else setInnerOpen(!open);
+      }
+      return React.createElement("div", { className: "dsh-voice-layer" + (open ? " open" : "") },
+        React.createElement("div", { className: "dsh-voice-layer-head" },
+          React.createElement("button", {
+            type: "button",
+            className: "dsh-voice-layer-toggle",
+            "aria-expanded": open,
+            "aria-controls": bodyId,
+            onClick: onToggle,
+          },
+            React.createElement("span", { className: "dsh-voice-layer-caret" }, "▸"),
+            React.createElement("span", { className: "dsh-voice-layer-title" }, props.title),
+            props.summary ? React.createElement("span", { className: "dsh-voice-layer-summary" }, props.summary) : null),
+          props.extra ? React.createElement("div", { className: "dsh-voice-layer-extra" }, props.extra) : null),
+        open ? React.createElement("div", { className: "dsh-voice-layer-body", id: bodyId }, props.children) : null);
     }
 
     // ---------- 本地模型安装（设置页：下载 / 进度 / 取消 / 删除）----------
@@ -1124,9 +1175,18 @@ window.__ModuleLoader__.load({
       const localStatusPair = React.useState(null);
       const localStatus = localStatusPair[0];
       const setLocalStatus = localStatusPair[1];
+      // 首屏状态行要知道本地模型装没装（deployStatus 只读目录状态，不加载模型）
+      const deployPair = React.useState(null);
+      const deployState = deployPair[0];
+      const setDeployState = deployPair[1];
+      // 折叠状态：只放组件内，不持久化、不写 Config（切引擎时自动展开 L2）
+      const l2Pair = React.useState(false);
+      const l2Open = l2Pair[0];
+      const setL2Open = l2Pair[1];
 
       React.useEffect(() => {
         rpc("meta").then((m) => { if (m && m.ok) setMeta(m); }).catch(() => {});
+        rpc("deployStatus").then((res) => { if (res && res.ok) setDeployState(res); }).catch(() => {});
         rpc("getConfig").then((res) => {
           if (res && res.ok) {
             setCfg(res.config);
@@ -1200,6 +1260,7 @@ window.__ModuleLoader__.load({
       }
       /** 装完/删完模型后刷新运行时状态：模型已装时这一下会真的加载模型（约 3s），只在这两个时机做。 */
       function refreshLocalStatus() {
+        rpc("deployStatus").then(function (res) { if (res && res.ok) setDeployState(res); }).catch(function () {});
         rpc("localStatus").then(function (res) { setLocalStatus(res && res.ok ? res : null); }).catch(function () {});
       }
 
@@ -1261,6 +1322,7 @@ window.__ModuleLoader__.load({
         next.autoSpeakCloudTts = v === "volcengine";
         setCfg(next);
         setMsg("");
+        setL2Open(true); // 换引擎就把"当前引擎的声音"展开，省一次点击
       }
 
       // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro（进程内）；
@@ -1270,165 +1332,227 @@ window.__ModuleLoader__.load({
         ? "volcengine"
         : (cfg.tts.provider === "local" || cfg.tts.provider === "local-cosyvoice" ? "local" : "browser");
 
+      // 层头摘要：收起时也能一眼看到当前值（不展开就不用进去找）
+      const l2Summary = ttsEngine === "browser"
+        ? t("layer.l2.summary.browser").replace("{rate}", Number(cfg.tts.browser.rate).toFixed(2) + "x")
+        : ttsEngine === "local"
+          ? t("layer.l2.summary.local")
+              .replace("{sid}", String(cfg.tts.local.sid))
+              .replace("{rate}", Number(cfg.tts.local.speed).toFixed(2) + "x")
+          : t("layer.l2.summary.volcengine").replace("{speaker}",
+              (voices.find((v) => v.id === cfg.tts.volcengine.speaker) || {}).name || String(cfg.tts.volcengine.speaker || ""));
+      const l4Summary = t("layer.l4.summary")
+        .replace("{seg}", cfg.tts.local.streaming !== false ? t("layer.value.on") : t("layer.value.off"))
+        .replace("{threads}", String(cfg.tts.local.numThreads))
+        .replace("{dir}", cfg.tts.local.modelDir ? t("layer.value.custom") : t("layer.value.auto"));
+      // 首屏一行状态：只报当前引擎最关键的一件事；本地没装时给下载入口（点开 L2，安装行在层头）
+      let statusLine = "";
+      let statusCta = false;
+      if (ttsEngine === "browser") {
+        statusLine = t("status.browser");
+      } else if (ttsEngine === "volcengine") {
+        statusLine = cfg.tts.volcengine.apiKey ? t("status.volcengine.ok") : t("status.volcengine.noKey");
+      } else if (deployState) {
+        const phase = deployState.phase || "idle";
+        if (deployState.installed) statusLine = t("status.local.installed");
+        else if (phase === "downloading" || phase === "verifying" || phase === "extracting") {
+          statusLine = t("status.local.busy").replace("{percent}", String(deployState.percent || 0));
+        } else {
+          statusLine = t("status.local.missing");
+          statusCta = true;
+        }
+      }
+
       return React.createElement("div", { className: "dsh-voice-settings" },
         React.createElement("h2", null, t("settings.title")),
         React.createElement("p", { className: "dsh-voice-dim" }, t("settings.intro")),
 
-        // —— 基本配置（通用 · 主 → 次）：先决定要不要转写，播报引擎由下方"云TTS"复选框切换 ——
-        React.createElement("h3", null, t("sec.basic")),
-        React.createElement(Row, { label: t("row.transcribeEnabled") },
-          React.createElement(CheckInput, { value: cfg.transcribe.enabled, onChange: (v) => setField("transcribe.enabled", v) }),
-          React.createElement("span", { className: "dsh-voice-dim" }, cfg.transcribe.enabled ? t("transcribe.hint.on") : t("transcribe.hint.off"))),
-        cfg.transcribe.enabled ? React.createElement("div", { className: "dsh-voice-sub" },
-          React.createElement(Row, { label: t("row.provider") },
-            providerList
-              ? React.createElement(SelectInput, {
-                  value: providerKnown ? cfg.provider : ROUTE_CUSTOM,
-                  onChange: (v) => { if (v !== ROUTE_CUSTOM) { setField("provider", v); onRouteChange(v, ""); } },
+        // —— L1 常用：首屏只留引擎与自动播报，外加至多一行引擎/模型状态 ——
+        React.createElement("div", { className: "dsh-voice-layer open" },
+          React.createElement("div", { className: "dsh-voice-layer-head" },
+            React.createElement("span", { className: "dsh-voice-layer-caret" }),
+            React.createElement("span", { className: "dsh-voice-layer-title" }, t("layer.l1.title"))),
+          React.createElement("div", { className: "dsh-voice-layer-body" },
+            React.createElement(Row, { label: t("row.engine") },
+              React.createElement(SelectInput, { value: ttsEngine, onChange: onEngineChange },
+                React.createElement("option", { value: "browser" }, t("engine.browser")),
+                React.createElement("option", { value: "volcengine" }, t("engine.volcengine")),
+                React.createElement("option", { value: "local" }, t("engine.local"))),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("hint.engine"))),
+            React.createElement(Row, { label: t("row.autoSpeak") },
+              React.createElement(CheckInput, { value: cfg.autoSpeak, onChange: (v) => setField("autoSpeak", v) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("hint.autoSpeak"))),
+            statusLine ? React.createElement("p", { className: "dsh-voice-status" },
+              React.createElement("span", null, statusLine),
+              statusCta ? React.createElement("button", { className: "dsh-voice-read-btn", onClick: () => setL2Open(true) }, t("cta.install")) : null) : null)),
+
+        // —— L2 当前引擎的声音：默认收起，切引擎自动展开；本地安装行常驻层头（收起也不卸载轮询）——
+        React.createElement(Collapse, {
+          id: "l2",
+          title: t("layer.l2.title"),
+          summary: l2Summary,
+          open: l2Open,
+          onToggle: setL2Open,
+          extra: ttsEngine === "local" ? React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus }) : null,
+        },
+
+            // —— 系统 TTS（免费）——
+            ttsEngine === "browser" ? React.createElement(React.Fragment, null,
+              React.createElement(Row, { label: t("row.rate") },
+                React.createElement(SliderInput, { value: cfg.tts.browser.rate, onChange: (v) => setField("tts.browser.rate", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
+              React.createElement(Row, { label: t("row.pitch") },
+                React.createElement(SliderInput, { value: cfg.tts.browser.pitch, onChange: (v) => setField("tts.browser.pitch", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) })),
+              React.createElement(Row, { label: t("row.voiceName") },
+                React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }))) : null,
+
+            // —— 本地 Kokoro（中英，免费；安装行在层头，收起也不卸载轮询）——
+            ttsEngine === "local" ? React.createElement(React.Fragment, null,
+              React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
+
+              React.createElement(Row, { label: t("row.localVoice") },
+                React.createElement(SelectInput, {
+                  value: kokoroVoiceKnown ? String(cfg.tts.local.sid) : VOICE_CUSTOM,
+                  onChange: (v) => { if (v !== VOICE_CUSTOM) setField("tts.local.sid", Number(v)); },
                 },
-                  providerList.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name && p.name !== p.id ? p.name + "（" + p.id + "）" : p.id)),
-                  React.createElement("option", { value: ROUTE_CUSTOM }, "自定义 / Custom"))
-              : React.createElement(TextInput, { value: cfg.provider, onChange: (v) => setField("provider", v), placeholder: "deepseek-official" }),
-            providerList ? null : React.createElement("span", { className: "dsh-voice-dim" }, " 路由列表加载中… / loading…")),
-          React.createElement(Row, { label: t("row.model") },
-            modelList
-              ? React.createElement(SelectInput, {
-                  value: modelKnown ? cfg.model : ROUTE_CUSTOM,
-                  onChange: (v) => { if (v !== ROUTE_CUSTOM) { setField("model", v); onRouteChange(cfg.provider, v); } },
-                },
-                  modelList.map((m2) => React.createElement("option", { key: m2.id, value: m2.id }, m2.name && m2.name !== m2.id ? m2.name + "（" + m2.id + "）" : m2.id)),
-                  React.createElement("option", { value: ROUTE_CUSTOM }, "自定义 / Custom"))
-              : React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "deepseek-v4-flash" }),
-            modelList && !modelKnown ? React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "模型 ID" }) : null,
-            modelList ? null : React.createElement("span", { className: "dsh-voice-dim" }, " 模型列表加载中… / loading…")),
-          React.createElement(Row, { label: t("row.temperature") },
-            React.createElement(SliderInput, { value: cfg.transcribe.temperature, onChange: (v) => setField("transcribe.temperature", v), min: 0, max: 2, step: 0.05 }),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("temperature.hint"))),
-          React.createElement(Row, { label: t("row.stylePreset") },
-            React.createElement(SelectInput, { value: styleShown, onChange: (v) => setField("transcribe.stylePreset", v) },
-              presets.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name)),
-              React.createElement("option", { value: "custom" }, "自定义 / Custom")),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 标准=高还原；陪伴/俏皮=摘要+情绪个性化 / standard=fidelity; companion/playful=summary+emotion")),
-          React.createElement(Row, { label: t("row.prompt") },
-            React.createElement("textarea", {
-              className: "dsh-voice-textarea",
-              value: promptShown,
-              readOnly: !isCustom,
-              placeholder: "自定义模式下在此编辑 / editable in Custom mode",
-              onChange: (e) => isCustom && setField("transcribe.prompt", e.target.value),
-            }))
-        ) : null,
+                  kokoroVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+                  React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
+                (kokoroVoiceKnown ? null : React.createElement(TextInput, {
+                  value: String(cfg.tts.local.sid),
+                  onChange: (v) => { const n = Number(v); if (Number.isInteger(n) && n >= 0) setField("tts.local.sid", n); },
+                  placeholder: t("local.customSid"),
+                })),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("local.sidHint"))),
+              React.createElement(Row, { label: t("row.localSpeed") },
+                React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
+              (localStatus && localStatus.installed === false ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.notInstalled")) : null),
+              React.createElement(Row, { label: t("settings.localCheck") },
+                React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckLocal, disabled: busy }, t("settings.localCheck")),
+                React.createElement("span", { className: "dsh-voice-dim" }, localCheckMsg))) : null,
 
-        React.createElement(Row, { label: t("row.autoSpeak") },
-          React.createElement(CheckInput, { value: cfg.autoSpeak, onChange: (v) => setField("autoSpeak", v) }),
-          React.createElement("span", { className: "dsh-voice-dim" }, " 每轮结束自动转写并朗读 / auto read each turn")),
-        React.createElement(Row, { label: t("row.engine") },
-          React.createElement(SelectInput, { value: ttsEngine, onChange: onEngineChange },
-            React.createElement("option", { value: "browser" }, t("engine.browser")),
-            React.createElement("option", { value: "volcengine" }, t("engine.volcengine")),
-            React.createElement("option", { value: "local" }, t("engine.local"))),
-          React.createElement("span", { className: "dsh-voice-dim" }, t("engine.hint"))),
+          // —— 豆包 TTS（专属配置，分组：鉴权 → 发音；仅选择豆包时显示）——
+          ttsEngine === "volcengine" ? React.createElement(React.Fragment, null,
+            React.createElement("h4", null, t("group.auth")),
+            React.createElement(Row, { label: t("row.gateway") },
+              React.createElement(SelectInput, { value: cfg.tts.volcengine.gateway || "plan", onChange: (v) => setField("tts.volcengine.gateway", v) },
+                React.createElement("option", { value: "plan" }, "plan · 智能体套餐"),
+                React.createElement("option", { value: "standard" }, "standard · 标准付费"),
+                React.createElement("option", { value: "custom" }, "custom · 自定义端点")),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("gateway.hint"))),
+            (cfg.tts.volcengine.gateway === "custom" ? React.createElement(Row, { label: t("row.httpUrl") },
+              React.createElement(TextInput, { value: cfg.tts.volcengine.httpUrl || "", onChange: (v) => setField("tts.volcengine.httpUrl", v), placeholder: "https://…/api/v3/tts/unidirectional" })) : null),
+            React.createElement(Row, { label: t("row.apiKey") },
+              React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
+            React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
+              React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
+            React.createElement(Row, { label: t("row.resourceId") },
+              React.createElement(TextInput, { value: cfg.tts.volcengine.resourceId, onChange: (v) => setField("tts.volcengine.resourceId", v), placeholder: "seed-tts-2.0" })),
+            React.createElement("h4", null, t("group.pronounce")),
+            React.createElement(Row, { label: t("row.speaker") },
+              React.createElement(SelectInput, {
+                value: (speakerKnown ? cfg.tts.volcengine.speaker : VOICE_CUSTOM),
+                onChange: (v) => { if (v !== VOICE_CUSTOM) onSpeakerChange(v); },
+              },
+                voices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
+                React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
+              (speakerKnown ? null : React.createElement(TextInput, {
+                value: cfg.tts.volcengine.speaker,
+                onChange: (v) => onSpeakerChange(v),
+                placeholder: "zh_female_vv_uranus_bigtts",
+              })),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 精选已实测；自定义可输入任意音色 ID（未实测不保证） / curated & tested; custom id allowed (untested)")),
+            React.createElement(Row, { label: t("row.language") },
+              React.createElement(SelectInput, { value: cfg.language, onChange: onLanguageChange },
+                languages.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.label))),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 固定语种/方言时无论原文语言都按所选播报 / fixed language overrides source")),
+            (curDialect
+              ? React.createElement("p", { className: "dsh-voice-warn" },
+                  "方言需 vv 音色 + explicit_dialect（8 种方言实测生效）；选其他音色时语种会自动改为普通话 / dialect uses vv; picking another voice switches language to Mandarin")
+              : null),
+            (curEn
+              ? React.createElement("p", { className: "dsh-voice-warn" },
+                  "English 已自动切换英文音色（explicit_language=en）/ speaker auto-corrected to an EN voice")
+              : null),
+            React.createElement(Row, { label: t("row.rateLevel") },
+              React.createElement(SliderInput, { value: cfg.tts.volcengine.rateLevel, onChange: (v) => setField("tts.volcengine.rateLevel", v), min: 0, max: 4, step: 1, format: (v) => rateStops[v] || String(v) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 数值 speech_rate 参数实现 / via numeric speech_rate")),
+            React.createElement(Row, { label: t("row.pitchSemitone") },
+              React.createElement(SliderInput, { value: cfg.tts.volcengine.pitch, onChange: (v) => setField("tts.volcengine.pitch", v), min: -12, max: 12, step: 0.1, format: (v) => String(Number(v).toFixed(1)) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 半音（0=正常，可调 0.1 细粒度）/ semitones (0=normal)")),
+            React.createElement(Row, { label: t("row.loudness") },
+              React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate")),
+            React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.hint"))) : null),
 
-        // —— 播报引擎 · 系统 TTS（免费）——
-        ttsEngine === "browser" ? React.createElement(React.Fragment, null,
-          React.createElement("h3", null, t("tts.section.browser")),
-          React.createElement(Row, { label: t("row.rate") },
-            React.createElement(SliderInput, { value: cfg.tts.browser.rate, onChange: (v) => setField("tts.browser.rate", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
-          React.createElement(Row, { label: t("row.pitch") },
-            React.createElement(SliderInput, { value: cfg.tts.browser.pitch, onChange: (v) => setField("tts.browser.pitch", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) })),
-          React.createElement(Row, { label: t("row.voiceName") },
-            React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }))) : null,
+        // —— L3 转写：开关在层头（收起也能直接开关），体内只在开启时渲染 ——
+        React.createElement(Collapse, {
+          id: "l3",
+          title: t("layer.l3.title"),
+          summary: cfg.transcribe.enabled ? t("layer.l3.summary.on") : t("layer.l3.summary.off"),
+          defaultOpen: false,
+          extra: React.createElement(CheckInput, {
+            value: cfg.transcribe.enabled,
+            label: t("row.transcribeEnabled"),
+            onChange: (v) => setField("transcribe.enabled", v),
+          }),
+        },
+          cfg.transcribe.enabled ? React.createElement(React.Fragment, null,
+            React.createElement("p", { className: "dsh-voice-dim" }, t("hint.transcribe")),
+            React.createElement("div", { className: "dsh-voice-sub" },
+              React.createElement(Row, { label: t("row.provider") },
+                providerList
+                  ? React.createElement(SelectInput, {
+                      value: providerKnown ? cfg.provider : ROUTE_CUSTOM,
+                      onChange: (v) => { if (v !== ROUTE_CUSTOM) { setField("provider", v); onRouteChange(v, ""); } },
+                    },
+                      providerList.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name && p.name !== p.id ? p.name + "（" + p.id + "）" : p.id)),
+                      React.createElement("option", { value: ROUTE_CUSTOM }, "自定义 / Custom"))
+                  : React.createElement(TextInput, { value: cfg.provider, onChange: (v) => setField("provider", v), placeholder: "deepseek-official" }),
+                providerList ? null : React.createElement("span", { className: "dsh-voice-dim" }, " 路由列表加载中… / loading…")),
+              React.createElement(Row, { label: t("row.model") },
+                modelList
+                  ? React.createElement(SelectInput, {
+                      value: modelKnown ? cfg.model : ROUTE_CUSTOM,
+                      onChange: (v) => { if (v !== ROUTE_CUSTOM) { setField("model", v); onRouteChange(cfg.provider, v); } },
+                    },
+                      modelList.map((m2) => React.createElement("option", { key: m2.id, value: m2.id }, m2.name && m2.name !== m2.id ? m2.name + "（" + m2.id + "）" : m2.id)),
+                      React.createElement("option", { value: ROUTE_CUSTOM }, "自定义 / Custom"))
+                  : React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "deepseek-v4-flash" }),
+                modelList && !modelKnown ? React.createElement(TextInput, { value: cfg.model, onChange: (v) => setField("model", v), placeholder: "模型 ID" }) : null,
+                modelList ? null : React.createElement("span", { className: "dsh-voice-dim" }, " 模型列表加载中… / loading…")),
+              React.createElement(Row, { label: t("row.temperature") },
+                React.createElement(SliderInput, { value: cfg.transcribe.temperature, onChange: (v) => setField("transcribe.temperature", v), min: 0, max: 2, step: 0.05 }),
+                React.createElement("span", { className: "dsh-voice-dim" }, t("temperature.hint"))),
+              React.createElement(Row, { label: t("row.stylePreset") },
+                React.createElement(SelectInput, { value: styleShown, onChange: (v) => setField("transcribe.stylePreset", v) },
+                  presets.map((p) => React.createElement("option", { key: p.id, value: p.id }, p.name)),
+                  React.createElement("option", { value: "custom" }, "自定义 / Custom")),
+                React.createElement("span", { className: "dsh-voice-dim" }, " 标准=高还原；陪伴/俏皮=摘要+情绪个性化 / standard=fidelity; companion/playful=summary+emotion")),
+              React.createElement(Row, { label: t("row.prompt") },
+                React.createElement("textarea", {
+                  className: "dsh-voice-textarea",
+                  value: promptShown,
+                  readOnly: !isCustom,
+                  placeholder: "自定义模式下在此编辑 / editable in Custom mode",
+                  onChange: (e) => isCustom && setField("transcribe.prompt", e.target.value),
+                })))) : null),
 
-        // —— 播报引擎 · 本地 Kokoro（中英，免费；dsh 进程内合成，需先装模型）——
-        ttsEngine === "local" ? React.createElement(React.Fragment, null,
-          React.createElement("h3", null, t("tts.section.local")),
-          React.createElement("p", { className: "dsh-voice-dim" }, t("local.hint")),
-          // 模型从哪来、装没装、装到哪：下载/取消/删除都在这一行里，用户不用开终端
-          React.createElement(Row, { label: t("row.localModel") },
-            React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus })),
-          React.createElement(Row, { label: t("row.localVoice") },
-            React.createElement(SelectInput, {
-              value: kokoroVoiceKnown ? String(cfg.tts.local.sid) : VOICE_CUSTOM,
-              onChange: (v) => { if (v !== VOICE_CUSTOM) setField("tts.local.sid", Number(v)); },
-            },
-              kokoroVoices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
-              React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
-            (kokoroVoiceKnown ? null : React.createElement(TextInput, {
-              value: String(cfg.tts.local.sid),
-              onChange: (v) => { const n = Number(v); if (Number.isInteger(n) && n >= 0) setField("tts.local.sid", n); },
-              placeholder: t("local.customSid"),
-            })),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("local.sidHint"))),
-          React.createElement(Row, { label: t("row.localSpeed") },
-            React.createElement(SliderInput, { value: cfg.tts.local.speed, onChange: (v) => setField("tts.local.speed", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
-          React.createElement(Row, { label: t("row.localNumThreads") },
-            React.createElement(SliderInput, { value: cfg.tts.local.numThreads, onChange: (v) => setField("tts.local.numThreads", v), min: 1, max: 16, step: 1, format: (v) => String(v) }),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("local.numThreadsHint"))),
-          React.createElement(Row, { label: t("local.streaming") },
-            React.createElement(CheckInput, { value: cfg.tts.local.streaming !== false, onChange: (v) => setField("tts.local.streaming", v) }),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("local.streamingHint"))),
-          React.createElement(Row, { label: t("local.modelDir") },
-            React.createElement(TextInput, { value: cfg.tts.local.modelDir || "", onChange: (v) => setField("tts.local.modelDir", v), placeholder: "自动 / auto" }),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("local.modelDirHint"))),
-          (localStatus && localStatus.installed === false ? React.createElement("p", { className: "dsh-voice-warn" }, t("local.notInstalled")) : null),
-          React.createElement(Row, { label: t("settings.localCheck") },
-            React.createElement("button", { className: "dsh-voice-read-btn", onClick: onCheckLocal, disabled: busy }, t("settings.localCheck")),
-            React.createElement("span", { className: "dsh-voice-dim" }, localCheckMsg))) : null,
-
-        // —— 播报引擎 · 豆包 TTS（专属配置，分组：鉴权 → 发音；仅选择豆包时显示）——
-        ttsEngine === "volcengine" ? React.createElement(React.Fragment, null,
-          React.createElement("h3", null, t("tts.section.volcengine")),
-          React.createElement("h4", null, t("group.auth")),
-          React.createElement(Row, { label: t("row.gateway") },
-            React.createElement(SelectInput, { value: cfg.tts.volcengine.gateway || "plan", onChange: (v) => setField("tts.volcengine.gateway", v) },
-              React.createElement("option", { value: "plan" }, "plan · 智能体套餐"),
-              React.createElement("option", { value: "standard" }, "standard · 标准付费"),
-              React.createElement("option", { value: "custom" }, "custom · 自定义端点")),
-            React.createElement("span", { className: "dsh-voice-dim" }, t("gateway.hint"))),
-          (cfg.tts.volcengine.gateway === "custom" ? React.createElement(Row, { label: t("row.httpUrl") },
-            React.createElement(TextInput, { value: cfg.tts.volcengine.httpUrl || "", onChange: (v) => setField("tts.volcengine.httpUrl", v), placeholder: "https://…/api/v3/tts/unidirectional" })) : null),
-          React.createElement(Row, { label: t("row.apiKey") },
-            React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
-          React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
-            React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
-          React.createElement(Row, { label: t("row.resourceId") },
-            React.createElement(TextInput, { value: cfg.tts.volcengine.resourceId, onChange: (v) => setField("tts.volcengine.resourceId", v), placeholder: "seed-tts-2.0" })),
-          React.createElement("h4", null, t("group.pronounce")),
-          React.createElement(Row, { label: t("row.speaker") },
-            React.createElement(SelectInput, {
-              value: (speakerKnown ? cfg.tts.volcengine.speaker : VOICE_CUSTOM),
-              onChange: (v) => { if (v !== VOICE_CUSTOM) onSpeakerChange(v); },
-            },
-              voices.map((v) => React.createElement("option", { key: v.id, value: v.id }, v.name)),
-              React.createElement("option", { value: VOICE_CUSTOM }, "自定义 / Custom")),
-            (speakerKnown ? null : React.createElement(TextInput, {
-              value: cfg.tts.volcengine.speaker,
-              onChange: (v) => onSpeakerChange(v),
-              placeholder: "zh_female_vv_uranus_bigtts",
-            })),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 精选已实测；自定义可输入任意音色 ID（未实测不保证） / curated & tested; custom id allowed (untested)")),
-          React.createElement(Row, { label: t("row.language") },
-            React.createElement(SelectInput, { value: cfg.language, onChange: onLanguageChange },
-              languages.map((l) => React.createElement("option", { key: l.id, value: l.id }, l.label))),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 固定语种/方言时无论原文语言都按所选播报 / fixed language overrides source")),
-          (curDialect
-            ? React.createElement("p", { className: "dsh-voice-warn" },
-                "方言需 vv 音色 + explicit_dialect（8 种方言实测生效）；选其他音色时语种会自动改为普通话 / dialect uses vv; picking another voice switches language to Mandarin")
-            : null),
-          (curEn
-            ? React.createElement("p", { className: "dsh-voice-warn" },
-                "English 已自动切换英文音色（explicit_language=en）/ speaker auto-corrected to an EN voice")
-            : null),
-          React.createElement(Row, { label: t("row.rateLevel") },
-            React.createElement(SliderInput, { value: cfg.tts.volcengine.rateLevel, onChange: (v) => setField("tts.volcengine.rateLevel", v), min: 0, max: 4, step: 1, format: (v) => rateStops[v] || String(v) }),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 数值 speech_rate 参数实现 / via numeric speech_rate")),
-          React.createElement(Row, { label: t("row.pitchSemitone") },
-            React.createElement(SliderInput, { value: cfg.tts.volcengine.pitch, onChange: (v) => setField("tts.volcengine.pitch", v), min: -12, max: 12, step: 0.1, format: (v) => String(Number(v).toFixed(1)) }),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 半音（0=正常，可调 0.1 细粒度）/ semitones (0=normal)")),
-          React.createElement(Row, { label: t("row.loudness") },
-            React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
-            React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate")),
-          React.createElement("p", { className: "dsh-voice-dim" }, t("dialect.hint"))) : null,
+        // —— L4 高级：本地合成细节（标题带当前值摘要）——
+        React.createElement(Collapse, {
+          id: "l4",
+          title: t("layer.l4.title"),
+          summary: l4Summary,
+          defaultOpen: false,
+        },
+          React.createElement(React.Fragment, null,
+            React.createElement(Row, { label: t("row.localNumThreads") },
+              React.createElement(SliderInput, { value: cfg.tts.local.numThreads, onChange: (v) => setField("tts.local.numThreads", v), min: 1, max: 16, step: 1, format: (v) => String(v) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("local.numThreadsHint"))),
+            React.createElement(Row, { label: t("local.streaming") },
+              React.createElement(CheckInput, { value: cfg.tts.local.streaming !== false, onChange: (v) => setField("tts.local.streaming", v) }),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("local.streamingHint"))),
+            React.createElement(Row, { label: t("local.modelDir") },
+              React.createElement(TextInput, { value: cfg.tts.local.modelDir || "", onChange: (v) => setField("tts.local.modelDir", v), placeholder: "自动 / auto" }),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("local.modelDirHint"))))),
 
         React.createElement("div", { className: "dsh-voice-actions" },
           React.createElement("button", { className: "dsh-voice-read-btn on", onClick: onSave, disabled: busy }, t("settings.save")),
@@ -1464,8 +1588,20 @@ window.__ModuleLoader__.load({
           ".dsh-voice-badge:hover{opacity:1;background:rgba(127,127,127,.12);}",
           ".dsh-voice-settings{max-width:680px;display:flex;flex-direction:column;gap:4px;font-size:13px;line-height:1.6;}",
           ".dsh-voice-settings h2{margin:0 0 4px;font-size:17px;}",
-          ".dsh-voice-settings h3{margin:14px 0 4px;font-size:14px;border-bottom:1px solid rgba(127,127,127,.2);padding-bottom:4px;}",
           ".dsh-voice-settings h4{margin:10px 0 2px 110px;font-size:12px;color:rgba(127,127,127,.9);letter-spacing:.5px;}",
+          // 分层：层头（按钮 + 摘要 + 右侧主开关/CTA）+ 展开后的层体
+          ".dsh-voice-layer{display:flex;flex-direction:column;gap:2px;}",
+          ".dsh-voice-layer-head{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;padding:6px 0 4px;border-bottom:1px solid rgba(127,127,127,.2);}",
+          ".dsh-voice-layer-title{font-size:14px;font-weight:600;}",
+          ".dsh-voice-layer-caret{flex:none;display:inline-block;width:10px;line-height:1.6;opacity:.55;transition:transform .15s;}",
+          ".dsh-voice-layer.open .dsh-voice-layer-caret{transform:rotate(90deg);}",
+          ".dsh-voice-layer-toggle{display:flex;align-items:center;gap:8px;flex:1 1 220px;min-width:0;padding:2px 0;background:none;border:none;color:inherit;font:inherit;text-align:left;cursor:pointer;}",
+          ".dsh-voice-layer-toggle:focus-visible{outline:2px solid rgba(46,139,87,.75);outline-offset:2px;border-radius:4px;}",
+          ".dsh-voice-layer-summary{font-size:12px;font-weight:400;opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+          ".dsh-voice-layer-extra{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-left:auto;max-width:100%;}",
+          ".dsh-voice-layer-extra .dsh-voice-deploy{width:100%;min-width:260px;max-width:360px;}",
+          ".dsh-voice-layer-body{display:flex;flex-direction:column;gap:2px;padding:2px 0 4px;}",
+          ".dsh-voice-status{margin:2px 0 0 120px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;opacity:.75;}",
           ".dsh-voice-sub{margin-left:120px;padding-left:10px;border-left:1px solid rgba(127,127,127,.18);}",
           ".dsh-voice-row{display:flex;align-items:flex-start;gap:10px;padding:4px 0;}",
           ".dsh-voice-label{flex:none;width:110px;text-align:right;padding-top:4px;opacity:.8;}",
