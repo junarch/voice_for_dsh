@@ -8,7 +8,7 @@
 ## 技术栈与关键事实（先读这里，避免走弯路）
 
 - **目标平台**：DSH 桌面版（Electron，端口以启动日志/地址栏为准），profile = `desktop`。
-- **DSH 版本**：`0.2.1-rc.3`（装机自带，代码在 `<安装目录>\resources\app.asar\dsh`，只读）。
+- **DSH 版本**：`0.2.1-rc.5`（装机自带，代码在 `<安装目录>\resources\app.asar\dsh`，只读）。
   要 inspect 上游实现：`node scripts/dsh-inspect-extract.mjs <输出目录> <包名…>` 只读导出
   `dsh/node_modules/@deepseek-ai/*`（别直接读 asar 路径，也别改安装目录）。
 - **DSH_HOME**：默认 `~/.dsh`；桌面 profile：`$DSH_HOME\profiles\desktop`

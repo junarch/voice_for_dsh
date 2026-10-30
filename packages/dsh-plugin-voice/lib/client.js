@@ -428,7 +428,6 @@ window.__ModuleLoader__.load({
         }
       }
       utterance.onend = () => { if (hooks && hooks.onEnd) hooks.onEnd(); };
-      utterance.onend = () => { if (hooks && hooks.onEnd) hooks.onEnd(); };
       utterance.onerror = (e) => {
         // 我们自己调 speechSynthesis.cancel() 时，Chromium 会给 interrupted（规范里叫 canceled）：
         // 这不是失败，是"用户按了停止"——当成取消处理，不往界面上写红色失败。
@@ -1032,10 +1031,10 @@ window.__ModuleLoader__.load({
     // ---------- 提示音（设置页第五层；独立 AudioContext，不碰播报链） ----------
     // 信号全部来自客户端 uiSession.sessionStatus（Map<sessionId, {running, pendingInteraction, completionUnread}>，
     // 有 getSnapshot/subscribe）：
-    //  - 工作音：顶层会话 running 计数 0→>0 起、>0→0 停
+    //  - 工作音：任意会话 running 计数 0→>0 起、>0→0 停（含子代理与别的工作区）
     //  - 完成音：顶层会话 running 真→假（不用 turn/end——那个只服务自动播报）
     //  - 提问音：pendingInteraction.kind 为 question / plan-review；审批（kind=approval）不响
-    // 子代理也会往同一个 store 写 status，必须 join ctx.sessions.list，按 origin/parentId 只认顶层会话。
+    // 子代理也会往同一个 store 写 status；join ctx.sessions.list 区分层级——顶层集合只服务完成音/提问音，工作音按全部会话算。
     // 上下文必须独立：现有播报上下文固定 24kHz、且会被 stopPlaybackOnly 连坐（播报一停提示音跟着哑）。
     var CHIME_KINDS = ["work", "done", "ask"];
     var CHIME_VOLUME_DEFAULT = 0.3;
@@ -1085,7 +1084,7 @@ window.__ModuleLoader__.load({
       } catch (e) { /* 服务未提供：按缺失处理 */ }
       try { return c[name]; } catch (e2) { return undefined; }
     }
-    /** 内置音变体 id：'a'|'b'|'c'（旧配置的 'default' 归一成 'a'；选自定义时按 a 兜底）。 */
+    /** 内置音变体 id：'a'–'e'（旧配置的 'default' 归一成 'a'；选自定义时按 a 兜底）。 */
     function chimeVariantIdOf(row) {
       var s = row && row.source;
       return [ "b", "c", "d", "e" ].indexOf(s) >= 0 ? s : "a";
@@ -1145,11 +1144,11 @@ window.__ModuleLoader__.load({
     function applyChimeVolume() {
       if (chimeMaster && chimeCfg) chimeMaster.gain.value = chimeCfg.volume;
     }
-    /** 内置音：每种三个变体（a=原来那版，采样一点没改；b/c 靠泛音与滑音区分）。
+    /** 内置音：完成音/提问音各三个变体（a/b/c），工作音五个（a–e）；靠泛音与滑音区分音色。
      *  p = 泛音比例与增益；slide = 单音内部频率漂移（占比），用来做"上扬/下沉"。 */
     var CHIME_VARIANTS = {
       work: [
-        // 工作音会在后台响很久：a/b 是两条最早的（下行两音 / 轻敲两记），用户点名要留；
+        // 工作音会在后台响很久：a/b 是稀疏的两音循环（下行两音 / 轻敲两记），适合长时间伴听；
         // c 是「仪表盘」（高低错落的快节奏短音）。都不放长音。
         { id: "a", total: 2.4, notes: [{ f: 523.25, t: 0, d: 0.26, g: 0.45 }, { f: 392.0, t: 1.2, d: 0.4, g: 0.4 }] },
         { id: "b", total: 2.4, notes: [{ f: 1180, t: 0, d: 0.09, g: 0.42, p: [[1, 1], [2.4, 0.2]] }, { f: 880, t: 1.2, d: 0.1, g: 0.36, p: [[1, 1], [2.4, 0.2]] }] },
@@ -1167,7 +1166,7 @@ window.__ModuleLoader__.load({
           { f: 1760, t: 2.30, d: 0.11, g: 0.34, p: [[1, 1], [2.2, 0.2]] },
           { f: 2093, t: 2.55, d: 0.09, g: 0.30 },
         ] },
-        // 上一版的两个（木质轻击），保留给喜欢它们的人
+        // d/e：木质轻击（与 a–c 并列的另一个音色方向）
         { id: "d", total: 2.4, notes: [{ f: 760, t: 0, d: 0.14, g: 0.5, p: [[1, 1], [2.7, 0.22], [5.3, 0.1]] }, { f: 760, t: 1.2, d: 0.14, g: 0.4, p: [[1, 1], [2.7, 0.22]] }] },
         { id: "e", total: 2.4, notes: [{ f: 520, t: 0, d: 0.2, g: 0.45, p: [[1, 1], [2.2, 0.28]] }, { f: 520, t: 1.2, d: 0.16, g: 0.12, p: [[1, 1], [2.2, 0.2]] }] },
       ],
@@ -2207,7 +2206,7 @@ window.__ModuleLoader__.load({
         // 正在播报消息时先停掉它，否则两路声音叠着响（试听要能替换掉当前声音，不是叠加）
         if (currentAudio || playingMessageId || streamRunId) stopPlaybackOnly({ notifyHost: true });
         try {
-          // 用页面当前草稿试听，不落盘：没点"保存"就不改配置（旧版会先静默写盘再合成）
+          // 用页面当前草稿试听，不落盘：没点"保存"就不改配置
           const res = await rpc("preview", { cfg: cfg });
           if (!res || !res.ok) setMsg(t("settings.previewFail") + (res && res.error ? String(res.error) : "unknown"));
           else if (res.mode === "browser") {

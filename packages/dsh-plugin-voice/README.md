@@ -13,13 +13,14 @@
 
 ## 安装
 
-需要 DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本；从源码装包还要 Node.js 22+。
+需要 DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本（已在 `0.2.1-rc.5` 验证）；从源码装包还要 Node.js 22+。
 
 ```powershell
 # 在仓库根目录执行（桌面端自带 CLI，版本随桌面端）
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 
 # 1) 先装插件自身依赖（link: 只是链接，不会代装依赖）
+#    依赖一律装在插件包内（npm 口径，package-lock.json 已入库，勿删）
 cd packages/dsh-plugin-voice; npm install; cd ../..
 
 # 2) 装进 desktop profile

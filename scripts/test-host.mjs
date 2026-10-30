@@ -572,6 +572,21 @@ const gen1 = (await rpc('pollSpeak')).gen
 fire({ type: 'turn/start', data: { turn: 15 } })
 const gen2 = (await rpc('pollSpeak')).gen
 check('turn/start 自增 turnGeneration（客户端停旧播报信号）', typeof gen1 === 'number' && gen2 === gen1 + 1, { gen1, gen2 })
+// 场景 6：待播队列溢出（上限 8）——第 9 条进队时丢最旧一条并告警一次（可观测，不静默）
+const overflowWarns = []
+const realConsoleWarn = console.warn
+console.warn = (...a) => { overflowWarns.push(a.map(String).join(' ')); }
+for (let t = 16; t <= 24; t++) {
+  fire({ type: 'turn/start', data: { turn: t } })
+  fire(msgEvent('mO' + t, t, '溢出测试 ' + t))
+  fire({ type: 'turn/end', data: { turn: t, reason: { kind: 'completed' } } })
+}
+console.warn = realConsoleWarn
+check('队列溢出告警恰好一次', overflowWarns.filter((m) => m.includes('auto-speak queue overflow')).length === 1, overflowWarns.length)
+const p6 = await rpc('pollSpeak')
+check('溢出后保留最新 8 条（丢的是最旧的 mO16）', !!p6.pending && p6.pending.messageId === 'mO17', p6.pending)
+for (let i = 0; i < 7; i++) await rpc('pollSpeak')
+check('溢出队列可全部消费完', (await rpc('pollSpeak')).pending === null)
 
 section('T10 preview')
 // T9 已把 provider 切到 volcengine；云预览走真（mock）fetch

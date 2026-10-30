@@ -32,7 +32,7 @@
 ### 第 1 层：零成本——mock 集成测试 `scripts/test-host.mjs`
 不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路；
 插件配置按**真实导出的 `Config` schema**解析（含默认值 + volatile 引用），所以"插件能不能被目标版 DSH
-（当前基线 `0.2.1-rc.3`）正常加载并解析出配置"这件事本身就有断言兜着（加载即 `TypeError` 这类事故就栽在这条上）。
+（当前基线 `0.2.1-rc.5`）正常加载并解析出配置"这件事本身就有断言兜着（加载即 `TypeError` 这类事故就栽在这条上）。
 已固化大量断言，每条对应一个坑：TTS 请求不得含 `[#...]` 标签、数值参数映射、**同一消息重复朗读 LLM 调用数不变**、
 撞顶 4 倍额度重试、失败降级、自动播报门控、context_texts 指令组装、音色↔语种归一、重播零 LLM、regen 重新生成、
 cache_config 初次/重播下发而 regen/换音色重播不下发等。

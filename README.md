@@ -71,7 +71,7 @@
 
 - Node.js 22+（**只在从源码装包/跑脚本时需要**：`npm install` 与 `scripts/*.mjs`；桌面端运行插件不用另装
   Node——插件跑在桌面端自带的运行时里，豆包双向流用的全局 `WebSocket` 也由它提供）
-- DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本（插件按 0.2.x 的插件 Config 模型实现）
+- DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本（当前已在 `0.2.1-rc.5` 验证；插件按 0.2.x 的插件 Config 模型实现）
 - （可选）火山引擎语音合成 API Key（新版控制台「API 管理」页获取，见
   [快速入门](https://www.volcengine.com/docs/6561/2119699?lang=zh)），用于豆包；不配就用系统 TTS（浏览器语音）兜底
 
@@ -82,6 +82,7 @@ git clone https://github.com/junarch/voice_for_dsh.git
 cd voice_for_dsh
 
 # 1) 安装插件自身依赖
+#    依赖一律装在插件包内（npm 口径，package-lock.json 已入库，勿删）
 cd packages/dsh-plugin-voice; npm install; cd ../..
 
 # 2) 把插件装进 desktop profile（<path> 换成仓库绝对路径或相对路径）

@@ -5,12 +5,12 @@
 
 ## 1. 版本与环境（本机）
 
-- 目标运行环境：**DSH 桌面版 0.2.1-rc.3**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
+- 目标运行环境：**DSH 桌面版 0.2.1-rc.3 或更高（当前针对 0.2.1-rc.5 验证）**（Electron 应用；代码在 `resources\app.asar\dsh`，只读）。
   需要 inspect 上游实现时用 `node scripts/dsh-inspect-extract.mjs <输出目录> <包名…>` 只读导出
   `dsh/node_modules/@deepseek-ai/*`（不要改安装目录、不要直接读 asar 路径）。
 - `DSH_HOME`（默认 `~/.dsh`）；桌面 profile：`$DSH_HOME\profiles\desktop`；Web 界面
   `http://127.0.0.1:<端口>`（端口以启动日志/地址栏为准）。桌面端自带的 CLI：`<安装目录>\resources\runtime\cli\bin\dsh.cmd`
-  （跑同一份 0.2.1-rc.3，profile 参数用 `--profile desktop`）。
+  （版本随桌面端，profile 参数用 `--profile desktop`）。
 - 用户设置：profile 的 `cordis.patch.yml`（用户 patch 层，含插件 config）；旧的
   `$DSH_HOME\settings.yaml` 在 0.2.0 首次启动被改名成 `settings.yaml.imported`，不再被读取。
 

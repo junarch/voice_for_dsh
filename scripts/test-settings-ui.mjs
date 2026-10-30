@@ -171,7 +171,7 @@ globalThis.fetch = async (url, init) => {
     return jsonResponse({
       ok: true,
       pluginVersion: '9.9.9',
-      dshCompat: '0.2.1-rc.3',
+      dshCompat: '0.2.1-rc.5',
       voices: [
         { id: 'zh_female_vv_uranus_bigtts', name: 'Vivi 2.0', languages: ['zh', 'en', 'auto', 'yue'] },
         // 英文音色：驱动"换音色会联动改语种"的分支（否则这段代码永远测不到）
@@ -320,7 +320,7 @@ check('试听不写盘（不触发 setConfig）', saveCalls.length === savesBefo
 // 保存按钮退役 + 本地新增一个设置
 check('设置页没有「保存」按钮（改动即写盘）', !byType(tree, 'button').some((n) => texts(n).join('').trim() === '保存'))
 check('标题下方显示插件版本与适配的 DSH 版本',
-  allText(tree).includes('voice_for_dsh v9.9.9') && allText(tree).includes('0.2.1-rc.3'), allText(tree).slice(0, 120))
+  allText(tree).includes('voice_for_dsh v9.9.9') && allText(tree).includes('0.2.1-rc.5'), allText(tree).slice(0, 120))
 check('本地：有「播报语种」下拉', allText(tree).includes('播报语种'), allText(tree).slice(-260))
 check('本地：不再有「停顿风格」选项', !allText(tree).includes('停顿风格'))
 // 页头说明句已删：标题下只留版本行，不再有"每轮回答结束后…"那段

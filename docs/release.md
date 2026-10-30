@@ -8,7 +8,7 @@
 
 | 位置 | 当前 | 说明 |
 |---|---|---|
-| 本仓库 | `0.4.0` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
+| 本仓库 | `0.4.1` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
 | GitHub main | `0.4.0` | 已发 Release `v0.4.0`（tag 指向 `6eb4764`）；更早的 `0.3.1` 是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
 | npm | 未发布 | npm 上的 `dsh-plugin-voice` 是另一个同名项目（不是本仓库），同名发布会 403；安装走 GitHub，见 §7 |
 
@@ -21,6 +21,7 @@
 - [ ] `node scripts/test-chime-ui.mjs` 与 `node scripts/test-chime-playback.mjs` 全绿。
 - [ ] `node scripts/test-settings-ui.mjs` 全绿（三档引擎下该出现的出现、该藏的不出现）。
 - [ ] `node scripts/audit-release.mjs` 全绿（密钥、本机路径、发版物夹带，见 §6）。
+- [ ] Client 半 XSS 静态守卫通过（CI 里的"forbid unsafe HTML APIs"步骤：`innerHTML`/`document.write` 等不得出现在 `lib/client.js`）。
 - [ ] `node --check` 覆盖 `lib/` 下全部 8 个手写模块（CI 已含）。
 - [ ] CI（`.github/workflows/test.yml`）在 PR 上跑过一遍。
 

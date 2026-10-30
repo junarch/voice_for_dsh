@@ -41,7 +41,7 @@ import {
 const PLUGIN_VERSION = (() => {
   try { return String(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || '') } catch { return '' }
 })()
-const DSH_COMPAT = '0.2.1-rc.3'
+const DSH_COMPAT = '0.2.1-rc.5'
 
 /** 转写共用的总则（与引擎无关）：本地/豆包两份 prompt 都从这里长出来，
  *  改规则只需要改这一处（两份各自再拼自己的差异段）。 */
@@ -152,7 +152,7 @@ function extractVoiceTags(text) {
   return { clean, cmds }
 }
 
-/** 火山豆包 2.0 可选音色（精选：中文 4 女 4 男 + 英文，均经
+/** 火山豆包 2.0 可选音色（精选 12 个：中文女 5 + 中文男 4 + 英文 3，均经
  * scripts/tts-voice-avail-probe.mjs 在 plan 网关 + 双向流实测可用；
  * 设置页下拉 + 允许自定义输入）。
  * 说明：8 种方言是音色能力（官方 2.0 音色表里只有 Vivi/小何/云舟/小天 标了方言），
@@ -426,7 +426,7 @@ const Config = z.object({
   autoSpeak: z.boolean().default(false).volatile(),
   autoSpeakCloudTts: z.boolean().default(false).volatile(), // 成本门控（设置页不再单独显示一行）：选豆包时联动写入 true；false=自动播报不碰豆包（付费），手动按钮与 local 不受限
   language: z.string().default('auto').volatile(), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
-  provider: z.string().default('').volatile(), // 转写 LLM provider（空 = 启动时发现并自愈写回可用路由）
+  provider: z.string().default('').volatile(), // 转写 LLM provider（空 = 播报时自动发现可用路由；配置路由失败回退发现路由，均不写回配置）
   model: z.string().default('deepseek-v4-flash').volatile(),
   transcribe: z.object({
     enabled: z.boolean().default(true), // 主开关：关=不调转写模型，直接读原文（去 Markdown）
@@ -470,7 +470,7 @@ const Config = z.object({
     }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
     local: z.object({
       // 本地 Kokoro v1.1（进程内 sherpa-onnx，中英跟随原文，免费；docs/local-tts.md）
-      sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，无官方名字表）；设置页下拉 + 手填
+      sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，官方 sid→名字表见 LOCAL_VOICES）；设置页下拉 + 手填
       speed: z.number().default(1),            // 语速 [0.5, 2]
       language: z.union([z.const('auto'), z.const('zh'), z.const('en')]).default('auto'), // 播报语种：auto=跟随原文；zh/en=让转写稿用该语言（本地按文本语言发音）
       numThreads: z.number().default(4),       // 合成线程数（1–16；线程多首声更快、更吃 CPU）
@@ -563,7 +563,7 @@ function apply(ctx, config) {
 
   // 本地 TTS 运行时（docs/pipeline.md §4.3、docs/local-tts.md）：进程内 sherpa-onnx +
   // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
-  // 不需要 Python。运行时随 Host 进程一起释放，没有需要回收的句柄。
+  // 不需要 Python。原生模块持有模型文件句柄：删除模型前必须先 dispose()（见 onBeforeRemove）。
   const localRuntime = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => readConfig() })
 
   // 模型安装器（设置页「下载模型」）：下载 → 校验 → 解包 → 装到用户目录。
@@ -745,7 +745,10 @@ function apply(ctx, config) {
         const item = { sessionId: entry.sessionId, messageId: entry.messageId, turn: entry.turn }
         if (!pendingSpeakQueue.some((p) => p.messageId === item.messageId)) {
           pendingSpeakQueue.push(item)
-          if (pendingSpeakQueue.length > PENDING_SPEAK_MAX) pendingSpeakQueue.shift()
+          if (pendingSpeakQueue.length > PENDING_SPEAK_MAX) {
+            const dropped = pendingSpeakQueue.shift()
+            console.warn('[voice] auto-speak queue overflow, dropped oldest:', dropped && dropped.messageId)
+          }
         }
         console.log('[voice] auto-speak pending:', entry.messageId)
       }
@@ -782,7 +785,7 @@ function apply(ctx, config) {
   function extractText(sessionId, messageId) {
     const session = sessions.get(sessionId)
     if (!session) return { error: 'session not found: ' + sessionId }
-    // DSH 0.1.2 起不再暴露可变的 session.events；读取稳定快照，避免与追加事件竞争。
+    // DSH ≥0.1.2 的 session.events 不可变：读稳定快照，避免与追加事件竞争。
     const events = session.snapshotEvents()
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i]
@@ -1023,7 +1026,7 @@ function apply(ctx, config) {
    * 本地 TTS 合成（进程内 sherpa-onnx + Kokoro v1.1，docs/pipeline.md §4.3）。
    * 返回完整 WAV Buffer（客户端音频元素直接能播）；中英均由模型自己处理，不做语言改写。
    * 音色与语速取自传入的 cfg（试听=页面草稿、播报=当次快照），不在这里回读保存值——
-   * 否则"改了音色再试听"永远听到保存值（曾经的真 bug）。
+   * 否则"改了音色再试听"永远听到保存值。
    * 失败统一抛带 kind 的错误（model-missing / load-failed / synth-failed / timeout），
    * 客户端据此选 toast 文案；"没装模型"与"合成失败"必须可区分，不许静默失败。
    */
@@ -1091,8 +1094,8 @@ function apply(ctx, config) {
     return 'v2|' + JSON.stringify([eff.speaker, eff.dialectId, eff.explicitLanguage, rate ?? '', pitch ?? '',
       v.loudness ?? '', v.expressive ? 'ex' : '', v.sampleRate ?? '', v.bitRate ?? ''])
   }
-  /** 服务端缓存记账（文本 → 上次写入的指纹 + 时间）：防止同文本换参数后 1h 内命中旧音频（串音，
-   * 即此前实测发现的"永远四川口音"事故同类）。仅当指纹一致或已超 1h（服务端缓存过期）才允许命中。 */
+  /** 服务端缓存记账（文本 → 上次写入的指纹 + 时间）：防止同文本换参数后 1h 内命中旧音频
+   * （旧参数合成并写入缓存的音频被当成新参数的返回，造成串音）。仅当指纹一致或已超 1h（服务端缓存过期）才允许命中。 */
   const serverCacheLedger = new Map() // text → { fp, at }
   function serverCacheAllowed(text, fp) {
     if (!text) return false
@@ -1130,7 +1133,7 @@ function apply(ctx, config) {
     const ctxText = composeContextText(opts.instruction, emotionZh, opts.intensity)
     if (ctxText) additions.context_texts = [ctxText]
     if (eff.dialectId) additions.explicit_dialect = eff.dialectId
-    // explicit_language：仅"非英文音色 + 固定英文"下发（中文/方言不下发，避免与 explicit_dialect 冲突）
+    // explicit_language：语种固定为英文且未选方言时下发（值恒为 'en'，英文音色同样下发；选方言时不发，避免与 explicit_dialect 冲突）
     if (eff.explicitLanguage) additions.explicit_language = eff.explicitLanguage
     // 服务端缓存（cache_config）：只按文本、不认方言/音色/情感（探针实测 MD5 一致），
     // 故仅在"初次合成写入 + 参数指纹未变的重播命中"时下发；试听/重新生成绝不下发（防串音）。
@@ -1794,13 +1797,9 @@ function apply(ctx, config) {
     }
 
     let degraded = false
-    // 路由 + 思考档位计划：缓存命中与否都要解析（档位降级需对用户可见）
+    // 路由 + 思考档位计划：缓存命中与否都要解析（档位降级需对用户可见）。
+    // 配置路由失败时在 attempt 的失败处理里回退 discoverRoute()（见下方 catch），不写回配置。
     if (!route) route = await discoverRoute()
-    if (configured && route && (route.provider !== configured.provider || route.model !== configured.model)) {
-      // 自愈：配置路由不可用（如幽灵 provider）→ 把可用路由写回 settings，
-      // 避免每次播报都先打一次失败调用再回退、且转写缓存永久 miss
-      ctx.settings.update('voice', { provider: route.provider, model: route.model }).catch(() => {})
-    }
     let effortPlan = await effortFor(route, effortUsed)
 
     if (!transcript) {
