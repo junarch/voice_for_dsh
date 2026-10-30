@@ -57,6 +57,12 @@ factory 只拿到 `require`（可解析 `react` 等少数共享模块），`ctx`
   profile 的 `cordis.patch.yml`；`update(ns, patch)` 深合并写入（`ns` = profile patch 条目 id，本插件是 `voice`），
   标了 `.volatile()` 的字段热生效、不重挂载插件。`register(ns, schema)` 在 0.2.0 已移除。
 - `ctx.webServer`：`register({kind:'exact'|'prefix', path, handler})` 等（合成音频的一次性路由与提示音素材路由用）。
+  路由表按 kind+path 唯一，重复登记直接抛错；`register` 返回撤销函数但宿主不代调，所以登记必须包在
+  `ctx.effect` 里（`ctx.effect(() => ctx.webServer.register(spec), 'voice: <path>')`），否则插件被重挂时
+  旧登记不退，新实例激活即撞 `duplicate prefix route`。
+  路由路径写死、按单实例设计：patch 里这一行的 id 要稳定（`voice`），同一进程里插两行会整项激活失败。
+  另外 `dsh-hmr` 只默认监听 profile 配置（模块根要显式开，桌面 profile 是 `root: []`），所以改源码不会热替换
+  Host 半——真正会让插件重挂的是设置里拨插件开关（走 plugin-manager，不是普通 HTTP）。
 
 ## 5. Client 关键槽位
 

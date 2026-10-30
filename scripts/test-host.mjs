@@ -2312,6 +2312,56 @@ fire({ type: 'turn/start', data: { turn: 90 } })
   await rpc('stop', {})
 }
 
+// —— 宿主重挂：三条路由必须随插件停止撤销，新实例才登得上 ——
+// 真 webserver 的路由表按 kind+path 唯一，重复登记直接抛错；register 返回撤销函数，
+// 宿主不代调，要靠 ctx.effect 挂在插件 fiber 上。这个替身两样都照真的来：
+// 同键再登记抛错、撤销函数摘掉自己那条；effect 收集撤销函数，dispose 时逐个执行。
+{
+  const table = new Map() // kind+path → spec，等价于宿主的路由表
+  const mount = () => {
+    const disposers = []
+    const labels = []
+    const ctxStub = {
+      get: (name) => ctx.get(name),
+      settings,
+      on: () => {},
+      effect: (fn, label) => {
+        const dispose = fn()
+        labels.push(label)
+        if (typeof dispose === 'function') disposers.push(dispose)
+        return dispose
+      },
+      webServer: {
+        register: (spec) => {
+          const key = spec.kind + ' ' + spec.path
+          if (table.has(key)) throw new Error('webserver: duplicate ' + spec.kind + ' route "' + spec.path + '"')
+          table.set(key, spec)
+          return () => { if (table.get(key) === spec) table.delete(key) }
+        },
+      },
+    }
+    return { ctxStub, labels, stop: () => { for (const d of disposers.splice(0).reverse()) d() } }
+  }
+
+  const first = mount()
+  apply(first.ctxStub, liveConfig)
+  check('重挂：第一次挂载登记三条路由', table.size === 3, [...table.keys()])
+  const routeLabels = first.labels.filter((l) => typeof l === 'string' && l.startsWith('voice: /voice/'))
+  check('重挂：三条路由都挂在 effect 上（各自带可读 label）', routeLabels.length === 3, first.labels)
+
+  first.stop()
+  check('重挂：插件停止后路由全部撤销（不是留在表里）', table.size === 0, [...table.keys()])
+
+  const second = mount()
+  let remountError = null
+  try { apply(second.ctxStub, liveConfig) } catch (error) { remountError = error }
+  check('重挂：第二次挂载不撞 duplicate route、不抛错',
+    remountError === null && table.size === 3, remountError ? String(remountError.message) : [...table.keys()])
+
+  second.stop()
+  check('重挂：再停一次路由又清空（可反复重挂）', table.size === 0, [...table.keys()])
+}
+
 // 恢复 browser（测试以免费引擎收尾，保持无副作用）
 await rpc('setConfig', { patch: { autoSpeak: false, tts: { provider: 'browser' } } })
 

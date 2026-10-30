@@ -2259,7 +2259,10 @@ function apply(ctx, config) {
     try { return !!req.headers.host && new URL(origin).host === req.headers.host } catch { return false }
   }
 
-  ctx.webServer.register({
+  /** 路由随插件卸载一起摘掉：宿主重挂插件时旧登记不退，会撞 "duplicate prefix route"。 */
+  const route = (spec) => ctx.effect(() => ctx.webServer.register(spec), 'voice: ' + spec.path)
+
+  route({
     kind: 'prefix',
     path: '/voice/api',
     handler: async (req, res) => {
@@ -2289,7 +2292,7 @@ function apply(ctx, config) {
   })
 
   // 一次性音频路由：/voice/audio/<id>（取一次即删）
-  ctx.webServer.register({
+  route({
     kind: 'prefix',
     path: '/voice/audio',
     handler: (req, res) => {
@@ -2312,7 +2315,7 @@ function apply(ctx, config) {
   // 提示音素材路由：POST /voice/sounds?kind=work|done|ask&name=<原名> 上传；
   // GET /voice/sounds/<file> 只读不删（素材要能被 <audio>/decodeAudioData 反复取）。
   // 不复用 /voice/audio（取一次即删）与 /voice/api（限 1MB、只收 JSON）：这里是二进制、可反复取、上限 10MB。
-  ctx.webServer.register({
+  route({
     kind: 'prefix',
     path: '/voice/sounds',
     handler: async (req, res) => {

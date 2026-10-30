@@ -6,6 +6,16 @@
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **插件被宿主重挂时语音整项激活失败**（`webserver: duplicate prefix route "/voice/api"`）：Host 半三处
+  `ctx.webServer.register()` 丢弃了返回的撤销函数，插件停止时路由不退，新实例第一次登记就撞上旧路由。
+  改为经 `ctx.effect` 登记，路由随插件 fiber 一起撤销；`scripts/test-host.mjs` 补上「停止 → 重挂」回归
+  （修复前该回归复现同一句报错）。表现为：在设置里拨任意插件开关、或改插件源码触发热替换后，语音被标成
+  激活失败、整项不可用（冷启动不受影响）。
+
 ## [0.4.1] - 2026-10-30
 
 ### Changed
