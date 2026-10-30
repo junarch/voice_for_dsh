@@ -9,7 +9,7 @@
 | 位置 | 当前 | 说明 |
 |---|---|---|
 | 本仓库 | `0.4.1` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
-| GitHub main | `0.4.0` | 已发 Release `v0.4.0`（tag 指向 `6eb4764`）；更早的 `0.3.1` 是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
+| GitHub main | `0.4.1` | 已发 Release `v0.4.1`（tag 指向 `899578a`）；更早的 `0.3.1` 是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
 | npm | 未发布 | npm 上的 `dsh-plugin-voice` 是另一个同名项目（不是本仓库），同名发布会 403；安装走 GitHub，见 §7 |
 
 发版＝推 main、打 tag、写 Release；安装走 GitHub（npm 同名不可用，见 §7）。
