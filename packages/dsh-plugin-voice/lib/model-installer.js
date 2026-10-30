@@ -212,7 +212,7 @@ export function createModelInstaller(options = {}) {
       minFreeBytes: MIN_FREE_BYTES,
       rootDir: () => userModelRoot(),
       getActive: () => ({ source: '', dir: '' }),
-      onBeforeRemove: null, // 删除前先卸运行时（Windows 文件句柄）
+      onBeforeRemove: null, // 删除前先卸运行时（松开内存里那份模型）
     }, options, testHooks || {})
   }
 
@@ -603,7 +603,7 @@ export function createModelInstaller(options = {}) {
         state: status(),
       }
     }
-    // 先卸运行时：原生模块持有模型文件句柄时，Windows 会删到一半抛错，留个半截目录
+    // 先卸运行时：让运行时松开内存里那份模型，删完下次合成按新目录重新解析
     try { if (typeof c.onBeforeRemove === 'function') c.onBeforeRemove() } catch { /* 卸载失败不阻断删除 */ }
     // 删之前再核一次边界：只删模型根下那一份，且不跟着符号链接/junction 跑到别处去
     const rootResolved = path.resolve(dirs(c).root)
@@ -625,3 +625,4 @@ export function createModelInstaller(options = {}) {
   return { start, status, cancel, remove, sweep }
 }
 //#endregion
+

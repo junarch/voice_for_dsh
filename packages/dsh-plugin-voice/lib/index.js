@@ -563,7 +563,7 @@ function apply(ctx, config) {
 
   // 本地 TTS 运行时（docs/pipeline.md §4.3、docs/local-tts.md）：进程内 sherpa-onnx +
   // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
-  // 不需要 Python。原生模块持有模型文件句柄：删除模型前必须先 dispose()（见 onBeforeRemove）。
+  // 不需要 Python。删除模型前先 dispose()：让运行时松开内存里那份模型，删完不会又拿旧实例合成。
   const localRuntime = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => readConfig() })
 
   // 模型安装器（设置页「下载模型」）：下载 → 校验 → 解包 → 装到用户目录。
@@ -580,8 +580,8 @@ function apply(ctx, config) {
   })
   try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
 
-  // 插件停止时交还本地运行时：原生模块攥着模型（约 0.5–0.6GB）与模型文件句柄，原生内存不会触发
-  // V8 回收，只靠 GC 释放不可控。下载中的任务一并取消，别在卸载后继续写盘。
+  // 插件停止时交还本地运行时：模型是整份读进内存的（实测加载一份约 +460MB RSS），原生内存不触发
+  // V8 回收，只有丢引用之后的那次 GC 才归还。卸载时把引用交回去，顺带取消没跑完的下载。
   ctx.effect(() => async () => {
     try { await modelInstaller.cancel() } catch (error) { console.error('[voice] model installer cancel on dispose failed:', error) }
     try { localRuntime.dispose() } catch (error) { console.error('[voice] local tts dispose failed:', error) }
