@@ -10,6 +10,11 @@
 
 ### Fixed
 
+- **插件停止时不交还本地 TTS 运行时**（重挂/停用之后模型常驻内存、模型文件句柄不放）：本地运行时每次
+  启动新建，只有「删除模型」这一条路会 dispose 它，插件停止时旧实例的模型（约 0.5–0.6GB）与 `model.onnx`
+  句柄只能等 GC——原生内存不触发 V8 回收，等于长期不释放。现在在 `ctx.effect` 里随插件 fiber 交还运行时
+  （并发取消未完成的模型下载）；`docs/pipeline.md` 补不变式 27，`scripts/test-host.mjs` 补 dispose 语义与
+  「卸载即交还」的回归。
 - **插件被宿主重挂时语音整项激活失败**（`webserver: duplicate prefix route "/voice/api"`）：Host 半三处
   `ctx.webServer.register()` 丢弃了返回的撤销函数，插件停止时路由不退，新实例第一次登记就撞上旧路由。
   改为经 `ctx.effect` 登记，路由随插件 fiber 一起撤销；`scripts/test-host.mjs` 补上「停止 → 重挂」回归

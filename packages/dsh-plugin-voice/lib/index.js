@@ -580,6 +580,13 @@ function apply(ctx, config) {
   })
   try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
 
+  // 插件停止时交还本地运行时：原生模块攥着模型（约 0.5–0.6GB）与模型文件句柄，原生内存不会触发
+  // V8 回收，只靠 GC 释放不可控。下载中的任务一并取消，别在卸载后继续写盘。
+  ctx.effect(() => async () => {
+    try { await modelInstaller.cancel() } catch (error) { console.error('[voice] model installer cancel on dispose failed:', error) }
+    try { localRuntime.dispose() } catch (error) { console.error('[voice] local tts dispose failed:', error) }
+  }, 'voice: local tts runtime')
+
   // 提示音素材清扫：配置里不再引用的、且超过 1 天的文件删掉（设置页换音源后就地回收）。
   try {
     const chimeNow = readConfig().chime || {}

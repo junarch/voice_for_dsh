@@ -1618,6 +1618,36 @@ const sd21stop = await awaitStreamDone(s21stop.runId)
 check('stop 后 run 正常收尾（无死锁、有 done）', !!sd21stop.res && sd21stop.res.done === true, sd21stop)
 await rpc('setConfig', localCfg())
 
+// —— 卸载：插件停止时显式交还 local 运行时（原生模型与文件句柄不靠 GC 碰运气） ——
+section('T21b 本地运行时卸载（插件停止时交还模型与文件句柄）')
+{
+  const fakeEngine = () => ({
+    numSpeakers: 103,
+    sampleRate: 24000,
+    generate: () => ({ samples: new Float32Array(24), sampleRate: 24000 }),
+    generateAsync: async () => ({ samples: new Float32Array(24), sampleRate: 24000 }),
+  })
+  const cfgRef = { tts: { local: { modelDir: MODEL_FIXTURE, sid: 48, speed: 1, numThreads: 4 } } }
+  const rt = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => cfgRef, loadEngine: async () => fakeEngine() })
+  await rt.ensureLoaded()
+  check('卸载前：引擎已加载并认得模型目录', rt.loadedModelDir() === MODEL_FIXTURE, rt.loadedModelDir())
+  check('dispose()：告诉调用方"之前确实有加载"', rt.dispose() === true)
+  check('dispose() 后：不再认已加载（引用已丢，原生句柄交给 GC）', rt.loadedModelDir() === '')
+  check('dispose() 幂等：再调一次不抛错、返回 false', rt.dispose() === false)
+
+  // dispose 之后才落地的加载结果不许认领（否则它又会占住模型文件）
+  let release = null
+  const gate = new Promise((resolve) => { release = resolve })
+  const rt2 = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => cfgRef, loadEngine: async () => { await gate; return fakeEngine() } })
+  const inFlight = rt2.ensureLoaded()
+  rt2.dispose()
+  release()
+  let lateError = null
+  try { await inFlight } catch (error) { lateError = error }
+  check('在途加载被 dispose 后：结果作废、不占住模型', rt2.loadedModelDir() === '' && !!lateError,
+    { loaded: rt2.loadedModelDir(), error: lateError && String(lateError.message) })
+}
+
 // ================= T22 本地分句流式（分块入队 / 中途失败 / 首段失败降级 / 整段失败） =================
 section('T22 本地分句流式（分块入队 / 中途失败 / 首段失败降级 / 段超时）')
 
@@ -2348,6 +2378,8 @@ fire({ type: 'turn/start', data: { turn: 90 } })
   check('重挂：第一次挂载登记三条路由', table.size === 3, [...table.keys()])
   const routeLabels = first.labels.filter((l) => typeof l === 'string' && l.startsWith('voice: /voice/'))
   check('重挂：三条路由都挂在 effect 上（各自带可读 label）', routeLabels.length === 3, first.labels)
+  check('重挂：本地运行时也挂在 effect 上（卸载即交还模型与文件句柄）',
+    first.labels.includes('voice: local tts runtime'), first.labels)
 
   first.stop()
   check('重挂：插件停止后路由全部撤销（不是留在表里）', table.size === 0, [...table.keys()])
