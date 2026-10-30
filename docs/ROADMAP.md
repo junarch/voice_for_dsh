@@ -9,7 +9,7 @@
 ### 1. 多平台适配（Mac / Linux）
 - **状态**：规划中（当前仅 Windows 实测）。
 - **为什么**：dsh web 是跨平台产品，用户不只有 Windows。
-- **现状**：Host 与 Client 的零成本测试（`test-host.mjs` / `test-client.mjs`）已在 CI 的 `ubuntu-latest`
+- **现状**：Host 与 Client 的本地 mock 测试（`test-host.mjs` / `test-client.mjs`）已在 CI 的 `ubuntu-latest`
   上跑通；未验证的是浏览器语音（`speechSynthesis` 的 Mac/Linux 语音引擎行为、`getVoices` 时序）、
   `dsh plugin add` 路径分隔符等。
 - **最大不确定项是原生模块**：本地引擎靠 sherpa-onnx 的**预编译产物**，Windows 上现成可用，但 macOS
@@ -21,7 +21,7 @@
 
 ### 2. 接入下一个 TTS 供应商
 - **状态**：规划中（本地 Kokoro 已落地，见"已完成"）。
-- **为什么**：豆包是付费云服务；多一个本地方案或另一家云，能满足不同取舍（免费/音质/隐私）。
+- **为什么**：豆包是第三方云服务；多一个本地方案或另一家云，能满足不同取舍（成本/音质/隐私）。
 - **现状**：provider 适配层已覆盖 `browser` / `volcengine` / `local`（归一逻辑在
   `lib/voice-compat.js` 的 `ttsProviderOf`）；接入规范见 `docs/providers.md`。
 - **待办**：按 `docs/providers.md` 的契约接入下一个供应商并写探针。
@@ -36,7 +36,7 @@
 ### 4. 文档-代码一致性 CI 守护
 - **状态**：规划中。
 - **为什么**：此前审计修过一批"注释引用了不存在的文档/文件名漂移"，靠人盯会复发。
-- **方向**：加一个零成本 CI 步骤——校验 `lib/*.js` 注释里引用的 `docs/*.md` 都存在、
+- **方向**：加一个不产生外部调用的 CI 步骤——校验 `lib/*.js` 注释里引用的 `docs/*.md` 都存在、
   README 无本机绝对路径、音色/语种清单 Host 与 Client `FALLBACK_META` 一致。
 
 ### 5. 安全加固收尾（低危）

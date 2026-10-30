@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       "layer.l3.summary.on": "开：先改写成口语稿", "layer.l3.summary.off": "关：直接念原文",
       "layer.l4.summary": "分句={seg} · 线程={threads} · 目录={dir}",
       "layer.value.on": "开", "layer.value.off": "关", "layer.value.auto": "自动", "layer.value.custom": "自定义",
-      "status.browser": "浏览器自带语音：免费，不用装东西",
+      "status.browser": "浏览器自带语音：开箱即用",
       "status.volcengine.ok": "豆包：按量计费，试听会真的调用",
       "status.volcengine.noKey": "豆包：还没填 API Key，试听会失败",
       "status.volcengine.autoNoKey": "豆包：还没填 API Key——自动播报会先失败，再退回浏览器语音",
@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
       "status.local.missing": "本地模型还没装，先下载才能出声",
       "status.local.busy": "正在装本地模型：{percent}%",
       "cta.install": "去安装",
-      "hint.engine": "系统 TTS 免费、离线；豆包按量计费、要填 API Key；本地 Kokoro 免费，先下模型",
+      "hint.engine": "系统 TTS 开箱即用；豆包需配置第三方 API、按用量计费；本地 Kokoro 本地运行，先下载模型",
       "hint.autoSpeak": "每轮回答结束自动念一遍",
       "hint.transcribe": "开：模型先把回答改写成口语稿，更顺耳，但多一次模型调用。关：直接念原文，表格和代码自动跳过——此时篇幅档位不生效。",
       "row.transcribeEnabled": "开启转写",
@@ -62,7 +62,7 @@ window.__ModuleLoader__.load({
       "row.provider": "Provider", "row.model": "模型",
       "row.temperature": "temperature",
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
-      "engine.browser": "系统 TTS（浏览器语音·免费）", "engine.volcengine": "豆包（付费）", "engine.local": "本地 Kokoro（中英·免费）",
+      "engine.browser": "系统 TTS（浏览器语音）", "engine.volcengine": "豆包（需第三方 API）", "engine.local": "本地 Kokoro（中英·本地运行）",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
@@ -127,9 +127,9 @@ window.__ModuleLoader__.load({
       "browser.voiceHint": " 留空=系统默认；名字对不上系统里的语音就按默认音播",
       "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
       "dialect.onlyVoices": "方言只对上面这几个音色开放（换回普通话即可看到全部音色）/ dialects are limited to the voices listed above",
-      "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准付费 Key：", "apiKey.hintLink": "新版控制台快速入门",
+      "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准计费 Key：", "apiKey.hintLink": "新版控制台快速入门",
       "row.gateway": "网关", "row.httpUrl": "HTTP 端点（自定义）",
-      "gateway.hint": " plan=智能体套餐（默认）；standard=标准付费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
+      "gateway.hint": " plan=智能体套餐（默认）；standard=标准计费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
       "row.loudness": "音量",
       "streaming.degraded": "双向流不可用，已回退整段合成",
@@ -2330,9 +2330,9 @@ window.__ModuleLoader__.load({
         }
         setFields(entries);
       }
-      /** 播报引擎三选一（引擎总开关）：browser=免费系统 TTS；volcengine=豆包（付费 API Key 生效）；
-       * local=本地 Kokoro 中英（免费，进程内合成）。切到豆包时 autoSpeakCloudTts 同步写入 true
-       * （Host 成本门控与 UI 一致）；切到免费引擎写 false。 */
+      /** 播报引擎三选一（引擎总开关）：browser=系统 TTS；volcengine=豆包（需第三方 API）；
+       * local=本地 Kokoro 中英（本地运行，进程内合成）。切到豆包时 autoSpeakCloudTts 同步写入 true
+       * （Host 成本门控与 UI 一致）；切到 browser/local 写 false。 */
       function onEngineChange(v) {
         const next = JSON.parse(JSON.stringify(cfg));
         next.tts.provider = v;
@@ -2438,7 +2438,7 @@ window.__ModuleLoader__.load({
             ttsEngine === "local" ? React.createElement("div", { className: "dsh-voice-sub" },
               React.createElement(LocalModelDeploy, { onChanged: refreshLocalStatus })) : null,
 
-            // —— 系统 TTS（免费）——
+            // —— 系统 TTS ——
             ttsEngine === "browser" ? React.createElement(React.Fragment, null,
               React.createElement(Row, { label: t("row.rate") },
                 React.createElement(SliderInput, { value: cfg.tts.browser.rate, onChange: (v) => setField("tts.browser.rate", v), min: 0.5, max: 2, step: 0.05, format: (v) => v.toFixed(2) + "x" })),
@@ -2448,7 +2448,7 @@ window.__ModuleLoader__.load({
                 React.createElement(TextInput, { value: cfg.tts.browser.voice, onChange: (v) => setField("tts.browser.voice", v), placeholder: "系统默认 / system default" }),
                 React.createElement("span", { className: "dsh-voice-dim" }, t("browser.voiceHint")))) : null,
 
-            // —— 本地 Kokoro（中英，免费；安装行在层头，收起也不卸载轮询）——
+            // —— 本地 Kokoro（中英，本地运行；安装行在层头，收起也不卸载轮询）——
             ttsEngine === "local" ? React.createElement(React.Fragment, null,
               // 模型已装时不再说"先点下载把模型装好"——那句话只在未装时才有意义
               (deployState && deployState.installed) ? null
@@ -2490,7 +2490,7 @@ window.__ModuleLoader__.load({
             React.createElement(Row, { label: t("row.gateway") },
               React.createElement(SelectInput, { value: cfg.tts.volcengine.gateway || "plan", onChange: (v) => setField("tts.volcengine.gateway", v) },
                 React.createElement("option", { value: "plan" }, "plan · 智能体套餐"),
-                React.createElement("option", { value: "standard" }, "standard · 标准付费"),
+                React.createElement("option", { value: "standard" }, "standard · 标准计费"),
                 React.createElement("option", { value: "custom" }, "custom · 自定义端点")),
               React.createElement("span", { className: "dsh-voice-dim" }, t("gateway.hint"))),
             (cfg.tts.volcengine.gateway === "custom" ? React.createElement(Row, { label: t("row.httpUrl") },

@@ -103,15 +103,15 @@ Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-vo
 ## 7. 设计决策（为什么这么搭）
 
 - 转写在 Host 用 `ctx.llm`（独立辅助调用、不入主会话历史）：复用已配 provider/凭据、不暴露 key、prompt 可控。
-- 默认 TTS = 浏览器 `speechSynthesis`（设置页里的「系统 TTS（浏览器语音）」）：零配置、免费、离线兜底。
+- 默认 TTS = 浏览器 `speechSynthesis`（设置页里的「系统 TTS（浏览器语音）」）：零配置、离线兜底。
 - 豆包走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；创造模式动态沙箱禁 `fetch`。
 - 成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - TTS 用自研适配层（不引第三方库）：无现成 JS 库支持火山 v3 接口；HTTP 单向协议极简（~150 行零依赖）；
   避免供应链与失维护风险。调研见火山《接入语音模型》官方文档（链接见 `docs/pipeline.md` §4.2）。
-- 付费 TTS 默认关闭（设置页"播报引擎"三选一：系统/豆包/本地 Kokoro；默认 browser 全免费；
-  选豆包 = 用户显式为付费 API 买单并写入 `autoSpeakCloudTts=true`），
-  `autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控；local 免费不受门控。
+- 豆包默认关闭（设置页"播报引擎"三选一：系统/豆包/本地 Kokoro；默认 browser；
+  选豆包 = 用户显式启用第三方 API 并写入 `autoSpeakCloudTts=true`），
+  `autoSpeakCloudTts` 仍作为直改配置的自动播报成本门控防账单失控；local 不受门控。
 - UI 只占 additive 小槽位，不碰 `root`/`conversation.session` 等高风险整槽位。
 - **设置页分层（L1–L5）而不是一屏平铺**：用户平时只动两件事——换引擎、开自动播报；其余是"配一次就忘"的
   参数（豆包鉴权、转写路由、本地线程数）。平铺四十来个字段，每次进来都要从头扫一遍才能确认"还是原来那样"。

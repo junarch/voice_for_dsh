@@ -21,12 +21,12 @@
 只刷新页面不够：Client 半只有整个应用重启才进 boot 图。
 v1 无 dev watcher / HMR（后续 tsdown 化后才有 `pnpm run dev:web` 无刷新更新）。
 
-### 改完跑集成测试（mock 零成本 + 探针花几分钱）
+### 改完跑集成测试（mock 不产生外部调用 + 探针产生少量实际调用费用）
 ```powershell
 node scripts/test-host.mjs   # mock 驱动 Host 全链路（转写/缓存/TTS/防串音/重播零 LLM 等断言）
 node scripts/test-client.mjs # Client 半合约（槽位注册形状 / turnTail claim / i18n 键对齐）
-node scripts/tts-probe.mjs       # 真实外呼（花几分钱）：HTTP 单向接口行为
-node scripts/tts-ws-probe.mjs --all   # 真实外呼（花几分钱）：双向流参数用例
+node scripts/tts-probe.mjs       # 真实外呼（产生少量实际调用费用）：HTTP 单向接口行为
+node scripts/tts-ws-probe.mjs --all   # 真实外呼（产生少量实际调用费用）：双向流参数用例
 node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针
 ```
 方法论见 `docs/testing.md`。
@@ -75,12 +75,12 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 并可取回 `/plugins/??dsh-plugin-voice/client.js&rev=…`（combo 路由）自验 Client 半确实被服务；
 `/voice/api/*` 也能直接打。验证完记得删掉 `~/.dsh/profiles/voiceprobe`。
 
-**重启桌面端后的一键自检**（零成本，逐条打印证据）：
+**重启桌面端后的一键自检**（不产生外部调用，逐条打印证据）：
 
 ```powershell
 # 端口与 token 以启动日志/地址栏给的为准（默认端口之外也可能换过）
 node scripts/verify-installed.mjs --url "http://127.0.0.1:<端口>/?token=<token>"
-# 想连真实合成一起验：加 --speak-paid（豆包花几分钱；本地 Kokoro 免费）
+# 想连真实合成一起验：加 --speak-paid（豆包产生少量实际调用费用；本地 Kokoro 在本机合成）
 ```
 
 它检查：Host 半路由活着 → **Client 半在 boot 图里且能取回字节** → 配置可读且关键字段在 →

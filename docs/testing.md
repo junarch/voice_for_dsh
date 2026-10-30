@@ -29,7 +29,7 @@
 
 ## 2. 四层测试手段（从便宜到贵）
 
-### 第 1 层：零成本——mock 集成测试 `scripts/test-host.mjs`
+### 第 1 层：本地 mock——集成测试 `scripts/test-host.mjs`
 不启动 dsh、不花一分钱，用 mock 的 llm/sessions/settings/fetch 加载真实 `lib/index.js` 驱动完整链路；
 插件配置按**真实导出的 `Config` schema**解析（含默认值 + volatile 引用），所以"插件能不能被目标版 DSH
 （当前基线 `0.2.1-rc.5`）正常加载并解析出配置"这件事本身就有断言兜着（加载即 `TypeError` 这类事故就栽在这条上）。
@@ -38,20 +38,20 @@
 cache_config 初次/重播下发而 regen/换音色重播不下发等。
 每次改完 Host 半必跑。
 
-### 第 1.5 层：零成本——Client 半合约测试 `scripts/test-client.mjs`
+### 第 1.5 层：本地 mock——Client 半合约测试 `scripts/test-client.mjs`
 不启动浏览器，用最小替身加载真实 `lib/client.js`，**真的执行**槽位注册回调：
 按上游 `SlotRegistry.register` 的规则校验（list 槽位必须有 `id`、`select` 只有 chain 槽位认），
 并驱动 turnTail 徽标的 claim 逻辑（本轮没有可朗读消息 / 该消息没读过 → 必须返回 null 不占位）、
 会话 Definition 注册与 zh/en i18n 键对齐。每次改完 Client 半必跑。
 
-### 第 1.6 层：零成本——提示音渲染与调度 `scripts/test-chime-ui.mjs` / `scripts/test-chime-playback.mjs`
+### 第 1.6 层：本地 mock——提示音渲染与调度 `scripts/test-chime-ui.mjs` / `scripts/test-chime-playback.mjs`
 不启浏览器，用极小的 React 替身把真实的设置页组件渲染成树，断言五层的渐进显隐：
 总开关关着时三行不出现、关某行时它的音源与上传不渲染、层头是 `button` 且 `aria-expanded` 正确。
 播放侧用假 `AudioContext` 记账，断言：多个会话同时跑只起一份工作音、结束与提问两种音都能响且工作音不停、
 审批与子代理不触发、同 key 去重、连续结束只响一次、短素材改按间隔播、缺素材回落到默认音。
 改设置页或提示音必跑这两个。
 
-### 第 1.7 层：零成本——设置页按引擎显隐 `scripts/test-settings-ui.mjs`
+### 第 1.7 层：本地 mock——设置页按引擎显隐 `scripts/test-settings-ui.mjs`
 同一套 React 替身，按 `tts.provider` 三档各渲染一次真设置页组件，断言"只对某个引擎生效的参数
 不摆在别的引擎下"：系统 TTS / 豆包下没有「高级」层（线程数、分句流式、模型目录），本地引擎下三项都在
 且层头摘要带当前值；切引擎走组件自己的 `onChange`，同一实例重渲染后显隐跟着变。
@@ -59,13 +59,13 @@ cache_config 初次/重播下发而 regen/换音色重播不下发等。
 时给可操作的原因；自定义网关缺 `wsUrl` 时说明会整段合成。
 **改设置页显隐条件必跑**——上一轮 L4 错位就是没有这层防线，只能靠人眼发现。
 
-### 第 1.8 层：零成本——本地合成直连探针 `scripts/local-tts-probe.mjs`
+### 第 1.8 层：本地直连——本地合成探针 `scripts/local-tts-probe.mjs`
 绕开插件直接打 `sherpa-onnx-node`：同一句话按不同 `sid` / `speed` 合成，打印音频指纹与时长。
 用来分清"模型只出一个声"与"插件没把音色传下去"——后者是插件 bug，前者才是模型问题。
 `test-host.mjs` 的对应回归分两层：假引擎证明**接线**（`generationConfig.sid` 等于草稿值），
 真模型段（`VOICE_LOCAL_MODEL_DIR` 指向已装模型时才跑）证明**音频真的不同**。
 
-### 第 2 层：零成本——直接打 RPC 接口（dsh 运行中）
+### 第 2 层：本地直连——RPC 接口（dsh 运行中）
 一键自检（推荐先跑这个，逐条打印证据、退出码 0/1）：
 ```powershell
 # 端口与 token 以启动日志/地址栏给的为准；下面都用 $base，换过端口只改这一行
@@ -77,7 +77,7 @@ node scripts/verify-installed.mjs --url "$base/?token=xxxx"
 curl.exe -s -X POST "$base/voice/api/ping"
 curl.exe -s -X POST "$base/voice/api/getConfig"
 curl.exe -s -X POST "$base/voice/api/meta"
-curl.exe -s -X POST "$base/voice/api/preview"            # 试听（豆包花几分钱）
+curl.exe -s -X POST "$base/voice/api/preview"            # 试听（豆包产生少量实际调用费用）
 curl.exe -s -X POST "$base/voice/api/clientDiagDump"    # 读回浏览器播放链路事件
 ```
 看返回关键字段：`cached`（true=缓存命中没花钱）、`degraded`（true=转写失败走兜底）、`ttsError`、`audioUrl`。
@@ -99,7 +99,7 @@ curl.exe -s -X POST "$base/voice/api/clientDiagDump"    # 读回浏览器播放�
 - **T24 模型安装器**：下载 / 续传 / 校验失败 / 取消 / 磁盘不足 / 删除（注入假 fetch 与假解包，
   零网络、零 348MB）。
 
-提示音另有一组断言（同样零成本）：三种信号只从客户端状态快照对账（`turn/end` 不参与）、
+提示音另有一组断言（同样不产生外部调用）：三种信号只从客户端状态快照对账（`turn/end` 不参与）、
 子代理会话要过滤掉、审批 `approval` 不响、素材上传按魔数认格式并拒绝 `..` 与超限、
 启动清扫不误删刚上传还没保存的文件、提示音用独立 AudioContext 不被停止播报连坐。
 

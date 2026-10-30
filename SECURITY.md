@@ -1,6 +1,6 @@
 # 安全说明（Security）
 
-如果你发现了安全漏洞（比如：未经授权就能触发付费 API 调用、配置/密钥泄露、远程代码执行等），
+如果你发现了安全漏洞（比如：未经授权就能触发第三方 API 调用、配置/密钥泄露、远程代码执行等），
 **不要**发公开 issue——请走 GitHub 的 **Private vulnerability reporting**（仓库 Security 标签页 →
 Report a vulnerability），或直接私信维护者。
 

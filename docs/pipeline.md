@@ -35,7 +35,7 @@
 
 - **手动**：每条消息的"朗读"按钮（`conversation.chat.assistant-actions` 槽），对当条消息转写。
 - **自动**：`voice.autoSpeak=true` 时在 `turn/end`（`reason.kind ∈ completed|max-tokens`）触发；
-  豆包（付费）自动播报还需 `autoSpeakCloudTts=true`（成本门控）；本地引擎（Kokoro）免费，不受门控。
+  豆包（需第三方 API）自动播报还需 `autoSpeakCloudTts=true`（成本门控）；本地引擎（Kokoro）不受门控。
 - **输入**：`assistant/message` 的 `text` 块拼接（`message.content` 中 `type:'text'`）。
 - **取文路径**：Host `extractText` 从 `ctx.sessions.get(sessionId).snapshotEvents()` 按 messageId 定位。
 
@@ -162,7 +162,7 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 ### 4.1 browser（零配置兜底，默认）
 
 - 客户端 `speechSynthesis`：`speechSynthesis.speak(new SpeechSynthesisUtterance(text))`。
-- `voice.tts.browser.{rate,pitch,voice}`；免费、离线；播放端在 Client 半。
+- `voice.tts.browser.{rate,pitch,voice}`；无需配置、离线；播放端在 Client 半。
 
 ### 4.2 volcengine（豆包语音合成模型 2.0）
 
@@ -172,7 +172,7 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 - **网关**（`voice.tts.volcengine.gateway`，默认 `plan`；协议与鉴权头一致，仅 URL 路径不同）：
   - `plan`（智能体套餐，默认）：双向流 `wss://openspeech.bytedance.com/api/v3/plan/tts/bidirection`，
     HTTP 兜底 `POST https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional`（当前 Key 可用）。
-  - `standard`（标准付费）：`wss://openspeech.bytedance.com/api/v3/tts/bidirection` +
+  - `standard`（标准计费）：`wss://openspeech.bytedance.com/api/v3/tts/bidirection` +
     `POST https://openspeech.bytedance.com/api/v3/tts/unidirectional`——**需新版控制台 API Key**
     （[官方 V3 双向流文档](https://www.volcengine.com/docs/6561/1329505) 新版控制台鉴权同为 `X-Api-Key`；
     旧版控制台 `X-Api-App-Id`/`X-Api-Access-Key` 鉴权当前未实现）。
@@ -205,7 +205,7 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 
 ### 4.3 local（本地 Kokoro v1.1，进程内合成，中英跟随原文）
 
-> 定位：免费、离线、数据不出本机的**中英**播报引擎。合成在 Host 进程内完成（`sherpa-onnx-node`
+> 定位：本地运行、离线、数据不出本机的**中英**播报引擎。合成在 Host 进程内完成（`sherpa-onnx-node`
 > 原生模块），没有子进程、没有端口、不需要 Python。模型与音色见 `docs/local-tts.md`。
 
 - **运行时（`lib/local-runtime.js`）**：`sherpa-onnx-node@1.13.8`（锁版本；2.x 去掉 espeak 回退，
@@ -265,7 +265,7 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
   - 无情感指令：`context_texts` 是豆包专属，§3 的 LLM 指令生成对 local 跳过 = 零额外 LLM；
   - 无服务端缓存（§4.5 是豆包语义，本地合成零边际成本，重播直接重合成）；
   - 无 WS 双向流（豆包专属；本地是"进程内分块流式"，见上）；
-  - 不参与成本门控：`autoSpeakCloudTts` 只拦豆包（付费），本地免费，自动播报不拦。
+  - 不参与成本门控：`autoSpeakCloudTts` 只拦豆包（需第三方 API），本地引擎不拦。
 - **转写关闭时的行为**：直读稿直接送本地合成（中英都能读），**不再回退系统朗读**，也没有 `notice`。
 - **语言**：转写稿跟随原文语言（不套英文不变式）；中英混读由模型自己切音素。
 - **不变式**：发给 local 的 text 同样不得含 `[#`（§7.1 的净化在 provider 之前，天然满足）。
@@ -307,12 +307,12 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   状态变更通知所有订阅者（徽标、消息按钮），否则 React 不会重渲染，界面会停在"朗读中…"。
 - 双向流：`speak` 立即返回 `{mode:'stream', runId}`，管线后台跑；Client 经 `streamNext` 取段播放；
   失败/零音频自动降级 HTTP 整段（warn 提示）。
-- 重播（缓存命中）：转写 + 指令全用缓存（零 LLM），段落照常切分但复用缓存指令；音频重合成但 1h 内走服务端缓存免费。
+- 重播（缓存命中）：转写 + 指令全用缓存（零 LLM），段落照常切分但复用缓存指令；音频重合成但 1h 内复用服务端缓存、不重复计费。
 - 重新生成（↻）：转写 + 指令全部重新生成（force 跳过缓存），结果覆盖该 messageId 条目。
-- 成本门控：设置页"播报引擎"选豆包时写入 `autoSpeakCloudTts=true`（= 用户显式选择付费 API），
-  引擎为免费引擎（browser/local）时该开关为 false 且豆包不参与自动播报（全免费，含手动按钮）；
+- 成本门控：设置页"播报引擎"选豆包时写入 `autoSpeakCloudTts=true`（= 用户显式启用第三方 API），
+  引擎为 browser/local 时该开关为 false 且豆包不参与自动播报（含手动按钮）；
   profile patch 里直改的配置若 `autoSpeakCloudTts=false`，豆包自动播报仍被拦截（防手工配置烧钱），
-  手动按钮与 local（免费）不受限。
+  手动按钮与 local 不受限。
 
 ## 6. `voice:` 配置 schema 定稿
 
@@ -364,7 +364,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 ```yaml
 voice:
   autoSpeak: false            # 每轮结束自动播报
-  autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）时同步写入 true；免费引擎（browser/local）为 false
+  autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）时同步写入 true；browser/local 引擎为 false
   language: auto              # auto|zh|en|yue|shanghai|henan|beijing|tianjin|sichuan|shaanxi|dongbei
                               #   固定语种/方言时无论原文语言都按所选转写；方言只对支持方言的 4 个音色出现
   provider: ""                # 转写 LLM provider（空=启动发现；配置错自动回退并自愈写回可用路由）
@@ -396,7 +396,7 @@ voice:
       pitchLevel: 2           # 音调五档（旧字段，仅供兼容；经 pitchOf 映射为 pitch；无 UI）
       interface: bidirection  # bidirection=WS 双向流（默认）| http=仅内部降级兜底（无 UI）
       streaming: true         # 双向流下启用"边转写边合成边播"（无 UI）
-      gateway: plan           # plan=智能体套餐(默认) | standard=标准付费(新版控制台 Key, 同 X-Api-Key 格式) | custom=自定义端点
+      gateway: plan           # plan=智能体套餐(默认) | standard=标准计费(新版控制台 Key, 同 X-Api-Key 格式) | custom=自定义端点
       httpUrl: ""             # 空=按 gateway 默认；gateway=custom 必填（火山协议端点，https://）
       wsUrl: ""               # 空=按 gateway 默认端点（无 UI，高级）
       emotionGranularity: paragraph  # paragraph(每段动态) | message(整条) | off(仅预设指令)（无 UI）
@@ -483,9 +483,9 @@ voice:
 7. **重播零 LLM**——转写 + 情感指令全用缓存（不重新生成）；重新生成（↻）= 全部重新生成。
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
 9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
-   付费调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
+   第三方调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
 10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
-    不受 `autoSpeakCloudTts` 门控（免费引擎）；转写关闭时**直接本地合成**（中英都能读），
+    不受 `autoSpeakCloudTts` 门控（browser/local）；转写关闭时**直接本地合成**（中英都能读），
     不得回退系统朗读、不得再带"需开启转写"的 notice。
 11. **本地合成必须在 Host 进程内**——`sherpa-onnx-node` 直接加载（`OfflineTts.createAsync`），
     **不得**再引入 Python 子进程、服务端口或 `ctx.subprocess`；引擎懒加载、失败只报一次日志。
@@ -529,12 +529,12 @@ voice:
 ## 8. 设计决策（为什么）
 
 - 转写在 Host 用 `ctx.llm`（独立辅助调用、不入主历史）：复用已配 provider/凭据、不暴露 key、prompt 可控。
-- 默认 TTS = 浏览器兜底：零配置、免费、离线。
+- 默认 TTS = 浏览器兜底：零配置、离线。
 - 豆包走正式 bundle Host 半的 Node `fetch` → `ctx.webServer` 临时路由回传：`ctx.web` 仅 GET 抓取
   （不能 POST/鉴权头/二进制）；动态沙箱禁 fetch。
-- 豆包默认关闭（默认引擎 browser，全免费）；设置页切豆包 = 用户显式为付费 API 买单，
+- 豆包默认关闭（默认引擎 browser）；设置页切豆包 = 用户显式启用第三方 API，
   自动播报才可能走豆包；profile patch 里直改的配置仍由 `autoSpeakCloudTts` 门控防账单失控；
-  local 免费引擎不在门控之列。
+  local 引擎不在门控之列。
 - 转写与播报分离；成品为正式 bundle（非创造模式动态插件）：动态插件进程内临时、重启丢失、沙箱禁 fetch。
 - 自研 TTS 适配层（不引第三方库）：无现成 JS 库支持火山 v3；HTTP 单向协议极简（~150 行零依赖）；避免供应链与失维护风险。
 - local 换掉了 Python 子进程服务，改为进程内 `sherpa-onnx-node`：用户不必装 Python、不必管端口与
@@ -557,4 +557,4 @@ voice:
   `normalizeVoiceConfig`（旧配置软着陆）/ `ttsProviderOf`（引擎归一）/ `pitchOf`（音调归一）——能力与归一的单一事实源；
   `VOLC_VOICES`（音色精选清单）定义在 `index.js`。
 - `client.js`：设置页（`settings.section id=voice`）、朗读按钮（`assistant-actions`）、流式播放（Web Audio lookahead）、转写/播报状态机。
-- 测试：`scripts/test-host.mjs`（零成本 mock，覆盖转写/缓存/TTS/防串音/重播零 LLM 等）、`scripts/tts-*.mjs`（真实外呼探针，花几分钱）。
+- 测试：`scripts/test-host.mjs`（本地 mock，不产生外部调用；覆盖转写/缓存/TTS/防串音/重播零 LLM 等）、`scripts/tts-*.mjs`（真实外呼探针，产生少量实际调用费用）。

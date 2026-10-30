@@ -13,7 +13,7 @@
 ## 提 PR
 
 1. 先 fork → 在分支上改 → 提 PR 到 `main`。
-2. 提交前**必须**通过：`node scripts/test-host.mjs`（零成本 mock 集成测试，全绿）。
+2. 提交前**必须**通过：`node scripts/test-host.mjs`（本地 mock 集成测试，全绿）。
 3. 改动说明写清楚：改了什么、为什么、怎么验证的。
 4. 涉及转写/TTS 行为或配置的改动，**同步更新** `docs/pipeline.md`（本项目约定：先更新文档再改代码）。
 5. 外部接口行为假设（火山 TTS）请给证据：跑一次 `scripts/tts-*.mjs` 探针，注明是实测还是推测。

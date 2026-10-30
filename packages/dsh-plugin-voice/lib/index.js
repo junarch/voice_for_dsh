@@ -424,7 +424,7 @@ function chimeConfigDefaults() {
  *  profile patch 里的 apiKey 删掉（docs/pipeline.md §6.0）。 */
 const Config = z.object({
   autoSpeak: z.boolean().default(false).volatile(),
-  autoSpeakCloudTts: z.boolean().default(false).volatile(), // 成本门控（设置页不再单独显示一行）：选豆包时联动写入 true；false=自动播报不碰豆包（付费），手动按钮与 local 不受限
+  autoSpeakCloudTts: z.boolean().default(false).volatile(), // 成本门控（设置页不再单独显示一行）：选豆包时联动写入 true；false=自动播报不碰豆包，手动按钮与 local 不受限
   language: z.string().default('auto').volatile(), // LANGUAGE_OPTIONS 的 id；auto = 跟随原文
   provider: z.string().default('').volatile(), // 转写 LLM provider（空 = 播报时自动发现可用路由；配置路由失败回退发现路由，均不写回配置）
   model: z.string().default('deepseek-v4-flash').volatile(),
@@ -442,7 +442,7 @@ const Config = z.object({
     timeoutMs: z.number().default(60000), // 单次转写超时；超时/失败降级为直读
   }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', promptCloud: '', promptLocal: '', lengthLevel: 'full', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }).volatile(),
   tts: z.object({
-    provider: z.string().default('browser'), // TTS 引擎：browser（免费系统）| volcengine（豆包付费）| local（本地 Kokoro，中英混读，免费）；其余旧值归一为 browser
+    provider: z.string().default('browser'), // TTS 引擎：browser（系统 TTS）| volcengine（豆包，需第三方 API）| local（本地 Kokoro，中英混读，本地运行）；其余旧值归一为 browser
     browser: z.object({
       rate: z.number().default(1),
       pitch: z.number().default(1),
@@ -460,7 +460,7 @@ const Config = z.object({
       interface: z.union([z.const('bidirection'), z.const('http')]).default('bidirection'), // bidirection=WS 双向流（默认；设置页不再暴露手动切换）；http=仅内部降级兜底
       streaming: z.boolean().default(true),   // 双向流下启用"边转写边合成边播"（无 UI，默认开）
       wsUrl: z.string().default(''),          // 空 = 按 gateway 默认端点（无 UI，高级；非空须为 wss://）
-      gateway: z.string().default('plan'),    // plan=智能体套餐（默认）| standard=标准付费（新版控制台 API Key，格式同 plan）| custom=自定义/转接端点
+      gateway: z.string().default('plan'),    // plan=智能体套餐（默认）| standard=标准计费（新版控制台 API Key，格式同 plan）| custom=自定义/转接端点
       httpUrl: z.string().default(''),        // 空 = 按 gateway 默认；gateway=custom 时必填（火山协议端点，须 https://）
       emotionGranularity: z.union([z.const('paragraph'), z.const('message'), z.const('off')]).default('paragraph'), // context_texts 情感指令的动态粒度（无 UI，默认 paragraph）
       bitRate: z.number().default(64000),     // MP3 比特率（0=不设置；默认 64k 防音质损耗；无 UI）
@@ -469,7 +469,7 @@ const Config = z.object({
       expressive: z.boolean().default(false),    // req_params.model=seed-tts-2.0-expressive（表现力增强；无 UI，默认关）
     }).default({ apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false }),
     local: z.object({
-      // 本地 Kokoro v1.1（进程内 sherpa-onnx，中英跟随原文，免费；docs/local-tts.md）
+      // 本地 Kokoro v1.1（进程内 sherpa-onnx，中英跟随原文，本地运行；docs/local-tts.md）
       sid: z.number().default(LOCAL_DEFAULT_SID), // 音色 id（0–102，官方 sid→名字表见 LOCAL_VOICES）；设置页下拉 + 手填
       speed: z.number().default(1),            // 语速 [0.5, 2]
       language: z.union([z.const('auto'), z.const('zh'), z.const('en')]).default('auto'), // 播报语种：auto=跟随原文；zh/en=让转写稿用该语言（本地按文本语言发音）
@@ -635,7 +635,7 @@ function apply(ctx, config) {
     audioStore.set(id, { buf, mime, at: now })
     return id
   }
-  let busySpeak = false // 非流式 speak 管线互斥（防并发触发付费 LLM+TTS）
+  let busySpeak = false // 非流式 speak 管线互斥（防并发触发第三方 LLM/TTS 调用）
   let currentAbort = null // 进行中的转写，voice.stop 中止
   let currentAbortSession = '' // 这次转写属于哪个会话（stop 只 abort 本会话的）
   // stopOnNewTurn 的客户端停播信号：**按会话**计 turn/start 次数。
@@ -735,7 +735,7 @@ function apply(ctx, config) {
       try { cfg = readConfig() } catch { return }
       if (!cfg.autoSpeak) return
       if (kind !== 'completed' && kind !== 'max-tokens') return
-      // 成本门控：未显式允许时自动播报不碰豆包（付费）；local 本地合成免费，不受限
+      // 成本门控：未显式允许时自动播报不碰豆包；local 在本机合成，不受限
       if (ttsProviderOf(cfg) === 'volcengine' && !cfg.autoSpeakCloudTts) {
         console.log('[voice] auto-speak skipped: cloud tts gated (autoSpeakCloudTts=false)')
         return
@@ -944,7 +944,7 @@ function apply(ctx, config) {
     return parts.join('，')
   }
 
-  /** 火山网关端点：plan(智能体套餐默认) / standard(标准付费) / custom(自定义/转接)。
+  /** 火山网关端点：plan(智能体套餐默认) / standard(标准计费) / custom(自定义/转接)。
    * 三者的协议与鉴权头一致（新版控制台 X-Api-Key + X-Api-Resource-Id），仅 URL 路径不同；
    * custom 用 httpUrl/wsUrl 覆盖（供原样转发火山协议的转接服务）。 */
   const VOLC_ENDPOINTS = {
@@ -1315,7 +1315,7 @@ function apply(ctx, config) {
     let cachedHit = null              // 缓存命中（重播）标记：供 try 外缓存写入判断
     let instructionCalls = 0          // 已发出的段落指令 LLM 调用数（成本闸门，见 MAX_PARAGRAPH_INSTRUCTIONS）
     let useServerCache = false        // 服务端缓存（cache_config）：初次写/重播命中才下发；regen 与试听绝不
-    const paraTexts = []              // 初次合成的各段文本（记录到缓存，重播逐段复现 → 服务端缓存键一致 → 命中免费）
+    const paraTexts = []              // 初次合成的各段文本（记录到缓存，重播逐段复现 → 服务端缓存键一致 → 复用服务端缓存）
     let lastParagraphText = '' // 最近一段完整文本（生成下一段指令用）
     let pending = ''           // 未成句的文本（段 N 起用）
     let session = null
@@ -1372,7 +1372,7 @@ function apply(ctx, config) {
         currentInstruction = gi.instruction; currentEmotion = gi.emotion; currentIntensity = gi.intensity || 4
       }
       if (!useCachedInstr && lastParagraphText) {
-        // 初次合成：记录本段完整文本（写缓存供重播逐段复现 → 服务端缓存键=会话整段文本一致 → 命中免费）
+        // 初次合成：记录本段完整文本（写缓存供重播逐段复现 → 服务端缓存键=会话整段文本一致 → 复用服务端缓存）
         paraTexts.push(lastParagraphText)
         if (useServerCache) serverCacheMark(lastParagraphText, ttsFpOf(cfg, v))
       }
@@ -1397,7 +1397,7 @@ function apply(ctx, config) {
         useCachedInstr = true
         const segs = Array.isArray(cachedHit.segments) && cachedHit.segments.length ? cachedHit.segments : null
         if (segs) {
-          // 逐段复现初次会话切分：服务端缓存键=会话整段文本，逐段文本一致 → 命中免费（1h 内不重复计费）。
+          // 逐段复现初次会话切分：服务端缓存键=会话整段文本，逐段文本一致 → 复用服务端缓存（1h 内不重复计费）。
           // 仅当参数指纹未变才启用缓存（防"换方言/音色后命中旧音频"串音）；regen 绝不。
           for (const seg of segs) {
             if (run.stopped) break
@@ -1423,7 +1423,7 @@ function apply(ctx, config) {
         useServerCache = !run.force && serverCacheAllowed(plain, curFp)
         tstream = (async function* () { if (plain) yield plain })()
       } else {
-        // 初次合成：带 cache_config 写服务端缓存（供 1h 内重播命中免费）。
+        // 初次合成：带 cache_config 写服务端缓存（供 1h 内重播复用服务端缓存）。
         // 以原文近似判据：同文本 1h 内已以不同参数缓存 → 跳过（防串音）
         useServerCache = !run.force && serverCacheAllowed(found.text, curFp)
         tstream = streamTranscription(route, cfg, found, promptUsed, ctxRef, run)
@@ -1952,7 +1952,7 @@ function apply(ctx, config) {
     const voiceInstruction = buildVoiceInstruction(cfg, extractedCmd, generated)
 
     // 服务端缓存（cache_config）：豆包语义（§4.5）；local 本地合成零边际成本，直接跳过。
-    // 初次合成写入（供 1h 内重播命中免费）；重播仅参数指纹未变才命中（防串音）；regen 绝不。
+    // 初次合成写入（供 1h 内重播复用服务端缓存）；重播仅参数指纹未变才命中（防串音）；regen 绝不。
     // 旧缓存无 ttsFp → 不命中（无法确认参数未变，宁可不省这钱也不串音）。
     const curFp = ttsFpOf(cfg, cfg.tts.volcengine)
     const useServerCache = ttsProviderOf(cfg) === 'volcengine' && !opts.force && transcript
@@ -2223,7 +2223,7 @@ function apply(ctx, config) {
           : (cfg.tts.volcengine.sampleRate || 24000)
         return { ok: true, mode: 'stream', runId: run.id, sessionId: sid, messageId: mid, sampleRate, engine: provSpeak, warn: run.warn || undefined }
       }
-      // 非流式路径防并发：同一时刻只跑一条转写+合成管线（防多标签/本地脚本并发触发付费调用）
+      // 非流式路径防并发：同一时刻只跑一条转写+合成管线（防多标签/本地脚本并发触发第三方调用）
       if (busySpeak) return { ok: false, error: 'speak busy: 上一条转写还在进行，请稍后再试' }
       busySpeak = true
       try {
@@ -2249,7 +2249,7 @@ function apply(ctx, config) {
     },
   }
 
-  /** 跨站请求伪造（CSRF）防护：/voice/api 会触发付费 LLM/TTS 调用与改配置，
+  /** 跨站请求伪造（CSRF）防护：/voice/api 会触发第三方 LLM/TTS 调用与改配置，
    * 恶意网页可用 text/plain POST 免预检跨站触发（烧 token/钱）。浏览器发起的
    * 合法请求（dsh 前端同源）Origin 的 host 与 Host 头一致；跨站页面 Origin 不同。
    * 无 Origin 头（curl / 同源 GET 等非浏览器调用）放行，保持本地工具可用。 */

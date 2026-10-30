@@ -14,7 +14,7 @@
 
 发版＝推 main、打 tag、写 Release；安装走 GitHub（npm 同名不可用，见 §7）。
 
-## 1. 自动化门槛（零成本，每次必跑）
+## 1. 自动化门槛（不产生外部调用，每次必跑）
 
 - [ ] `node scripts/test-host.mjs` 全绿。
 - [ ] `node scripts/test-client.mjs` 通过（i18n zh/en 键数一致）。
@@ -82,7 +82,7 @@
 
 ### 6.1 隐私与安全体检（发版前必跑）
 
-一键：`node scripts/audit-release.mjs`（零成本、不联网、不改文件；CI 也跑这一条）。它覆盖机器能判的部分：
+一键：`node scripts/audit-release.mjs`（不联网、不产生外部调用、不改文件；CI 也跑这一条）。它覆盖机器能判的部分：
 
 | 项 | 判据 | 失败意味着 |
 |---|---|---|

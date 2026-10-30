@@ -5,14 +5,14 @@
 
 ## 1. 现状（三个 TTS provider）
 
-| provider | 引擎 | 免费/离线 | 鉴权 | 音频回传 |
+| provider | 引擎 | 离线 | 鉴权 | 音频回传 |
 |---|---|---|---|---|
-| `browser`（默认） | 客户端 `speechSynthesis` | 免费、离线 | 无 | 浏览器直接读文本 |
-| `volcengine` | 豆包语音合成 2.0（双向流 WS 默认 + HTTP 单向兜底） | 付费、按字符 | `X-Api-Key` | Host 合成 → `/voice/audio/<id>` |
-| `local` | 本地 Kokoro v1.1（中英，进程内 sherpa-onnx，无服务/无端口） | 免费、离线 | 无 | Host 进程内合成 → `/voice/audio/<id>` |
+| `browser`（默认） | 客户端 `speechSynthesis` | 开箱即用、离线 | 无 | 浏览器直接读文本 |
+| `volcengine` | 豆包语音合成 2.0（双向流 WS 默认 + HTTP 单向兜底） | 按字符计费 | `X-Api-Key` | Host 合成 → `/voice/audio/<id>` |
+| `local` | 本地 Kokoro v1.1（中英，进程内 sherpa-onnx，无服务/无端口） | 本地运行、离线 | 无 | Host 进程内合成 → `/voice/audio/<id>` |
 
 **归一铁律**：provider 语义统一由 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）归一——
-`volcengine`=豆包（付费，受成本门控）、`local`=本地免费 TTS、其余任何值（含旧值
+`volcengine`=豆包（需第三方 API，受成本门控）、`local`=本地 TTS、其余任何值（含旧值
 `openai-compatible`）一律归 `browser`。新供应商**必须**先在 `ttsProviderOf` 登记，
 否则永远不会被调用（这是防"未知 provider 悄悄烧钱"的设计）。
 
@@ -24,7 +24,7 @@
 | gateway | 含义 | HTTP 端点 | WS 端点 |
 |---|---|---|---|
 | `plan`（默认） | 智能体套餐（当前 key） | `/api/v3/plan/tts/unidirectional` | `/api/v3/plan/tts/bidirection` |
-| `standard` | 标准付费（新版控制台 key，格式同 plan） | `/api/v3/tts/unidirectional` | `/api/v3/tts/bidirection` |
+| `standard` | 标准计费（新版控制台 key，格式同 plan） | `/api/v3/tts/unidirectional` | `/api/v3/tts/bidirection` |
 | `custom` | 自定义端点（填 `httpUrl`/`wsUrl`） | 用户填 | 用户填 |
 
 - **旧版控制台**（`X-Api-App-Id` + `X-Api-Access-Key`）鉴权：**未实现**（官方推荐新版控制台，见 `docs/pipeline.md` §4.2）。
