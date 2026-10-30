@@ -30,6 +30,7 @@ import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
 import { sanitizeForSpeech } from './speech-clean.js'
 import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
+import { acquireLocalRuntime, releaseLocalRuntime, disposeSharedRuntime } from './runtime-pool.js'
 import { createModelInstaller } from './model-installer.js'
 import {
   LANGUAGE_OPTIONS,
@@ -563,8 +564,29 @@ function apply(ctx, config) {
 
   // 本地 TTS 运行时（docs/pipeline.md §4.3、docs/local-tts.md）：进程内 sherpa-onnx +
   // Kokoro v1.1，懒加载（第一次朗读/自检才把模型读进内存），没有子进程、没有端口、
-  // 不需要 Python。删除模型前先 dispose()：让运行时松开内存里那份模型，删完不会又拿旧实例合成。
-  const localRuntime = createLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => readConfig() })
+  // 不需要 Python。整份模型约 460MB：走进程级共享池，插件重挂不重新加载（运行时的所有权见 runtime-pool.js）。
+  const localRuntime = acquireLocalRuntime({
+    pluginUrl: import.meta.url,
+    getConfig: () => readConfig(),
+    create: (options) => createLocalRuntime(options),
+  })
+
+  // 引用必须紧跟着登记归还：下面任何一步抛错（建安装器、注册 effect）都会让 apply 失败退出，
+  // 若归还晚于这些步骤，refs 会永久 ≥1、空闲回收永不触发——已加载的 460MB 就再也放不掉。
+  let released = false
+  const releaseOnce = () => {
+    if (released) return
+    released = true
+    try { releaseLocalRuntime() } catch (error) { console.error('[voice] local tts release failed:', error) }
+  }
+  try {
+    // 运行时是进程级共享的，归零后等空闲时间才真正释放（见 runtime-pool.js）：
+    // 重挂时已加载的模型不用重新加载。
+    ctx.effect(() => async () => { releaseOnce() }, 'voice: local tts runtime')
+  } catch (error) {
+    releaseOnce()
+    throw error
+  }
 
   // 模型安装器（设置页「下载模型」）：下载 → 校验 → 解包 → 装到用户目录。
   // 单任务状态在安装器里；这里只把"装到哪"和"当前生效的是哪份模型"接进去
@@ -575,17 +597,15 @@ function apply(ctx, config) {
       const info = localRuntime.inspect()
       return { source: info.source, dir: info.dir }
     },
-    // 删除前先卸运行时：Windows 下原生模块持有 model.onnx 句柄，带着句柄删会半删
-    onBeforeRemove: () => localRuntime.dispose(),
+    // 删除模型前把共享运行时整体摘掉：模型文件没了，池子里那份不能再被下一代实例取用
+    onBeforeRemove: () => disposeSharedRuntime(),
   })
   try { modelInstaller.sweep() } catch (error) { console.error('[voice] model tmp sweep failed:', error) }
 
-  // 插件停止时交还本地运行时：模型是整份读进内存的（实测加载一份约 +460MB RSS），原生内存不触发
-  // V8 回收，只有丢引用之后的那次 GC 才归还。卸载时把引用交回去，顺带取消没跑完的下载。
+  // 插件停止时取消没跑完的下载（别在卸载后继续写盘）；它比上面的归还先注册，卸载时也先执行。
   ctx.effect(() => async () => {
     try { await modelInstaller.cancel() } catch (error) { console.error('[voice] model installer cancel on dispose failed:', error) }
-    try { localRuntime.dispose() } catch (error) { console.error('[voice] local tts dispose failed:', error) }
-  }, 'voice: local tts runtime')
+  }, 'voice: model installer')
 
   // 提示音素材清扫：配置里不再引用的、且超过 1 天的文件删掉（设置页换音源后就地回收）。
   try {

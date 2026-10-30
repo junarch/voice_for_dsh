@@ -81,6 +81,8 @@ const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/spe
 const { normalizeVoiceConfig, effectiveVoiceOf, languagesForVoice, voiceSupportsLanguage, isDialectVoice, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
 // 本地运行时（local-runtime.js）：模型目录解析 / Float32→Int16 / WAV 封装 / 测试用引擎注入点
 const { setEngineLoaderForTest, float32ToInt16Pcm, pcmToWav, resolveModelDir, inspectModelDir, createLocalRuntime } = await import('../packages/dsh-plugin-voice/lib/local-runtime.js')
+// 运行时共享池（runtime-pool.js）：跨插件重挂复用同一份已加载模型 + 引用计数 + 空闲回收
+const { acquireLocalRuntime, releaseLocalRuntime, disposeSharedRuntime, sharedRuntimeState, resetSharedRuntimeForTest } = await import('../packages/dsh-plugin-voice/lib/runtime-pool.js')
 // 模型安装器（model-installer.js）：下载/续传/校验/解包/删除；测试注入 fetch、解包与磁盘读数
 const { createModelInstaller, setInstallerHooksForTest } = await import('../packages/dsh-plugin-voice/lib/model-installer.js')
 // 本仓库根（用于断言"已部署/未部署"两种分支）
@@ -1648,6 +1650,79 @@ section('T21b 本地运行时卸载（插件停止时交还模型与文件句柄
     { loaded: rt2.loadedModelDir(), error: lateError && String(lateError.message) })
 }
 
+// —— 跨重挂复用：进程里只留一份已加载模型，重挂不重新加载；归零后按空闲时间释放 ——
+section('T21c 运行时跨重挂复用（进程一份 / 引用计数 / 空闲回收）')
+{
+  let loads = 0
+  const fakeEngine = () => ({
+    numSpeakers: 103,
+    sampleRate: 24000,
+    generate: () => ({ samples: new Float32Array(8), sampleRate: 24000 }),
+    generateAsync: async () => ({ samples: new Float32Array(8), sampleRate: 24000 }),
+  })
+  const cfgRef = { tts: { local: { modelDir: MODEL_FIXTURE, sid: 48, speed: 1, numThreads: 4 } } }
+  // create 就是插件里那一行：createLocalRuntime(options)；测试额外注入假引擎并数加载次数
+  const acquire = () => acquireLocalRuntime({
+    pluginUrl: import.meta.url,
+    getConfig: () => cfgRef,
+    create: (options) => createLocalRuntime(Object.assign({}, options, { loadEngine: async () => { loads++; return fakeEngine() } })),
+  })
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  resetSharedRuntimeForTest()
+  const first = acquire()
+  await first.ensureLoaded()
+  check('复用：第一代实例加载一次模型', loads === 1 && first.loadedModelDir() === MODEL_FIXTURE, { loads })
+
+  // 模拟一次重挂：旧实例 stop → 新实例 apply，两代之间没有空闲窗口
+  releaseLocalRuntime({ idleMs: 60_000 })
+  check('复用：归零后进入空闲等待（idle=true）', sharedRuntimeState().idle === true, sharedRuntimeState())
+  const second = acquire()
+  await second.ensureLoaded()
+  check('复用：重挂后再朗读不重新加载（还是同一份运行时）', loads === 1 && second === first, { loads })
+  check('复用：重新取用会取消空闲定时器（idle=false）', sharedRuntimeState().idle === false, sharedRuntimeState())
+
+  const third = acquire()
+  check('复用：两个实例同时在场时共享同一份（refs=2）',
+    third === first && sharedRuntimeState().refs === 2, sharedRuntimeState())
+  releaseLocalRuntime({ idleMs: 60_000 })
+  check('复用：退掉一个引用后模型仍在（refs=1）',
+    sharedRuntimeState().refs === 1 && second.loadedModelDir() === MODEL_FIXTURE, sharedRuntimeState())
+
+  // 归零后先等空闲窗口；到期才释放
+  releaseLocalRuntime({ idleMs: 20 })
+  check('复用：归零后进入空闲等待（此时还没释放）',
+    sharedRuntimeState().refs === 0 && second.loadedModelDir() === MODEL_FIXTURE, sharedRuntimeState())
+  await sleep(80)
+  check('复用：空闲到期后运行时被释放、池子摘掉',
+    sharedRuntimeState() === null && second.loadedModelDir() === '', { state: sharedRuntimeState(), loaded: second.loadedModelDir() })
+
+  // 建运行时报错时不能留下空壳池子（否则之后每次 acquire 都拿到 null）
+  resetSharedRuntimeForTest()
+  let createError = null
+  try {
+    acquireLocalRuntime({ pluginUrl: import.meta.url, getConfig: () => cfgRef, create: () => { throw new Error('boom') } })
+  } catch (error) { createError = error }
+  check('复用：create 抛错不留下空壳池子', !!createError && sharedRuntimeState() === null, { createError: createError && String(createError.message), state: sharedRuntimeState() })
+  const revived = acquire()
+  await revived.ensureLoaded()
+  check('复用：抛错之后还能正常建（不卡死）', revived.loadedModelDir() === MODEL_FIXTURE, revived.loadedModelDir())
+  resetSharedRuntimeForTest()
+
+  // 删模型：必须连池子一起摘掉，下一次取到的是全新运行时
+  resetSharedRuntimeForTest()
+  loads = 0
+  const beforeRemove = acquire()
+  await beforeRemove.ensureLoaded()
+  disposeSharedRuntime()
+  check('删模型：共享运行时被摘掉（池子空、不再认已加载）',
+    sharedRuntimeState() === null && beforeRemove.loadedModelDir() === '', sharedRuntimeState())
+  const afterRemove = acquire()
+  await afterRemove.ensureLoaded()
+  check('删模型：下一代拿到的是全新运行时（重新加载一次）', loads === 2 && afterRemove !== beforeRemove, { loads })
+  resetSharedRuntimeForTest()
+}
+
 // ================= T22 本地分句流式（分块入队 / 中途失败 / 首段失败降级 / 整段失败） =================
 section('T22 本地分句流式（分块入队 / 中途失败 / 首段失败降级 / 段超时）')
 
@@ -2374,21 +2449,31 @@ fire({ type: 'turn/start', data: { turn: 90 } })
   }
 
   const first = mount()
+  const poolStart = (sharedRuntimeState() && sharedRuntimeState().refs) || 0
   apply(first.ctxStub, liveConfig)
   check('重挂：第一次挂载登记三条路由', table.size === 3, [...table.keys()])
   const routeLabels = first.labels.filter((l) => typeof l === 'string' && l.startsWith('voice: /voice/'))
   check('重挂：三条路由都挂在 effect 上（各自带可读 label）', routeLabels.length === 3, first.labels)
-  check('重挂：本地运行时也挂在 effect 上（卸载即交还模型与文件句柄）',
+  check('重挂：本地运行时也挂在 effect 上（卸载即交还引用）',
     first.labels.includes('voice: local tts runtime'), first.labels)
+  const mountedPool = sharedRuntimeState()
+  check('重挂：插件实例在共享池里占一个引用（且不在空闲等待）',
+    mountedPool.refs === poolStart + 1 && mountedPool.idle === false, mountedPool)
+  const sharedAtMount = mountedPool.runtime
 
   first.stop()
   check('重挂：插件停止后路由全部撤销（不是留在表里）', table.size === 0, [...table.keys()])
+  const stoppedPool = sharedRuntimeState()
+  check('重挂：停止后引用归还（归零则进入空闲等待）',
+    ((stoppedPool && stoppedPool.refs) || 0) === poolStart && (poolStart > 0 || stoppedPool.idle === true), stoppedPool)
 
   const second = mount()
   let remountError = null
   try { apply(second.ctxStub, liveConfig) } catch (error) { remountError = error }
   check('重挂：第二次挂载不撞 duplicate route、不抛错',
     remountError === null && table.size === 3, remountError ? String(remountError.message) : [...table.keys()])
+  check('重挂：第二代拿到同一份运行时（重挂不重新加载模型）',
+    sharedRuntimeState().runtime === sharedAtMount, sharedRuntimeState())
 
   second.stop()
   check('重挂：再停一次路由又清空（可反复重挂）', table.size === 0, [...table.keys()])
