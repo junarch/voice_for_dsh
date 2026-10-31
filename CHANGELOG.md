@@ -6,6 +6,23 @@
 
 ---
 
+## [0.5.1] - 2026-10-31
+
+### Added
+
+- **发布到 npm**：包名 `voice-for-dsh`，安装命令 `dsh plugin --profile desktop add voice-for-dsh`。
+  包体 130KB（压缩后），只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE` 与 `package.json`；
+  本地引擎的原生模块按平台随安装下载（win-x64 约 22MB），模型仍从 GitHub Releases 下载，两者都不进包。
+
+### Changed
+
+- 安装说明改为 npm 优先（根 `README.md`、包内 `README.md`、`docs/release.md`）；源码 `link:` 安装降级为开发用法。
+- 包内补 `LICENSE`：MIT 全文随包分发，不再只挂在仓库根。
+
+### Note
+
+无行为变更：`lib/**` 一个字没改，配置、模型、缓存都不受影响；已安装的人不需要动。
+
 ## [0.5.0] - 2026-10-31
 
 ### Changed

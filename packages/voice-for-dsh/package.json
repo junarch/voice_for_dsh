@@ -1,6 +1,6 @@
 {
   "name": "voice-for-dsh",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DSH web plugin: read aloud each DeepSeek turn output after spoken-style transcription (code/table/markdown aware), with per-message manual read buttons and an auto-read toggle.",
   "keywords": [
     "dsh",
