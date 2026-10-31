@@ -1,0 +1,48 @@
+name: publish
+
+# 由 npm 的可信发布（OIDC）发版：不需要任何常驻令牌。
+#
+# 前置（在 npmjs.com 上做一次）：
+#   1. 包页面 → Settings → Trusted Publisher → 选 GitHub Actions，
+#      填 junarch / voice_for_dsh / publish.yml，允许 npm publish。
+#   2. 同一页的 Publishing access 选「Require two-factor authentication and disallow tokens」。
+# 未配置之前，本工作流在打 tag 时会在 publish 一步失败；已发布的版本会被下面的检查直接跳过。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # 可信发布用的短期凭证
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: 该版本是否已在 npm 上
+        id: check
+        working-directory: packages/voice-for-dsh
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if npm view "voice-for-dsh@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 发布
+        if: steps.check.outputs.published == 'false'
+        working-directory: packages/voice-for-dsh
+        run: npm publish
