@@ -13,21 +13,25 @@
 
 ## 安装
 
-需要 DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本（已在 `0.2.1-rc.5` 验证）；从源码装包还要 Node.js 22+。
+需要 DSH 桌面版 `0.2.1-rc.3` 或更高的兼容版本（已在 `0.2.1-rc.5` 验证）。
 
 ```powershell
-# 在仓库根目录执行（桌面端自带 CLI，版本随桌面端）
+# 桌面端自带 CLI，版本随桌面端
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 
-# 1) 先装插件自身依赖（link: 只是链接，不会代装依赖）
-#    依赖一律装在插件包内（npm 口径，package-lock.json 已入库，勿删）
-cd packages/voice-for-dsh; npm install; cd ../..
+& $dsh plugin --profile desktop add voice-for-dsh
+```
 
-# 2) 装进 desktop profile
+重启桌面端，设置页里就有"语音播报"。插件依赖（含本地引擎的原生模块）由安装过程自己装，不用先 `npm install`。
+
+从源码安装（开发用，改代码即生效）：
+
+```powershell
+cd packages/voice-for-dsh; npm install; cd ../..     # link: 不会代装依赖
 & $dsh plugin --profile desktop add link:packages/voice-for-dsh
 ```
 
-重启桌面端，设置页里就有"语音播报"。`link:` 的相对路径由 CLI 自己解析，锚定到哪个目录以 CLI 的实际行为为准；
+`link:` 的相对路径由 CLI 自己解析，锚定到哪个目录以 CLI 的实际行为为准；
 解析失败（`cannot resolve profile bundle`）时改成绝对路径 `link:<仓库绝对路径>\packages\voice-for-dsh`。
 
 ## 配置

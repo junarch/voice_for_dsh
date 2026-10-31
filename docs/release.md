@@ -8,11 +8,11 @@
 
 | 位置 | 当前 | 说明 |
 |---|---|---|
-| 本仓库 | `0.5.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
-| GitHub main | `0.5.0` | 已发 Release `v0.5.0`（包名从 `dsh-plugin-voice` 改为 `voice-for-dsh`；旧装法需重装一次，见 CHANGELOG 升级指引） |
-| npm | 未发布 | 本仓库包名 `voice-for-dsh` 目前尚未发布到 npm（npm 上的 `dsh-plugin-voice` 是另一个项目，与本仓库无关）；安装走 GitHub，见 §7 |
+| 本仓库 | `0.5.1` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
+| GitHub main | `0.5.1` | 已发 Release `v0.5.1`（安装方式改为 npm；行为与 0.5.0 相同） |
+| npm | `0.5.1` | 包名 `voice-for-dsh`，已发布；用户用 `dsh plugin --profile desktop add voice-for-dsh` 安装（npm 上的 `dsh-plugin-voice` 是另一个项目，与本仓库无关） |
 
-发版＝推 main、打 tag、写 Release；安装走 GitHub（npm 同名不可用，见 §7）。
+发版＝推 main、打 tag、写 Release、发 npm；安装走 npm 包名，源码安装只作开发用法。
 
 ## 1. 自动化门槛（不产生外部调用，每次必跑）
 
@@ -107,13 +107,17 @@
 
 ## 7. 分发方式
 
-**GitHub Release（当前唯一渠道）**：用户按 README 用 `dsh plugin --profile desktop add link:<仓库路径>/packages/voice-for-dsh` 安装。
+**npm（主渠道）**：包名 `voice-for-dsh`，用户执行 `dsh plugin --profile desktop add voice-for-dsh`。
+包体约 130KB（压缩后），只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json`；
+本地引擎的原生模块按平台随安装下载（win-x64 约 22MB），模型仍从 GitHub Releases 下载，都不进 npm 包。
 
-**npm**：本仓库包名是 `voice-for-dsh`，目前尚未发布（npm 账号注册受 Cloudflare 拦，暂缓）。npm 上的 `dsh-plugin-voice`
-属于另一个项目，与本仓库无关——本仓库从 0.5.0 起不再使用那个名字。若要发 npm，包名与 `cordis.patch.yml` 的模块名一致，
-装的时候用户命令换成 `dsh plugin --profile desktop add voice-for-dsh`。
+**GitHub 源码（开发用法）**：`dsh plugin --profile desktop add link:<仓库路径>/packages/voice-for-dsh`，
+改代码即生效，依赖要自己 `npm install`。
 
-无论走哪条，发布前都要确认：`packages/voice-for-dsh/package.json` 的 `files` 只含 `lib/`、`cordis.patch.yml`、`README.md`（模型与测试不入包）。
+npm 上的 `dsh-plugin-voice` 属于另一个项目，与本仓库无关——本仓库从 0.5.0 起不再使用那个名字；
+`cordis.patch.yml` 的模块名仍是 `voice-for-dsh`，与包名一致。
+
+无论走哪条，发布前都要确认：`packages/voice-for-dsh/package.json` 的 `files` 只含 `lib/`、`cordis.patch.yml`、`README.md`（模型与测试不入包；`LICENSE` 由 npm 自动收录）。
 
 ## 8. 发版流程（SemVer）
 
@@ -122,9 +126,11 @@
 3. 更新 `CHANGELOG.md`：把 `[Unreleased]` 收成 `[0.4.0] - 日期`（同一版本只留一个标题）。
 4. `git add` 相关文件并 commit。
 5. `git push`，等 CI 在 HEAD 上跑绿（README 徽章转绿）。
-6. `git tag v0.4.0 && git push origin v0.4.0`。
-7. GitHub Release 写说明（含"Python 版 → 0.4.0"升级指引）。
-8. 向目录提收录（§9.1），商店随后自动能搜到。
+6. `git tag v0.5.1 && git push origin v0.5.1`（tag 指向发版提交）。
+7. 在 `packages/voice-for-dsh` 目录执行 `npm pack --dry-run` 核对清单，再 `npm publish`；
+   发布的是 tag 指向的同一棵树，发出去后内容不能再改。
+8. GitHub Release 写说明（顺序：变什么 → 要不要动手 → 步骤 → 读数）。
+9. 向目录提收录（§9.1），商店随后自动能搜到。
 
 **版本号规则（配置演进纪律）**：
 

@@ -66,7 +66,7 @@
 ## 安装
 
 > 插件是 dsh 的 **bundle**（`packages/voice-for-dsh`），通过 `dsh plugin --profile desktop add` 装进
-> `desktop` profile（DSH 桌面版）。
+> `desktop` profile（DSH 桌面版）。日常安装走 npm 包名，开发时走源码 `link:`。
 
 ### 前置要求
 
@@ -76,7 +76,19 @@
 - （可选）火山引擎语音合成 API Key（新版控制台「API 管理」页获取，见
   [快速入门](https://www.volcengine.com/docs/6561/2119699?lang=zh)），用于豆包；不配就用系统 TTS（浏览器语音）兜底
 
-### 从 clone 安装
+### 用 npm 安装（推荐）
+
+```powershell
+# 桌面端自带 CLI（版本随桌面端，`dsh --version` 可查）
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+
+& $dsh plugin --profile desktop add voice-for-dsh
+```
+
+重启桌面端，在设置页找到"语音播报"即可配置。插件自己的依赖（含本地引擎的原生模块）由安装过程装好，
+不需要先 clone 仓库、也不需要另装 Node.js。
+
+### 从源码安装（开发用）
 
 ```powershell
 git clone https://github.com/junarch/voice_for_dsh.git
