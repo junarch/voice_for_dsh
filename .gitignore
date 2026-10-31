@@ -1,5 +1,5 @@
 node_modules/
-# 注意：packages/dsh-plugin-voice/lib/ 是手工编写的源码（v1 无构建步骤），不要忽略
+# 注意：packages/voice-for-dsh/lib/ 是手工编写的源码（v1 无构建步骤），不要忽略
 dist/
 *.tsbuildinfo
 .DS_Store

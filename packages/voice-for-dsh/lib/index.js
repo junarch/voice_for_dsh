@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — Host half (node, formal bundle)
+//#region voice-for-dsh — Host half (node, formal bundle)
 /**
  * 语音朗读插件 Host 半（正式 bundle，普通 Node ESM 模块，非沙箱）。
  *
@@ -1021,7 +1021,7 @@ function apply(ctx, config) {
         'X-Api-Request-Id': randomUUID(),
         'X-Control-Require-Usage-Tokens-Return': '*',
       },
-      body: JSON.stringify({ user: { uid: 'dsh-plugin-voice' }, req_params: reqParams }),
+      body: JSON.stringify({ user: { uid: 'voice-for-dsh' }, req_params: reqParams }),
     })
     if (!res.ok || !res.body) throw speakError('http', 'volcengine http ' + res.status + ' ' + (await res.text().catch(() => '')).slice(0, 200))
     const reader = res.body.getReader()

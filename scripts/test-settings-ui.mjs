@@ -3,7 +3,7 @@
 // 验证的是真 client.js，不是复制品；引擎切换走组件自己的 onChange，不另造分支。
 import { readFileSync } from 'node:fs'
 
-const VERSION = JSON.parse(readFileSync(new URL('../packages/dsh-plugin-voice/package.json', import.meta.url), 'utf8')).version
+const VERSION = JSON.parse(readFileSync(new URL('../packages/voice-for-dsh/package.json', import.meta.url), 'utf8')).version
 
 const checks = []
 function check(name, cond, detail) {
@@ -197,7 +197,7 @@ globalThis.fetch = async (url, init) => {
 }
 
 // ---------- 加载真 client.js，取设置页组件 ----------
-await import(new URL('../packages/dsh-plugin-voice/lib/client.js', import.meta.url))
+await import(new URL('../packages/voice-for-dsh/lib/client.js', import.meta.url))
 const client = globalThis.__clientEntry.factory((id) => {
   if (id === 'react') return reactStub
   throw new Error('unexpected dependency ' + id)

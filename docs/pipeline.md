@@ -1,7 +1,7 @@
 # 语音转写与 TTS 播报管线（voice pipeline）
 
 > 本文描述**当前实现**的语音播报管线：一轮 DeepSeek 输出结束后，先口语化转写，再交给 TTS 播报。
-> 源码：`packages/dsh-plugin-voice/lib/index.js`（Host 半，主实现）、
+> 源码：`packages/voice-for-dsh/lib/index.js`（Host 半，主实现）、
 > `lib/volcengine-ws.js`（豆包双向流 WS 客户端）、`lib/speech-clean.js`（净化）、
 > `lib/voice-compat.js`（音色↔语种归一）、`lib/local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro）、
 > `lib/client.js`（Client 半）。

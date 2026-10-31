@@ -60,8 +60,8 @@
 
 1. **不要修改 DSH 安装/缓存/ shipped preset**（`agent-presets` 目录、app.asar 内代码、`$DSH_HOME` 下 shipped 文件）。
    用户可写的只有：本仓库、`$DSH_HOME\profiles\desktop\cordis.patch.yml`（用户的 patch 层，含插件配置）。
-2. **改 Host 半**（`packages/dsh-plugin-voice/lib/index.js`）→ 重启桌面端 dsh（Host 半会随 Loader 热加载，
-   但"装/升级依赖"这类组合变更仍以重启为准）。**改 Client 半**（`packages/dsh-plugin-voice/lib/client.js`）
+2. **改 Host 半**（`packages/voice-for-dsh/lib/index.js`）→ 重启桌面端 dsh（Host 半会随 Loader 热加载，
+   但"装/升级依赖"这类组合变更仍以重启为准）。**改 Client 半**（`packages/voice-for-dsh/lib/client.js`）
    → **必须重启桌面端**：Client 半只有整个应用重启才进 boot 图，光刷新页面不够（`docs/development.md` §2）。
    v1 为手写纯 JS、**无构建步骤**（`build` 无实际产物），dev:web watcher / HMR 仅后续 tsdown 化后才可用。
 3. **验证循环**：装包 → 重启 dsh → 界面操作 → 看 console/日志；开发试验可用 dsh 内置
@@ -71,7 +71,7 @@
 6. 新增 API 调用前，先确认签名：上游实现用 `scripts/dsh-inspect-extract.mjs` 从 app.asar 只读导出后查
    （本项目遵循 "inspect first" 原则）。
 7. **依赖管理**（原则：git 仓库只存"清单和方法"，不存"货物"）：
-   - npm 依赖只声明在 `packages/dsh-plugin-voice/package.json`，`node_modules/` 永不入库；
+   - npm 依赖只声明在 `packages/voice-for-dsh/package.json`，`node_modules/` 永不入库；
      引入前核对许可证与必要性。
    - 模型/二进制文件不入库：`.gitignore` 排除目录，模型由插件自己下载（`lib/model-manifest.js` 锁版本与 SHA-256，
      `lib/model-installer.js` 负责下载/校验/解包），文档记录版本与体积。
@@ -92,7 +92,7 @@ voice_for_dsh/
 │                              #        migrate-voice-config.mjs(settings.yaml → profile patch 迁移) /
 │                              #        verify-installed.mjs(重启后自检：Client 半进没进 boot 图)
 └── packages/
-    └── dsh-plugin-voice/    # 插件包（host + client 双半 + cordis.patch.yml）
+    └── voice-for-dsh/    # 插件包（host + client 双半 + cordis.patch.yml）
         ├── lib/             # ★ 手写纯 JS 源码（提交，即真实实现）：
         │                    #   index.js=Host 半 / client.js=Client 半 /
         │                    #   local-runtime.js(本地合成运行时：sherpa-onnx + Kokoro) /

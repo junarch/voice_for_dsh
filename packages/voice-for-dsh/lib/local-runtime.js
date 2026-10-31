@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — 本地 TTS 运行时（进程内 sherpa-onnx + Kokoro v1.1）
+//#region voice-for-dsh — 本地 TTS 运行时（进程内 sherpa-onnx + Kokoro v1.1）
 /**
  * 本地合成的运行时层：模型在哪、加载、合成、出错怎么分类。
  * 上层（lib/index.js）只管"读配置 / 切段 / 入队"，不碰原生库细节。

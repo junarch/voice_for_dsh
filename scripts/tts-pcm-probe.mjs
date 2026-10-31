@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { encodeFrame, decodeFrame, MSG, EV } from '../packages/dsh-plugin-voice/lib/volcengine-ws.js'
+import { encodeFrame, decodeFrame, MSG, EV } from '../packages/voice-for-dsh/lib/volcengine-ws.js'
 
 const key = (() => {
   try {

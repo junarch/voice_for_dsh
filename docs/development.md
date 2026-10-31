@@ -1,6 +1,6 @@
 # 开发手册（development）
 
-> 本插件 v1 为**手写纯 JS、无构建步骤**：`packages/dsh-plugin-voice/lib/` 下
+> 本插件 v1 为**手写纯 JS、无构建步骤**：`packages/voice-for-dsh/lib/` 下
 > `index.js`（Host 半）、`client.js`（Client 半）、`volcengine-ws.js`（双向流 WS 客户端）、
 > `speech-clean.js`（净化 `sanitizeForSpeech`）、
 > `local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro，懒加载/分块合成/错误分类）、
@@ -38,12 +38,12 @@ node scripts/tts-*.mjs             # 其余方言/缓存/音色/流等探针
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 
 # 在仓库根目录执行（相对路径怎么解析取决于 CLI，见下面那条）
-& $dsh plugin --profile desktop add packages/dsh-plugin-voice
+& $dsh plugin --profile desktop add packages/voice-for-dsh
 # 链接式（开发时改代码即生效；注意：link 不会代装插件自身依赖，见 §4）
-& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
+& $dsh plugin --profile desktop add link:packages/voice-for-dsh
 
 # 卸载
-& $dsh plugin --profile desktop remove dsh-plugin-voice
+& $dsh plugin --profile desktop remove voice-for-dsh
 ```
 
 - pnpm 构建脚本被阻止时，在 `profiles\desktop\pnpm-workspace.yaml` 的 `allowBuilds` 加包名。
@@ -52,7 +52,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
   `profiles\node_modules` 里就是 3.18.4，插件自身 `dependencies` 也要跟上，否则 `npm run` 侧的自检会用到旧版。
 - **`link:` 的相对路径由 CLI 自己解析**，锚定到哪个目录以 CLI 的实际行为为准（本仓库不对方向作承诺）：
   写成相对路径若被解析到别处（例如 `profiles\desktop\packages\...`，不存在），装的时候会报
-  `cannot resolve profile bundle "dsh-plugin-voice"`。报这个错就换成绝对路径。
+  `cannot resolve profile bundle "voice-for-dsh"`。报这个错就换成绝对路径。
 - **装完（或升级依赖后）要重启桌面端**：**两半都只有重启才换**——
   Client 半是明确的（`/plugins/<id>/client.js?rev=…` 在运行中的应用里一直 404，rev 按上游
   `artifactRevision` 算法复算过、与冷启动后的 rev 一致）；Host 半**也不要指望热加载**：
@@ -67,12 +67,12 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
 & $dsh --profile voiceprobe --from-default-profile web --dump-config   # 建 profile + 看组合树
-& $dsh plugin --profile voiceprobe add "link:<仓库绝对路径>/packages/dsh-plugin-voice"
+& $dsh plugin --profile voiceprobe add "link:<仓库绝对路径>/packages/voice-for-dsh"
 & $dsh --profile voiceprobe --port 0 --no-open                          # 随机端口起一份，日志给带 token 的 URL
 ```
 
-带 token 打开首页就能在注入的 boot 图里看到 `dsh-plugin-voice/client.js&rev=…`，
-并可取回 `/plugins/??dsh-plugin-voice/client.js&rev=…`（combo 路由）自验 Client 半确实被服务；
+带 token 打开首页就能在注入的 boot 图里看到 `voice-for-dsh/client.js&rev=…`，
+并可取回 `/plugins/??voice-for-dsh/client.js&rev=…`（combo 路由）自验 Client 半确实被服务；
 `/voice/api/*` 也能直接打。验证完记得删掉 `~/.dsh/profiles/voiceprobe`。
 
 **重启桌面端后的一键自检**（不产生外部调用，逐条打印证据）：

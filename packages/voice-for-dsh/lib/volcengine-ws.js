@@ -183,7 +183,7 @@ export function createBidirectionClient(opts) {
      */
     async startSession(reqParams, sessionId) {
       const sid = sessionId || ((globalThis.crypto && globalThis.crypto.randomUUID) ? globalThis.crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(36).slice(2))
-      const payload = JSON.stringify({ user: { uid: 'dsh-plugin-voice' }, namespace: 'BidirectionalTTS', event: EV.StartSession, req_params: reqParams })
+      const payload = JSON.stringify({ user: { uid: 'voice-for-dsh' }, namespace: 'BidirectionalTTS', event: EV.StartSession, req_params: reqParams })
       sendFrame({ type: MSG.FullClientRequest, event: EV.StartSession, sessionId: sid, payload: Buffer.from(payload) })
       const m = await waitFor((x) => x.event === EV.SessionStarted || x.event === EV.SessionFailed, timeoutMs, 'SessionStarted')
       if (m.event === EV.SessionFailed) throw new Error('SessionFailed')
@@ -191,7 +191,7 @@ export function createBidirectionClient(opts) {
     },
     /** 增量发送文本（TaskRequest）。reqParams 须与 startSession 一致并含 text。 */
     async sendText(sessionId, reqParams, text) {
-      const payload = JSON.stringify({ user: { uid: 'dsh-plugin-voice' }, namespace: 'BidirectionalTTS', event: EV.TaskRequest, req_params: Object.assign({}, reqParams, { text }) })
+      const payload = JSON.stringify({ user: { uid: 'voice-for-dsh' }, namespace: 'BidirectionalTTS', event: EV.TaskRequest, req_params: Object.assign({}, reqParams, { text }) })
       sendFrame({ type: MSG.FullClientRequest, event: EV.TaskRequest, sessionId, payload: Buffer.from(payload) })
     },
     async finishSession(sessionId) {

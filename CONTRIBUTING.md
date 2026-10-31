@@ -21,7 +21,7 @@
 
 ## 代码约定速记
 
-- Host 半 = `packages/dsh-plugin-voice/lib/index.js`；Client 半 = `lib/client.js`
+- Host 半 = `packages/voice-for-dsh/lib/index.js`；Client 半 = `lib/client.js`
   （v1 手写纯 JS，**无构建步骤**，不要跑 `tsc` 期望重建 `lib/`——`src/` 只是占位）。
 - 只做 additive 小槽位，不碰 `root`/`conversation.session` 等高危整槽位。
 - 命名空间/服务名统一 `voice`。

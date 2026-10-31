@@ -1,7 +1,7 @@
 {
   "name": "voice-for-dsh",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "DSH web voice-readout plugin monorepo: transcribe each DeepSeek turn into spoken-style text and read it aloud via TTS.",
   "devDependencies": {}
 }

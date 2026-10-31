@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — 本地模型清单（版本 / 来源 / 体积 / 校验）
+//#region voice-for-dsh — 本地模型清单（版本 / 来源 / 体积 / 校验）
 /**
  * 本地 Kokoro 模型的唯一清单：下载地址、归档字节数与 sha256、解包后关键文件大小。
  *

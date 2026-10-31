@@ -181,7 +181,7 @@ tar -xjf .\kokoro-multi-lang-v1_1.tar.bz2 -C $dest
 | kind | 文案 | 常见原因 | 怎么查 |
 |---|---|---|---|
 | `model-missing` | 本地模型未安装 | 模型没装、装到别处、目录被删、`modelDir` 指错 | 设置页「本地模型」一行；自检里的"模型目录"那一行；该目录下有没有 `model.onnx` + `voices.bin` + `espeak-ng-data/` |
-| `load-failed` | 本地模型加载失败 | 原生模块没装上（`npm install` 没跑）、模型文件损坏、加载超时 | dsh 日志里 `[voice] local tts load failed: …`；`packages/dsh-plugin-voice/node_modules/sherpa-onnx-node` 在不在 |
+| `load-failed` | 本地模型加载失败 | 原生模块没装上（`npm install` 没跑）、模型文件损坏、加载超时 | dsh 日志里 `[voice] local tts load failed: …`；`packages/voice-for-dsh/node_modules/sherpa-onnx-node` 在不在 |
 | `synth-failed` | 本地合成失败 | 文本异常、sid 越界、模型内部报错 | toast 后面的原始错误；sid 是否 0–102 |
 | `timeout` | TTS 合成超时 | 机器太慢、线程数太低、超时设太小 | 把 `numThreads` 调到 6–8，或把 `timeoutMs` 加到 60000 |
 

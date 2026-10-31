@@ -22,7 +22,7 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID, createHash } from 'node:crypto'
-import { createBidirectionClient } from '../packages/dsh-plugin-voice/lib/volcengine-ws.js'
+import { createBidirectionClient } from '../packages/voice-for-dsh/lib/volcengine-ws.js'
 
 const argKey = process.argv.includes('--key') ? process.argv[process.argv.indexOf('--key') + 1] : null
 const key = argKey || (() => {

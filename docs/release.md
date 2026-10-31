@@ -8,9 +8,9 @@
 
 | 位置 | 当前 | 说明 |
 |---|---|---|
-| 本仓库 | `0.4.2` | 根 `package.json` 与 `packages/dsh-plugin-voice/package.json` 必须同号 |
-| GitHub main | `0.4.2` | 已发 Release `v0.4.2`（tag 指向发版提交）；更早的 `0.3.1` 是 0.2.0 时代的写法，装到 0.2.1 桌面端会加载失败 |
-| npm | 未发布 | npm 上的 `dsh-plugin-voice` 是另一个同名项目（不是本仓库），同名发布会 403；安装走 GitHub，见 §7 |
+| 本仓库 | `0.5.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
+| GitHub main | `0.5.0` | 已发 Release `v0.5.0`（包名从 `dsh-plugin-voice` 改为 `voice-for-dsh`；旧装法需重装一次，见 CHANGELOG 升级指引） |
+| npm | 未发布 | 本仓库包名 `voice-for-dsh` 目前尚未发布到 npm（npm 上的 `dsh-plugin-voice` 是另一个项目，与本仓库无关）；安装走 GitHub，见 §7 |
 
 发版＝推 main、打 tag、写 Release；安装走 GitHub（npm 同名不可用，见 §7）。
 
@@ -107,13 +107,13 @@
 
 ## 7. 分发方式
 
-**GitHub Release（当前唯一渠道）**：用户按 README 用 `dsh plugin --profile desktop add link:<仓库路径>/packages/dsh-plugin-voice` 安装。
+**GitHub Release（当前唯一渠道）**：用户按 README 用 `dsh plugin --profile desktop add link:<仓库路径>/packages/voice-for-dsh` 安装。
 
-**npm 同名走不通**：npm 上的 `dsh-plugin-voice` 属于另一个同名项目（不是本仓库），同名发布会 403，也不能替它标废弃。
-要走 npm 只能换包名（`@账号/dsh-plugin-voice` 或一个全新的名字）；换名要连带改 `cordis.patch.yml` 里的模块名、
-profile 里已装的条目与 README 的安装命令，属改名级别改动，需要重装一次插件。
+**npm**：本仓库包名是 `voice-for-dsh`，目前尚未发布（npm 账号注册受 Cloudflare 拦，暂缓）。npm 上的 `dsh-plugin-voice`
+属于另一个项目，与本仓库无关——本仓库从 0.5.0 起不再使用那个名字。若要发 npm，包名与 `cordis.patch.yml` 的模块名一致，
+装的时候用户命令换成 `dsh plugin --profile desktop add voice-for-dsh`。
 
-无论走哪条，发布前都要确认：`packages/dsh-plugin-voice/package.json` 的 `files` 只含 `lib/`、`cordis.patch.yml`、`README.md`（模型与测试不入包）。
+无论走哪条，发布前都要确认：`packages/voice-for-dsh/package.json` 的 `files` 只含 `lib/`、`cordis.patch.yml`、`README.md`（模型与测试不入包）。
 
 ## 8. 发版流程（SemVer）
 
@@ -152,11 +152,14 @@ profile 里已装的条目与 README 的安装命令，属改名级别改动，�
 目录（`awesome-dsh-plugin`）与商店（`dsh-market`）读同一份清单：**只向目录提一次 PR，商店随后自动能搜到**。
 前置是 GitHub main 已经是能装的版本——否则别人从目录点进来，装到的是坏的。
 
-1. fork 目录仓库，加一个文件 `data/plugins/junarch__voice_for_dsh--packages-dsh-plugin-voice.yml`：
+1. fork 目录仓库，加一个文件 `data/plugins/junarch__voice_for_dsh--packages-voice-for-dsh.yml`（旧文件名
+   `…--packages-dsh-plugin-voice.yml` 要一并删掉——条目文件名带目录名，改名后是「新增 + 删除」，
+   市场页地址会从 `/p/junarch/voice_for_dsh--packages-dsh-plugin-voice/` 变成 `…--packages-voice-for-dsh/`，
+   以前分享过的旧链接会 404）：
 
 ```yaml
-url: https://github.com/junarch/voice_for_dsh/tree/main/packages/dsh-plugin-voice
-name: junarch/voice_for_dsh#dsh-plugin-voice
+url: https://github.com/junarch/voice_for_dsh/tree/main/packages/voice-for-dsh
+name: junarch/voice_for_dsh#voice-for-dsh
 category: voice
 description:
   en: Reads each reply aloud after spoken-style transcription, with system TTS, Doubao, or an optional local Kokoro model.

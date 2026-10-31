@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 
-const require = createRequire(new URL('../packages/dsh-plugin-voice/package.json', import.meta.url))
+const require = createRequire(new URL('../packages/voice-for-dsh/package.json', import.meta.url))
 const sherpa = require('sherpa-onnx-node')
 
 const dir = process.argv[2] || path.join(os.homedir(), '.dsh', 'voice', 'models', 'kokoro-multi-lang-v1_1')

@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — 文本净化 / TTS 引擎归一（纯函数，便于单测）
+//#region voice-for-dsh — 文本净化 / TTS 引擎归一（纯函数，便于单测）
 /**
  * 口播文本净化：把可能被 TTS 照读的 Markdown 标记、装饰符号、表情符号剥成
  * 适合朗读的纯文本（docs/pipeline.md §2.6）。

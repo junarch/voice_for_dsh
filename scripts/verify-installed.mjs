@@ -94,7 +94,7 @@ if (!query) {
   }
   // 注入的是**相对**地址（形如 plugins/??a/client.js,b/client.js&rev=…）。
   // 不用正则：先从插件标识往前找组合包的起点，再往后取到引号/空白为止——字符串匹配比正则稳。
-  const marker = 'dsh-plugin-voice/client.js'
+  const marker = 'voice-for-dsh/client.js'
   const at = html.indexOf(marker)
   let combo
   if (at >= 0) {
@@ -111,7 +111,7 @@ if (!query) {
     const url = combo.replace(/&amp;/g, '&')
     const res = await fetch(origin + '/' + url)
     const body = await res.text()
-    const idx = body.indexOf('dsh-plugin-voice')
+    const idx = body.indexOf('voice-for-dsh')
     check('Client 半可服务（取回字节）', res.ok, res.status + ' / ' + body.length + ' bytes')
     check('取回的内容属于本插件', idx >= 0, idx >= 0 ? '插件标识在第 ' + idx + ' 字节' : '没找到插件标识')
   }

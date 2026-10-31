@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url'
 const home = mkdtempSync(path.join(tmpdir(), 'voice-live-'))
 process.env.DSH_HOME = home
 
-const { apply } = await import('../packages/dsh-plugin-voice/lib/index.js')
+const { apply } = await import('../packages/voice-for-dsh/lib/index.js')
 
 const settingsYaml = readFileSync(path.join(homedir(), '.dsh', 'settings.yaml'), 'utf8')
 const KEY = /volcengine:\s*\n\s*apiKey:\s*(\S+)/.exec(settingsYaml)?.[1]

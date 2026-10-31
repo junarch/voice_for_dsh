@@ -135,7 +135,7 @@ async function boot(env) {
   globalThis.document = env.document
   globalThis.fetch = env.fetch
   globalThis.speechSynthesis = { cancel() {}, speak() {} }
-  const url = new URL('../packages/dsh-plugin-voice/lib/client.js', import.meta.url).href + '?case=' + (++seq)
+  const url = new URL('../packages/voice-for-dsh/lib/client.js', import.meta.url).href + '?case=' + (++seq)
   await import(url)
   const entry = globalThis.__entry
   const reactStub = {

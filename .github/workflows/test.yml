@@ -23,13 +23,13 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-          cache-dependency-path: packages/dsh-plugin-voice/package-lock.json
+          cache-dependency-path: packages/voice-for-dsh/package-lock.json
 
       # lib/index.js import 了 @deepseek-ai/schemastery，测试前先装插件自身依赖。
       # --legacy-peer-deps：测试只加载 Host 半（lib/index.js 只 import schemastery + node 内置），
       # 不需要 @deepseek-ai/dsh-client-* 这些 peer 依赖，跳过校验避免 ERESOLVE。
       - name: Install plugin deps
-        working-directory: packages/dsh-plugin-voice
+        working-directory: packages/voice-for-dsh
         run: npm ci --legacy-peer-deps
 
       # 零成本 mock 集成测试：不启动 dsh、不开浏览器、不花一分钱 API 费
@@ -54,12 +54,12 @@ jobs:
 
       # 手写纯 JS 无构建步骤：Client/Host 半至少做语法级冒烟，抓低级拼写/括号错误
       - name: Syntax-check hand-written lib
-        run: node --check packages/dsh-plugin-voice/lib/index.js && node --check packages/dsh-plugin-voice/lib/client.js && node --check packages/dsh-plugin-voice/lib/speech-clean.js && node --check packages/dsh-plugin-voice/lib/voice-compat.js && node --check packages/dsh-plugin-voice/lib/volcengine-ws.js && node --check packages/dsh-plugin-voice/lib/local-runtime.js && node --check packages/dsh-plugin-voice/lib/model-installer.js && node --check packages/dsh-plugin-voice/lib/model-manifest.js
+        run: node --check packages/voice-for-dsh/lib/index.js && node --check packages/voice-for-dsh/lib/client.js && node --check packages/voice-for-dsh/lib/speech-clean.js && node --check packages/voice-for-dsh/lib/voice-compat.js && node --check packages/voice-for-dsh/lib/volcengine-ws.js && node --check packages/voice-for-dsh/lib/local-runtime.js && node --check packages/voice-for-dsh/lib/model-installer.js && node --check packages/voice-for-dsh/lib/model-manifest.js
 
       # 静态安全守护：Client 半禁止危险 HTML 注入 API（防 XSS 回归）
       - name: Forbid unsafe HTML APIs in client half
         run: |
-          node -e "const fs=require('fs');const s=fs.readFileSync('packages/dsh-plugin-voice/lib/client.js','utf8');for(const p of ['innerHTML','dangerouslySetInnerHTML','document.write','insertAdjacentHTML']){if(s.includes(p)){console.error('forbidden unsafe API: '+p);process.exit(1)}}console.log('client.js has no unsafe HTML APIs')"
+          node -e "const fs=require('fs');const s=fs.readFileSync('packages/voice-for-dsh/lib/client.js','utf8');for(const p of ['innerHTML','dangerouslySetInnerHTML','document.write','insertAdjacentHTML']){if(s.includes(p)){console.error('forbidden unsafe API: '+p);process.exit(1)}}console.log('client.js has no unsafe HTML APIs')"
 
       # 发版前的隐私与安全体检：密钥形态、本机路径、发版物夹带、忽略规则（零成本、不联网）
       - name: Release audit

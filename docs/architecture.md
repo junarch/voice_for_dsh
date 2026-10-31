@@ -80,7 +80,7 @@ Client 注册方式：`ctx.slots.inject('<slot>', () => ctx.slots.register({ nam
 
 ## 6. 插件配置（Config）与设置页
 
-Host 半导出 `Config`（schemastery schema，定义在 `packages/dsh-plugin-voice/lib/index.js`），插件体
+Host 半导出 `Config`（schemastery schema，定义在 `packages/voice-for-dsh/lib/index.js`），插件体
 `apply(ctx, config)` 读配置；可热改字段标 `.volatile()`，边界见 `docs/pipeline.md` §6.0。条目 id 是 `voice`
 （bundle 补丁插入的行），config 落在 profile 的 `cordis.patch.yml`。Client 设置页经 `/voice/api` 的
 `getConfig`/`setConfig` RPC 读写（Host 归一后返回，UI 显示 = 实际发声）；`setConfig` 只提交改动过的字段

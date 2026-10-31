@@ -72,19 +72,19 @@ process.env.DSH_HOME = home
 
 // await import(...) = 动态加载真实的插件文件（不是复制粘贴的副本！测的就是它）。
 // Config = 插件导出的配置 schema（0.2.0 加载路径：插件用它在加载时解析原始配置，包括默认值与 volatile 引用）。
-const { apply, Config, splitForStream } = await import('../packages/dsh-plugin-voice/lib/index.js')
+const { apply, Config, splitForStream } = await import('../packages/voice-for-dsh/lib/index.js')
 // 双向流帧编解码（volcengine-ws.js 导出的纯函数，字节级单测用）
-const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/dsh-plugin-voice/lib/volcengine-ws.js')
+const { encodeFrame, decodeFrame, MSG, EV } = await import('../packages/voice-for-dsh/lib/volcengine-ws.js')
 // 口播净化（speech-clean.js 纯函数）
-const { sanitizeForSpeech } = await import('../packages/dsh-plugin-voice/lib/speech-clean.js')
+const { sanitizeForSpeech } = await import('../packages/voice-for-dsh/lib/speech-clean.js')
 // 音色 ↔ 语种/方言 兼容矩阵 + 配置归一（voice-compat.js 纯函数：归一/纠错/纠语言/引擎归一/音调）
-const { normalizeVoiceConfig, effectiveVoiceOf, languagesForVoice, voiceSupportsLanguage, isDialectVoice, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/dsh-plugin-voice/lib/voice-compat.js')
+const { normalizeVoiceConfig, effectiveVoiceOf, languagesForVoice, voiceSupportsLanguage, isDialectVoice, VV_SPEAKER, EN_DEFAULT_SPEAKER, ttsProviderOf, pitchOf, isLocalProvider } = await import('../packages/voice-for-dsh/lib/voice-compat.js')
 // 本地运行时（local-runtime.js）：模型目录解析 / Float32→Int16 / WAV 封装 / 测试用引擎注入点
-const { setEngineLoaderForTest, float32ToInt16Pcm, pcmToWav, resolveModelDir, inspectModelDir, createLocalRuntime } = await import('../packages/dsh-plugin-voice/lib/local-runtime.js')
+const { setEngineLoaderForTest, float32ToInt16Pcm, pcmToWav, resolveModelDir, inspectModelDir, createLocalRuntime } = await import('../packages/voice-for-dsh/lib/local-runtime.js')
 // 运行时共享池（runtime-pool.js）：跨插件重挂复用同一份已加载模型 + 引用计数 + 空闲回收
-const { acquireLocalRuntime, releaseLocalRuntime, disposeSharedRuntime, sharedRuntimeState, resetSharedRuntimeForTest } = await import('../packages/dsh-plugin-voice/lib/runtime-pool.js')
+const { acquireLocalRuntime, releaseLocalRuntime, disposeSharedRuntime, sharedRuntimeState, resetSharedRuntimeForTest } = await import('../packages/voice-for-dsh/lib/runtime-pool.js')
 // 模型安装器（model-installer.js）：下载/续传/校验/解包/删除；测试注入 fetch、解包与磁盘读数
-const { createModelInstaller, setInstallerHooksForTest } = await import('../packages/dsh-plugin-voice/lib/model-installer.js')
+const { createModelInstaller, setInstallerHooksForTest } = await import('../packages/voice-for-dsh/lib/model-installer.js')
 // 本仓库根（用于断言"已部署/未部署"两种分支）
 const REPO_ROOT_FOR_TEST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 

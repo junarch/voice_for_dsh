@@ -1,4 +1,4 @@
-# voice-for-dsh
+# voice for dsh
 
 [![test](https://github.com/junarch/voice_for_dsh/actions/workflows/test.yml/badge.svg)](https://github.com/junarch/voice_for_dsh/actions/workflows/test.yml)
 
@@ -65,7 +65,7 @@
 
 ## 安装
 
-> 插件是 dsh 的 **bundle**（`packages/dsh-plugin-voice`），通过 `dsh plugin --profile desktop add` 装进
+> 插件是 dsh 的 **bundle**（`packages/voice-for-dsh`），通过 `dsh plugin --profile desktop add` 装进
 > `desktop` profile（DSH 桌面版）。
 
 ### 前置要求
@@ -84,12 +84,12 @@ cd voice_for_dsh
 
 # 1) 安装插件自身依赖
 #    依赖一律装在插件包内（npm 口径，package-lock.json 已入库，勿删）
-cd packages/dsh-plugin-voice; npm install; cd ../..
+cd packages/voice-for-dsh; npm install; cd ../..
 
 # 2) 把插件装进 desktop profile（<path> 换成仓库绝对路径或相对路径）
 #    桌面端自带 CLI（版本随桌面端，`dsh --version` 可查）：
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
+& $dsh plugin --profile desktop add link:packages/voice-for-dsh
 
 # 3) 从旧版（settings.yaml）升级的用户：把 voice 配置搬进 profile patch（先预览，确认后加 --write）
 node scripts/migrate-voice-config.mjs
@@ -99,7 +99,7 @@ node scripts/migrate-voice-config.mjs
 
 > 提示：`link:` 的相对路径由 CLI 自己解析，锚定到哪个目录以 CLI 的实际行为为准（本仓库不对方向作承诺）。
 > 解析失败（报 `cannot resolve profile bundle`）时改用绝对路径：
-> `link:C:\path\to\voice_for_dsh\packages\dsh-plugin-voice`。
+> `link:C:\path\to\voice_for_dsh\packages\voice-for-dsh`。
 
 ### 本地 TTS（可选，离线运行，中英都能读）
 

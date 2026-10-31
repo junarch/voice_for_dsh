@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — 本地模型安装器（下载 / 校验 / 解包 / 删除）
+//#region voice-for-dsh — 本地模型安装器（下载 / 校验 / 解包 / 删除）
 /**
  * 把 Kokoro 模型装到 `<DSH_HOME>/voice/models/kokoro-multi-lang-v1_1`：
  * 下载 → 校验归档 sha256 → 系统 tar 解包到临时目录 → 复核关键文件 → 同盘改名 → 写装机标记。

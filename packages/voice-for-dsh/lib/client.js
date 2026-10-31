@@ -1,4 +1,4 @@
-//#region dsh-plugin-voice — Client half (browser, formal bundle)
+//#region voice-for-dsh — Client half (browser, formal bundle)
 /**
  * 语音朗读插件 Client 半（正式 bundle，ModuleLoader 格式）。
  *
@@ -10,7 +10,7 @@
  *  - i18n：locale 命名空间 voice（zh/en）；与 Host 半走 /voice/api/* JSON RPC
  */
 window.__ModuleLoader__.load({
-  id: "dsh-plugin-voice",
+  id: "voice-for-dsh",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -2676,7 +2676,7 @@ window.__ModuleLoader__.load({
 
       ctx.effect(() => {
         const tag = document.createElement("style");
-        tag.dataset.voice = "dsh-plugin-voice";
+        tag.dataset.voice = "voice-for-dsh";
         tag.textContent = [
           ".dsh-voice-read-btn{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid rgba(127,127,127,.4);border-radius:6px;background:transparent;color:inherit;font-size:12px;cursor:pointer;white-space:nowrap;}",
           ".dsh-voice-read-btn:hover{background:rgba(127,127,127,.12);}",

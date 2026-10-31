@@ -13,7 +13,7 @@
  *
  * `pluginUrl` 不随实例换：它是本模块的 import.meta.url，同一份代码在进程里恒定。
  */
-const POOL_KEY = Symbol.for('dsh-plugin-voice/local-runtime@1')
+const POOL_KEY = Symbol.for('voice-for-dsh/local-runtime@1')
 const DEFAULT_IDLE_MS = 10 * 60_000
 
 function pool() {

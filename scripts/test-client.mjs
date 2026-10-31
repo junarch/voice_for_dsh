@@ -18,7 +18,7 @@ try {
     },
   }
 
-  await import(new URL('../packages/dsh-plugin-voice/lib/client.js?client-contract', import.meta.url))
+  await import(new URL('../packages/voice-for-dsh/lib/client.js?client-contract', import.meta.url))
 
   if (loaded.length !== 1) throw new Error('expected one ModuleLoader entry, got ' + loaded.length)
 
@@ -108,7 +108,7 @@ try {
   }
 
   // i18n 键对齐：zh / en 两套文案的 key 集合必须一致（漏配一边会显示成 key 本身）
-  const source = readFileSync(new URL('../packages/dsh-plugin-voice/lib/client.js', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../packages/voice-for-dsh/lib/client.js', import.meta.url), 'utf8')
   const blockOf = (name) => {
     const start = source.indexOf('var ' + name + ' = {')
     if (start < 0) throw new Error('i18n block not found: ' + name)

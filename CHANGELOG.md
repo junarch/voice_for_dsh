@@ -6,6 +6,33 @@
 
 ---
 
+## [0.5.0] - 2026-10-31
+
+### Changed
+
+- **包改名：`dsh-plugin-voice` → `voice-for-dsh`**（对外名称 **voice for dsh**）。这个名字是首提交（`ac426c5`，2026-08-19）
+  按 DSH 插件的 `dsh-plugin-*` 习惯起的，不是产品名；它在插件市场里表现为 `junarch/voice_for_dsh#dsh-plugin-voice`，
+  搜「voice for dsh」搜不到。本次统一改成 `voice-for-dsh`：目录 `packages/voice-for-dsh`、`package.json` 的 `name`、
+  `cordis.patch.yml` 的模块名、Client 半的模块 id、脚本与测试里的相对路径、文档与 README 的安装命令、
+  `~/.dsh/profiles/desktop/package.json` 里的依赖键与 bundle 名；豆包请求里的 `user.uid` 与运行时共享池的 Symbol 一并改名。
+- **不变**：配置命名空间仍是 `voice`（`cordis.patch.yml` 的 `id: voice` 与 profile 里的 `voice:` 配置段一个字不动），
+  数据目录仍是 `$DSH_HOME/voice/...`（提示音素材、模型）与 `$DSH_HOME/voice-transcript-cache.json`——改名不影响这些。
+
+### 升级指引（必须做一次）
+
+包名变了，旧安装不会自动换成新包，需要重装一次（配置与模型都不丢）：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop remove dsh-plugin-voice
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "link:<仓库路径>/packages/voice-for-dsh"
+```
+
+然后**重启桌面端**（Client 半只有重启才进 boot 图）。两条命令要连着做、中间不要启动应用——中间态里 patch 的 `- id: voice`
+指向一个还没装上的行，只会告警，装完即消失；不需要手工改 patch。
+
+另外：插件市场的条目文件名带目录名，改名后页面地址会从 `…--packages-dsh-plugin-voice/` 变成 `…--packages-voice-for-dsh/`，
+以前分享的旧链接会失效。
+
 ## [0.4.2] - 2026-10-30
 
 ### Changed

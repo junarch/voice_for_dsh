@@ -229,7 +229,7 @@ globalThis.fetch = async (url, init) => {
 }
 
 // ---------- 加载真 client.js，取设置页组件 ----------
-await import(new URL('../packages/dsh-plugin-voice/lib/client.js', import.meta.url))
+await import(new URL('../packages/voice-for-dsh/lib/client.js', import.meta.url))
 const client = globalThis.__clientEntry.factory((id) => {
   if (id === 'react') return reactStub
   throw new Error('unexpected dependency ' + id)

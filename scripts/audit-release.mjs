@@ -14,7 +14,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const PLUGIN_DIR = path.join(ROOT, 'packages', 'dsh-plugin-voice')
+const PLUGIN_DIR = path.join(ROOT, 'packages', 'voice-for-dsh')
 const results = []
 
 function check(name, fn) {

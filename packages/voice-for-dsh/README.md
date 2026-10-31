@@ -1,4 +1,4 @@
-# dsh-plugin-voice
+# voice for dsh
 
 给 DeepSeek Harness Web（dsh web）加"输出朗读"：每轮回答结束后，先把回答改写成口语稿（**转写**），
 再交给 TTS 出声（**播报**）；关掉自动播报，每条助手消息上仍可手动点"**朗读**"。
@@ -21,14 +21,14 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 
 # 1) 先装插件自身依赖（link: 只是链接，不会代装依赖）
 #    依赖一律装在插件包内（npm 口径，package-lock.json 已入库，勿删）
-cd packages/dsh-plugin-voice; npm install; cd ../..
+cd packages/voice-for-dsh; npm install; cd ../..
 
 # 2) 装进 desktop profile
-& $dsh plugin --profile desktop add link:packages/dsh-plugin-voice
+& $dsh plugin --profile desktop add link:packages/voice-for-dsh
 ```
 
 重启桌面端，设置页里就有"语音播报"。`link:` 的相对路径由 CLI 自己解析，锚定到哪个目录以 CLI 的实际行为为准；
-解析失败（`cannot resolve profile bundle`）时改成绝对路径 `link:<仓库绝对路径>\packages\dsh-plugin-voice`。
+解析失败（`cannot resolve profile bundle`）时改成绝对路径 `link:<仓库绝对路径>\packages\voice-for-dsh`。
 
 ## 配置
 
