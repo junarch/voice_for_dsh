@@ -10,8 +10,8 @@
 
 ### Changed
 
-- **声明宿主要求**：`package.json` 增加 `engines.dsh: ">=0.2.1-rc.3 <0.3.0"`。插件市场只从 npm 包的 manifest 读这一项；
-  以前没写，卡片上显示"宿主要求未知"。
+- **声明宿主要求**：`package.json` 增加 `engines.dsh: ">=0.2.1-rc.3 <0.3.0"`，插件市场据此判断能否安装
+  （它只从 npm 包的 manifest 读这一项）。版本不在范围内的会被拒绝。
 - **`react` 从 `dependencies` 改为可选 `peerDependencies`**：客户端半的 `react` 由宿主加载器提供，随包装的那份从不生效。
   安装时少一个依赖，行为不变。
 
