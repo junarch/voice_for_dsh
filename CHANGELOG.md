@@ -11,7 +11,7 @@
 ### Added
 
 - **发布到 npm**：包名 `voice-for-dsh`，安装命令 `dsh plugin --profile desktop add voice-for-dsh`。
-  包体 130KB（压缩后），只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE` 与 `package.json`；
+  包体 131KB（压缩后，131,023 字节），只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE` 与 `package.json`；
   本地引擎的原生模块按平台随安装下载（win-x64 约 22MB），模型仍从 GitHub Releases 下载，两者都不进包。
 
 ### Changed
