@@ -73,6 +73,7 @@ window.__ModuleLoader__.load({
       "ds.languageHint": " 跟随原文 = DeepSeek 自动识别 10 语种；选中文/英文会把口语稿改写成对应语言再念。",
       "row.dsVoice": "音色",
       "toast.readFailed": "朗读失败：",
+      "toast.hostDown": "语音服务连不上（宿主连接中断）——重启桌面端后再试",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
@@ -220,6 +221,7 @@ window.__ModuleLoader__.load({
       "ds.languageHint": " Follow source = DeepSeek auto-detects 10 languages; Chinese/English rewrites the script into that language first.",
       "row.dsVoice": "Voice",
       "toast.readFailed": "Read-aloud failed: ",
+      "toast.hostDown": "Voice service unreachable (host connection lost) — restart the desktop app and retry",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
       "row.localLanguage": "Spoken language",
       "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
@@ -740,6 +742,18 @@ window.__ModuleLoader__.load({
       // 流式失败此前只把按钮标红（原因藏在悬停 title 里）——弹一条 toast 让失败可见（6s 自动消失）
       showToast(t("toast.readFailed") + String(reason || "").slice(0, 140));
     }
+    /** `speak` 请求本身失败（请求没到宿主 / 宿主没应答）也要说人话：
+     *  这类错误是"宿主连不上"而不是"TTS 报错"，用户要能分清、知道该重启桌面端而不是去查 Key。 */
+    function speakFailText(reason) {
+      const raw = String(reason || "unknown error");
+      if (/failed to fetch|networkerror|network error|fetch failed|ERR_[A-Z]+|operation aborted|load failed/i.test(raw)) return t("toast.hostDown");
+      return raw;
+    }
+    function reportSpeakFail(reason, source) {
+      const raw = String(reason || "unknown error");
+      diag("speak-fail", { source: source || "", reason: raw.slice(0, 140) });
+      showToast(t("toast.readFailed") + speakFailText(raw).slice(0, 160));
+    }
 
     // ---------- shell.overlay toast（回退/降级提示：不打断，6s 自动消失） ----------
     var toastState = { msg: null };
@@ -913,8 +927,11 @@ window.__ModuleLoader__.load({
         try {
           const res = await rpc("speak", { sessionId: String(props.sessionId), messageId: String(props.messageId), regen: regen || false });
           if (!res || res.ok !== true) {
-            setLastError(res && res.error ? String(res.error) : "unknown error");
+            const reason = res && res.error ? String(res.error) : "unknown error";
+            setLastError(reason);
             setStatus("error");
+            // 请求这一层失败（宿主不可达/会话里找不到消息等）也要弹出来，不能只标红
+            reportSpeakFail(reason, "read-button");
             return;
           }
           if (res.degraded) setLastError(t("read.degraded"));
@@ -927,8 +944,10 @@ window.__ModuleLoader__.load({
           if (!started) { setLastError("browser speechSynthesis unavailable"); setStatus("error"); return; }
           setStatus("speaking");
         } catch (error) {
-          setLastError(String(error && error.message || error));
+          const reason = String(error && error.message || error);
+          setLastError(reason);
           setStatus("error");
+          reportSpeakFail(reason, "read-button");
         }
       }
       function onClick() {
@@ -2842,6 +2861,7 @@ window.__ModuleLoader__.load({
       // 自动播报轮询 + stopOnNewTurn（只停"正在播的那个会话"的旧播报）
       let pollBusy = false;
       let lastGens = null;
+      let autoFailNotified = "";   // 自动播报失败提示去重：同一 messageId 只弹一次，防 2s 轮询刷屏
       async function pollAutoSpeak() {
         if (pollBusy) return;
         pollBusy = true;
@@ -2866,7 +2886,15 @@ window.__ModuleLoader__.load({
             if (res.pending) {
               const p = res.pending;
               const r = await rpc("speak", { sessionId: p.sessionId, messageId: p.messageId });
-              if (r && r.ok) playResult(r, {});
+              if (r && r.ok) { autoFailNotified = ""; playResult(r, {}); }
+              else {
+                // 自动播报失败同样要直达界面（否则只有"没声音"）；同一 messageId 只提示一次
+                const key = String(p.messageId);
+                if (autoFailNotified !== key) {
+                  autoFailNotified = key;
+                  reportSpeakFail(r && r.error ? r.error : "auto speak failed", "auto");
+                }
+              }
             }
           }
         } catch (e) { /* 下一拍重试 */ }

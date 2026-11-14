@@ -169,6 +169,15 @@ try {
     if (!zhKeys.includes(k)) throw new Error('missing capability hint key: ' + k)
   }
 
+  // 请求层失败也必须看得见：`speak` 请求本身失败（宿主不可达/会话里取不到消息）不许只把按钮标红。
+  // 出口三处 = 手动按钮的 !ok 分支、手动按钮的 catch、自动播报失败分支；网络类错误要翻译成"宿主连不上"。
+  for (const need of ['function reportSpeakFail', 'function speakFailText', 'failed to fetch']) {
+    if (!source.includes(need)) throw new Error('Client 缺少请求失败的可见性实现：' + need)
+  }
+  const reportCalls = (source.match(/reportSpeakFail\(/g) || []).length
+  if (reportCalls < 4) throw new Error('reportSpeakFail 调用点不足（三处出口 + 一处定义），实际 ' + reportCalls)
+  if (!zhKeys.includes('toast.hostDown')) throw new Error('missing host-down hint key: toast.hostDown')
+
   console.log('client contract: uiConversation.events + voice Definition + ' + registrations.length +
     ' slots(带 id、无 select) + turnTail claim 逻辑 + i18n(' + zhKeys.length + ' keys) OK')
 } finally {
