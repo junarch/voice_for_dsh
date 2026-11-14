@@ -90,6 +90,12 @@ curl.exe -s -X POST "$base/voice/api/clientDiagDump"    # 读回浏览器播放�
 时长对比只能证明"标签被照读/数值参数生效"这类强信号；
 **语气、音色、方言这类只有人耳能判断的效果，必须听音频**。怀疑任何外部接口行为时，先跑探针再改代码。
 
+DeepSeek 官方 TTS 另有一支：`node scripts/tts-deepseek-probe.mjs`（Key 从 env `DEEPSEEK_API_KEY` 读，
+不落仓库）。跑整段 POST（海星/暗潮两音色）+ WS 流式（断言 `mode:'stream'` 且拿到音频段）+ 英文样句；
+录下的音频在 `tmp/deepseek-probe/`。**探针的 settings 替身注意**：`update` 要像 loader 的 `_commitVolatile`
+一样**只把新解析出的值提交进插件手里的那些引用**，不能把引用换代成新解析树——换了引用，第二次 `setConfig`
+起插件读到的还是旧值，探针会把"WS 流式"误判成没走流式（整段兜底返回 audioUrl）。
+
 本地引擎是进程内合成（没有服务、没有端口），四段断言都在 `scripts/test-host.mjs` 里：
 
 - **T21 本地运行时**：模型目录解析顺序、自检读数、停止；
