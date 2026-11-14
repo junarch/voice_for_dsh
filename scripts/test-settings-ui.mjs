@@ -355,6 +355,33 @@ tree = await flush()
 check('再切回豆包：本地参数又消失', !allText(tree).includes('合成线程数') && !allText(tree).includes('高级'))
 check('每次切引擎都各自落盘（两次保存）', saveCalls.length === 2, saveCalls.length)
 
+// 6b) DeepSeek：分支只渲染音色/Key/播报语种；层能展开也能收起（round-trip）；语种改动即落盘
+tree = await mount(function CaseDeepseek() { return reactStub.createElement(settingsComponent) }, (c) => {
+  c.tts.provider = 'deepseek'
+  c.tts.deepseek = { apiKey: 'ds-key', voiceId: 'tide', language: 'auto', streaming: true }
+  c.autoSpeakCloudTts = true
+})
+tree = await expand(tree, '当前引擎声音设置')
+check('DeepSeek：apiKey/音色/播报语种 三行都在',
+  allText(tree).includes('DeepSeek API Key') && allText(tree).includes('暗潮（男声）') && allText(tree).includes('播报语种'), allText(tree).slice(-300))
+check('DeepSeek：没有豆包的语种/方言下拉与音量行', !allText(tree).includes('语种/方言') && !allText(tree).includes('音量 loudness_rate'))
+const dsLayer = layerNode(tree, '当前引擎声音设置')
+const dsToggle = flatten(dsLayer).find((n) => n.kind === 'element' && n.type === 'button' && n.props.className === 'dsh-voice-layer-toggle')
+check('DeepSeek：展开态 aria-expanded=true', dsToggle.props['aria-expanded'] === true)
+dsToggle.props.onClick()
+tree = await flush()
+const dsLayer2 = layerNode(tree, '当前引擎声音设置')
+check('DeepSeek：再点一次能收起（层体卸载 + open 类摘除）',
+  !allText(dsLayer2).includes('apiKey') && !(String(dsLayer2.props.className || '').split(/\s+/).includes('open')), dsLayer2.props.className)
+tree = await expand(tree, '当前引擎声音设置')
+saveCalls = []
+const dsLangSelect = byType(tree, 'select').find((n) => flatten(n).some((c2) => c2.kind === 'element' && c2.type === 'option' && c2.props.value === 'en'))
+dsLangSelect.props.onChange({ target: { value: 'en' } })
+await new Promise((r) => setTimeout(r, 450))
+tree = await flush()
+check('改 DeepSeek 播报语种 → 自动保存 tts.deepseek.language=en',
+  saveCalls.some((p) => p.tts && p.tts.deepseek && p.tts.deepseek.language === 'en'), saveCalls)
+
 // 7) 转写层：篇幅档位 + 按引擎的提示词 + 整行宽度
 tree = await expand(tree, '转写')
 check('转写层有「转写篇幅」三档', allText(tree).includes('转写篇幅')

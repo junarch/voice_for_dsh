@@ -840,6 +840,25 @@ check('喂给 WS 的文字拼回=转写稿（除段间空白外不丢字）',
   dsWsState.texts.join('').replace(/\s+/g, '') === (sdd.res.transcript || '').replace(/\s+/g, ''),
   { fed: dsWsState.texts.join('').length, transcript: (sdd.res.transcript || '').length })
 check('streamNext 结束返回 done', sdd.res.done === true)
+// 重播（非 regen）：转写缓存命中 → 零 LLM；音频缓存命中 → 不重连 WS（DeepSeek 无服务端缓存，
+// 生成式每次合成的语气细节都不同——音频重播缓存对齐豆包"重播不重复计费"的语义）
+const dsCallsBeforeReplay = llmState.calls.length
+const connsBeforeReplay = dsWsState.connections
+const sdsReplay = await rpc('speak', { sessionId: 's1', messageId: 'mdsws' })
+const ddsReplay = await awaitStreamDone(sdsReplay.runId)
+check('deepseek 重播：转写缓存命中（LLM 调用数不变）', llmState.calls.length === dsCallsBeforeReplay, { calls: llmState.calls.length, before: dsCallsBeforeReplay })
+check('deepseek 重播：音频缓存命中（不重连 WS，零 TTS 计费）', dsWsState.connections === connsBeforeReplay, { conn: dsWsState.connections, before: connsBeforeReplay })
+check('deepseek 重播：稿子与首播一致（不是重新生成的）',
+  (ddsReplay.res.transcript || '') === (sdd.res.transcript || ''), { replay: ddsReplay.res.transcript, first: sdd.res.transcript })
+check('deepseek 重播：段数与首播一致（同一份音频）', ddsReplay.res && ddsReplay.urls.length === sdd.urls.length, { replay: ddsReplay.urls.length, first: sdd.urls.length })
+// 换音色 → 音频缓存键变 → 未命中重连（防串音）；转写稿仍走缓存（零 LLM）
+await rpc('setConfig', { patch: { tts: { deepseek: { voiceId: 'stella' } } } })
+const sdsStella = await rpc('speak', { sessionId: 's1', messageId: 'mdsws' })
+const ddsStella = await awaitStreamDone(sdsStella.runId)
+check('换音色：音频缓存未命中（重连 WS）', dsWsState.connections === connsBeforeReplay + 1, { conn: dsWsState.connections, before: connsBeforeReplay })
+check('换音色：voice_id=stella 下发', dsWsState.lastUrl.includes('voice_id=stella'), dsWsState.lastUrl)
+check('换音色：稿子仍来自转写缓存（零 LLM）', llmState.calls.length === dsCallsBeforeReplay, llmState.calls.length - dsCallsBeforeReplay)
+await rpc('setConfig', { patch: { tts: { deepseek: { voiceId: 'tide' } } } })
 // 播报语种（与本地引擎同机制）：zh → 转写 prompt 要求中文输出
 await rpc('setConfig', { patch: { tts: { deepseek: { language: 'zh' } } } })
 llmState.responses = [{ text: '语言选择测试。', finish: 'stop' }]

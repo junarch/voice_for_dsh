@@ -24,7 +24,7 @@
  */
 import z from '@deepseek-ai/schemastery'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, unlinkSync, renameSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
@@ -254,6 +254,14 @@ const DEEPSEEK_STREAM = {
   maxBodyBytes: 60000,        // 请求体字节数预算（官方上限 64KiB，UTF-8）
   finishTimeout: 60000,       // WS 会话 finish 等待上限
 }
+
+/** DeepSeek 音频重播缓存（对齐豆包"1h 内重播不重复计费"的语义）：DeepSeek 官方没有服务端缓存，
+ * 而生成式 TTS 每次合成的语气细节都不同——"停止后再点"会听到不一样的话术演绎。
+ * 进程内按 messageId+音色/语种+转写稿哈希 存已合成的 PCM 段；重播命中 → 不再调 TTS API（零计费、瞬时出声）。
+ * 试听与重新生成（↻）绝不读写（防串音，同豆包 cache_config 规则）；换音色/语种/稿子 → 键变 → 自然未命中。
+ * 进程内即生命周期：重启桌面端后缓存清空（首次重播重新合成一次）。 */
+const dsAudioCache = new Map()
+const DS_AUDIO_CACHE_MAX = 20 // 条数上限（每条约几分钟音频，内存可控；超出淘汰最旧）
 
 /** 段落粒度情感指令的 LLM 调用上限（成本闸门）。
  * 每两句话就查一次 LLM 会给长回复叠出几十次辅助调用（每次都要带完整指令 system prompt），
@@ -1142,6 +1150,13 @@ function apply(ctx, config) {
     const id = String((v && v.voiceId) || '')
     return DEEPSEEK_VOICES.some((x) => x.id === id) ? id : 'stella'
   }
+  /** 音频重播缓存键：消息 + 音色/语种 + 转写稿哈希（稿子变了/换音色/换语种 → 键变 → 自然未命中）。 */
+  function dsAudioKeyOf(messageId, cfg, transcript) {
+    const v = cfg.tts.deepseek
+    const fp = deepseekVoiceIdOf(v) + ':' + ((v && v.language) || 'auto')
+    const hash = createHash('sha1').update(String(transcript || ''), 'utf8').digest('hex').slice(0, 16)
+    return String(messageId) + ':' + fp + ':' + hash
+  }
   /** DeepSeek 整段 POST：单段文本 → 裸 PCM（24kHz/16bit/单声道）。非 2xx/审核拒绝 → http，超时 → timeout。 */
   async function deepseekPostPcm(text, cfg, voiceId) {
     const v = cfg.tts.deepseek
@@ -1962,6 +1977,18 @@ function apply(ctx, config) {
     if (run.stopped) return
     if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（DeepSeek TTS）')
 
+    // 1.5) 音频重播缓存命中：同消息+同音色/语种+同转写稿 → 直接复用已合成段（零 TTS 计费、瞬时出声）。
+    // regen（重新生成）绝不命中；试听不走流式路径，天然不读写。
+    if (!run.force) {
+      const hit = dsAudioCache.get(dsAudioKeyOf(run.messageId, cfg, transcript))
+      if (hit && hit.segs.length) {
+        for (const seg of hit.segs) run.queue.push({ id: storeAudio(seg, 'audio/pcm'), format: 'pcm' })
+        run.segments = hit.segs.length
+        console.log('[voice] deepseek replay: audio cache hit, ' + hit.segs.length + ' segments（不重复计费）')
+        return
+      }
+    }
+
     // 2) 分句切段（与本地同一切分器：句末优先，退逗号，最后硬切）
     const segments = splitForStream(transcript, 220)
     if (segments.length > 1) console.log('[voice] deepseek stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
@@ -2020,6 +2047,17 @@ function apply(ctx, config) {
       try { if (conn) conn.close() } catch {}
     }
     flushSegment(run) // 剩余半段也交给客户端（能播多少播多少）
+    // 完整合成成功 → 写音频重播缓存（各段 PCM 原样引用；试听/regen/中途失败/停止不写）
+    if (!run.stopped && !hadError && run.segments) {
+      const segs = run.queue.map((q) => { const hit = audioStore.get(q.id); return hit ? hit.buf : null }).filter(Boolean)
+      if (segs.length) {
+        dsAudioCache.set(dsAudioKeyOf(run.messageId, cfg, transcript), { at: Date.now(), segs })
+        while (dsAudioCache.size > DS_AUDIO_CACHE_MAX) {
+          const oldest = dsAudioCache.keys().next().value
+          dsAudioCache.delete(oldest)
+        }
+      }
+    }
     if (hadError && !run.error) run.error = run.warn
   }
 
