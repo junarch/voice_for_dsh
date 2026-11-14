@@ -2,8 +2,8 @@
 
 > 本文描述**当前实现**的语音播报管线：一轮 DeepSeek 输出结束后，先口语化转写，再交给 TTS 播报。
 > 源码：`packages/voice-for-dsh/lib/index.js`（Host 半，主实现）、
-> `lib/volcengine-ws.js`（豆包双向流 WS 客户端）、`lib/speech-clean.js`（净化）、
-> `lib/voice-compat.js`（音色↔语种归一）、`lib/local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro）、
+> `lib/volcengine-ws.js`（豆包双向流 WS 客户端）、`lib/deepseek-ws.js`（DeepSeek WS 流式客户端）、
+> `lib/speech-clean.js`（净化）、`lib/voice-compat.js`（音色↔语种归一）、`lib/local-runtime.js`（本地合成运行时：sherpa-onnx + Kokoro）、
 > `lib/client.js`（Client 半）。
 
 ## 核心原则
@@ -17,7 +17,7 @@
 [assistant/message 文本块]                          (每轮最终消息的 text 块拼接)
    → Host 转写：ctx.llm.prepareCall + stream（独立辅助调用，不入会话历史）
    → 语音演绎指令 + 情感 + 强度（内容驱动，LLM 三行输出；只有豆包有 context_texts 这条通道）
-   → TTS：browser(客户端 speechSynthesis) | volcengine(双向流 WS 默认 / HTTP 单向兜底)
+   → TTS：browser(客户端 speechSynthesis) | volcengine(双向流 WS 默认 / HTTP 单向兜底) | deepseek(官方 TTS：WS 流式默认 / 整段 POST 兜底与试听)
         | local(本地 Kokoro v1.1，进程内 sherpa-onnx，中英跟随原文)
         └ local 合成：懒加载模型 → 分句切段（splitForStream）→ 逐段进程内合成
                       → Float32→Int16 → 边出边按 ~0.5s 音频切块入队
@@ -46,7 +46,7 @@
 | 字段 | 用在 | 内容 |
 |---|---|---|
 | `transcribe.promptCloud` | 豆包 | 总则 + 豆包差异段（情绪写进措辞、不输出 `[#...]` 标签） |
-| `transcribe.promptLocal` | 本地 Kokoro / 系统 TTS | 总则 + 本地差异段（按字面念、英文术语不翻译、不写情绪提示） |
+| `transcribe.promptLocal` | 本地 Kokoro / DeepSeek / 系统 TTS | 总则 + 本地差异段（按字面念、英文术语不翻译、不写情绪提示） |
 
 留空 = 用该引擎的内置默认（`meta.promptDefaults`）；旧字段 `transcribe.prompt` 只在两个新字段都空时兜底，
 不再出现在界面。语气预设（`stylePreset`：标准/陪伴/俏皮）**只对豆包生效**，且只追加一句"语气"，
@@ -157,7 +157,8 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 ## 4. TTS Provider 适配层
 
 > 自研薄适配层（每 provider 一个文件），零第三方 TTS 适配器依赖
-> （调研结论：无现成 JS 库支持火山 v3 接口，协议依官方《接入语音模型》文档实现）。
+> （调研结论：无现成 JS 库支持火山 v3 接口，协议依官方《接入语音模型》文档实现；
+> DeepSeek 流式同理，WS 客户端依官方 TTS 文档自研，见 §4.6）。
 
 ### 4.1 browser（零配置兜底，默认）
 
@@ -289,6 +290,31 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
 - 重播要命中须**逐段复现**初次会话（缓存键 = 会话整段文本）：初次合成把各段完整文本记入本地缓存
   `segments`，重播逐段喂同样文本 → 键一致 → 命中。
 
+### 4.6 deepseek（DeepSeek 官方 TTS，云端计费）
+
+> 官方文档 api-docs.deepseek.com/zh-cn/guides/tts（2026-11-13 发布）。无情感/语速/语种/语速参数——
+> 官方没有的不造参数；播报语言跟随文稿（10 语种自动识别），转写用无情绪稿（promptLocal 语义，同 local）。
+> 需 `voice.tts.deepseek.apiKey`（DeepSeek 开放平台 Key，明文存 profile patch，不标 secret 同豆包理由 §6.0）。
+
+- **流式为主（对齐豆包管线）**：WS `wss://api.deepseek.com/v1/tools/tts?voice_id=…&format=pcm`
+  （鉴权 `Authorization: Bearer`，Host 侧 Node 22 全局 WebSocket，传输层同 volcengine-ws.js 的做法）；
+  协议是 JSON 文本事件 + 二进制音频帧：`{"event":"text"}` 逐段喂转写 delta、`{"event":"finish_text"}` 收尾、
+  `{"event":"finish","code":"success"|…}` 结束。实现 `lib/deepseek-ws.js`；`isStreamingDeepseek` 进 speak 分流，
+  `streamSpeakDeepseek` 复用豆包那套 run/段队列/streamNext——转写 delta 边出边喂、音频按 ~0.5s 切块入队、
+  sampleRate 24000，客户端播放代码零新增。
+- **整段 POST 兜底与试听**：`POST /v1/tools/tts`（`synthesizeDeepseek`），`format=pcm`，
+  PCM 拼接后 `pcmToWav` 封 44 字节 WAV 头（客户端 `<audio>` 直接能播）。试听恒走整段（与豆包 preview 同语义）。
+- **降级（不变式 13 同款）**：WS 连接失败/零音频 → runPipeline 自动降级整段 POST，用户仍能听到、不报成整条失败；
+  中途失败 → 保留已播段 + warn 说明从哪中断。停止 = 关连接丢弃（官方无续传，与豆包/本地停止同语义）。
+- **计费与会话限制**：整段请求与 WS 会话同样 ≤10,000 计费字符（汉字=2，其余=1）/64KiB 请求体；
+  WS 会话 60 秒无文本断开、单会话 ≤30 分钟音频、服务端每 25 秒 ping（Node 自动回 pong）。整段路径用
+  `splitForBilling` 按句界分段顺序请求后拼接；流式路径按会话计数、接近预算即轮转会话续喂（PCM 无缝拼接）。
+- **设置页按引擎分支渲染**：deepseek 分支只有音色下拉（海星/暗潮，meta.deepseekVoices 下发）+ API Key
+  （失焦提交）+ 能力说明一行；豆包的语种/方言下拉、语速/音调/音量行都不渲染——不支持的选项不显示。
+- **不参与**：context_texts 情感指令（§3 跳过，同 local）、服务端缓存 cache_config（§4.5 跳过，同 local）、
+  成本门控**参与**（`autoSpeakCloudTts` 与豆包同列，选引擎时联动写入）。
+- **音色**：`stella` 海星（女声，默认）/`tide` 暗潮（男声），未知 voiceId 合成期回退 stella（软着陆，同 §6.1）。
+
 ## 5. 播报状态机与并发
 
 ```
@@ -305,13 +331,13 @@ idle → transcribing(转写中) → speaking(播报中) → idle
   段落指令 LLM 与合成，白花钱；停成全局则会把别的窗口正在播的朗读一起杀掉。
 - **徽标状态必须能收尾**：播放开始 → `speaking`；自然结束 → `done`；停止/出错/被打断 → 清除。
   状态变更通知所有订阅者（徽标、消息按钮），否则 React 不会重渲染，界面会停在"朗读中…"。
-- 双向流：`speak` 立即返回 `{mode:'stream', runId}`，管线后台跑；Client 经 `streamNext` 取段播放；
-  失败/零音频自动降级 HTTP 整段（warn 提示）。
+- 双向流/WS 流式：`speak` 立即返回 `{mode:'stream', runId}`，管线后台跑；Client 经 `streamNext` 取段播放；
+  失败/零音频自动降级 HTTP 整段（豆包）或整段 POST（DeepSeek），warn 提示。
 - 重播（缓存命中）：转写 + 指令全用缓存（零 LLM），段落照常切分但复用缓存指令；音频重合成但 1h 内复用服务端缓存、不重复计费。
 - 重新生成（↻）：转写 + 指令全部重新生成（force 跳过缓存），结果覆盖该 messageId 条目。
-- 成本门控：设置页"播报引擎"选豆包时写入 `autoSpeakCloudTts=true`（= 用户显式启用第三方 API），
-  引擎为 browser/local 时该开关为 false 且豆包不参与自动播报（含手动按钮）；
-  profile patch 里直改的配置若 `autoSpeakCloudTts=false`，豆包自动播报仍被拦截（防手工配置烧钱），
+- 成本门控：设置页"播报引擎"选豆包或 DeepSeek 时写入 `autoSpeakCloudTts=true`（= 用户显式启用第三方计费 API），
+  引擎为 browser/local 时该开关为 false 且云端引擎不参与自动播报（含手动按钮）；
+  profile patch 里直改的配置若 `autoSpeakCloudTts=false`，豆包/DeepSeek 自动播报仍被拦截（防手工配置烧钱），
   手动按钮与 local 不受限。
 
 ## 6. `voice:` 配置 schema 定稿
@@ -330,7 +356,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 > `speed`（本地模型的安装与「运行时自检」也挂在这层，走 `deployStart`/`deployStatus`/`deployCancel`/
 > `deployRemove` 与 `localStatus` 这几个 RPC）；
 > L3 转写 = `transcribe.*` + `provider`/`model`；L4 高级 = `tts.local.numThreads`/`streaming`/`modelDir`；
-> L5 提示音 = `chime.*`（§6.2）。`autoSpeakCloudTts` 不单独占一行：由 L1 选豆包时联动写入。
+> L5 提示音 = `chime.*`（§6.2）。`autoSpeakCloudTts` 不单独占一行：由 L1 选豆包/DeepSeek 时联动写入。
 
 ### 6.0 配置模型与热改边界（0.2.0 起）
 
@@ -364,7 +390,7 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 ```yaml
 voice:
   autoSpeak: false            # 每轮结束自动播报
-  autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）时同步写入 true；browser/local 引擎为 false
+  autoSpeakCloudTts: false    # 成本门控：设置页切到豆包（volcengine）或 DeepSeek（deepseek）时同步写入 true；browser/local 引擎为 false
   language: auto              # auto|zh|en|yue|shanghai|henan|beijing|tianjin|sichuan|shaanxi|dongbei
                               #   固定语种/方言时无论原文语言都按所选转写；方言只对支持方言的 4 个音色出现
   provider: ""                # 转写 LLM provider（空=启动发现；配置错自动回退并自愈写回可用路由）
@@ -383,7 +409,7 @@ voice:
     contextTurns: 2           # 引用上文：固定 2 轮（最多往前读两轮）；设置页无 UI
     timeoutMs: 60000          # 单次转写超时；超时/失败降级为直读
   tts:
-    provider: browser         # browser | volcengine | local（已退役的 local-cosyvoice 归一到 local；其余旧值归一为 browser）
+    provider: browser         # browser | volcengine | deepseek | local（已退役的 local-cosyvoice 归一到 local；其余旧值归一为 browser）
     browser: { rate: 1.0, pitch: 1.0, voice: "" }
     volcengine:
       apiKey: ""              # 火山方舟专属 API Key（明文存在目标 profile 的 cordis.patch.yml，注意保管，别提交）
@@ -416,6 +442,10 @@ voice:
       # 历史字段 baseUrl / voice / autoStart / pythonPath 已随 Python 服务退役：
       #   读到也不再生效（schema 里已删），存量配置里的值会被忽略——它们仍留在 profile patch 里，
       #   插件既不读也不主动清，想清爽就手动删掉那几行。
+    deepseek:
+      apiKey: ""                # DeepSeek 开放平台 API Key（明文存 profile patch，注意保管别提交；不标 secret 同豆包理由）
+      voiceId: stella           # 海星（女声，默认）| 暗潮（tide 男声）；未知值合成期回退 stella
+      streaming: true           # WS 流式（默认开）：转写 delta 边出边喂；失败自动降级整段 POST（无 UI，高级）
   stopOnNewTurn: true
   chime:                      # 提示音（设置页第五层）；默认整层关闭，与朗读互不依赖
     enabled: false
@@ -474,7 +504,7 @@ voice:
 
 ## 7. 必须守住的不变式（regression 防线）
 
-1. **发给 TTS 的 `text` 不得含 `[#`**——豆包接口不解析内嵌标签、会当正文照读（`extractVoiceTags` 提取剥离，进 `context_texts`）。
+1. **发给 TTS 的 `text` 不得含 `[#`**——豆包/DeepSeek 接口都不解析内嵌标签、会当正文照读（`extractVoiceTags` 提取剥离，进 `context_texts`；DeepSeek 流式路径逐段剥离）。
 2. **只适配豆包语音合成模型 2.0**——不接 1.0 多情感/方言专属音色，不发 `emotion`/`emotion_scale` 数值参数。
 3. **情感走 `context_texts`**（所有 2.0 音色生效、不计费、仅第一个值有效）。
 4. **方言用 `explicit_dialect`，且只在支持方言的音色上下发**（voice-compat 能力矩阵：4 个音色 / 8 种方言；其余音色不出现方言选项，合成期也不发该参数）。
@@ -532,6 +562,10 @@ voice:
     模型文件本身不握句柄：实测加载后直接删模型目录不会失败。
 28. **卸载后迟到的加载结果不得认领**——`ensureLoaded` 用加载代数挡掉 dispose 之后才落地的结果，
     否则它会重新占住模型文件。
+29. **DeepSeek 与 local 同免费语义、与豆包同计费语义**——不参与 context_texts 与服务端缓存（官方无此通道），
+    参与成本门控（`autoSpeakCloudTts` 与豆包同列）；转写稿跟随原文语言（promptLocal，不套英文不变式）。
+30. **DeepSeek 流式失败不得丢字、不得报成整条失败**——喂给 WS 的各段拼回与转写稿一致（除段间空白）；
+    首段失败/零音频 → 降级整段 POST；中途失败 → 保留已播段 + warn；计费超限轮转会话续喂，PCM 无缝拼接。
 
 ## 8. 设计决策（为什么）
 
@@ -556,6 +590,8 @@ voice:
   TTS `synthesizeVolcengine`/`buildVolcReqParams`；双向流 `streamSpeak`；
   服务端缓存 `serverCacheAllowed`/`serverCacheMark`/`ttsFpOf`。
 - `volcengine-ws.js`：双向流协议（帧编解码 / 事件 / 连接管理器）。
+- `deepseek-ws.js`：DeepSeek WS 流式客户端（JSON 文本事件 + 二进制音频帧；单会话，无豆包的 session 概念）；
+  整段 `synthesizeDeepseek`/分段 `splitForBilling`/流式 `streamSpeakDeepseek`/门控与分流 `isStreamingDeepseek` 在 `index.js`。
 - `local-runtime.js`：本地合成运行时——`resolveModelDir`（模型目录解析）/ `inspectModelDir`（缺什么）、
   `createLocalRuntime`（`ensureLoaded` 懒加载 / `streamPcm` 分块合成 / `synthesizeWav` 整段 / `status` 自检）、
   `float32ToInt16Pcm` / `pcmToWav`（Float32→16bit 小端）、`speakError`（带 kind 的错误）。
