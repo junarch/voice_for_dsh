@@ -46,12 +46,13 @@ const settings = {
   update: async (_ns, patch) => {
     settingsState.raw = deepMerge(settingsState.raw, patch)
     const next = resolveConfig(settingsState.raw)
-    // 与 loader._commitVolatile 一致：把新解析出的候选快照提交进旧引用（热更新）
+    // 与 loader._commitVolatile 一致：**只**把候选快照提交进插件正握着的那些引用，
+    // 引用本身不换代（换成本次解析出的新树就等于写进没人看的对象——第二次 setConfig 起就不生效了，
+    // 探针会误判"WS 流式没走"，实际插件读到的还是上一次的值）。
     for (const { path, ref } of collectRefs(liveConfig)) {
       const source = path.reduce((v, k) => Reflect.get(v, k), next)
       ref[VOLATILE_WRITE](source.get())
     }
-    liveConfig = next
   },
 }
 function collectRefs(value, path = []) {
@@ -83,7 +84,9 @@ const routes = []
 const webServer = { register: (r) => routes.push(r) }
 const ctx = {
   get: (n) => (n === 'llm' ? llm : n === 'sessions' ? sessions : n === 'configEditor' ? { configuration: () => [] } : undefined),
-  settings, webServer, on: () => {}, effect: () => {},
+  settings, webServer, on: () => {},
+  // 路由登记挂在 ctx.effect 上（卸载时摘掉）；替身必须立刻执行回调，否则路由表为空
+  effect: (fn) => { try { fn() } catch { /* 替身：不收集撤销函数 */ } },
 }
 
 let liveConfig = null
