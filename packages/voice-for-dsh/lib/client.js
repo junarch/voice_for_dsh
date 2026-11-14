@@ -331,6 +331,7 @@ window.__ModuleLoader__.load({
 
     /** Host /meta 不可用（旧 Host 裂脑）时的兜底清单，保证下拉不空。 */
     var VOICE_CUSTOM = "__voice_custom__"; // speaker 下拉的「自定义」占位值（非真实音色 id）
+    var l2OpenPersist = false; // L2 层展开状态：模块级持久（宿主重连/设置节重挂不回弹，用户点收起就保持收起）
     var DEEPSEEK_VOICES_FALLBACK = [ // Host /meta 不可用时的兜底音色清单（正常走 meta.deepseekVoices）
       { id: "stella", name: "海星（女声）" },
       { id: "tide", name: "暗潮（男声）" },
@@ -2055,10 +2056,11 @@ window.__ModuleLoader__.load({
       const deployPair = React.useState(null);
       const deployState = deployPair[0];
       const setDeployState = deployPair[1];
-      // 折叠状态：只放组件内，不持久化、不写 Config（切引擎时自动展开 L2）
-      const l2Pair = React.useState(false);
+      // 折叠状态：插件级持久（模块变量）——宿主重连导致设置节重挂时，用户点过的展开/收起不回弹。
+      // 曾在宿主连接抖动时被重挂重置回收起，表现为"收起按钮点不动"。
+      const l2Pair = React.useState(l2OpenPersist);
       const l2Open = l2Pair[0];
-      const setL2Open = l2Pair[1];
+      const setL2Open = (v) => { l2OpenPersist = !!v; l2Pair[1](!!v); };
       // 保存状态：dirty=页面草稿与"已落盘配置"不一致；saveNote=给用户看的结果（已保存/失败/没落盘）
       const dirtyPair = React.useState(false);
       const dirty = dirtyPair[0];

@@ -382,6 +382,23 @@ await new Promise((r) => setTimeout(r, 450))
 tree = await flush()
 check('改 DeepSeek 播报语种 → 自动保存 tts.deepseek.language=en',
   saveCalls.some((p) => p.tts && p.tts.deepseek && p.tts.deepseek.language === 'en'), saveCalls)
+// 重挂不回弹：l2Open 模块级持久——宿主重连导致设置节重挂时，点过的展开/收起保持（曾回弹成"收不起"）
+tree = await mount(function CaseDsRemount() { return reactStub.createElement(settingsComponent) }, (c) => {
+  c.tts.provider = 'deepseek'
+  c.tts.deepseek = { apiKey: 'ds-key', voiceId: 'tide', language: 'auto', streaming: true }
+})
+check('重挂后：保持展开（不回弹）', String(layerNode(tree, '当前引擎声音设置').props.className || '').split(/\s+/).includes('open'),
+  layerNode(tree, '当前引擎声音设置').props.className)
+const dsToggle2 = flatten(layerNode(tree, '当前引擎声音设置')).find((n) => n.kind === 'element' && n.type === 'button' && n.props.className === 'dsh-voice-layer-toggle')
+dsToggle2.props.onClick()
+tree = await flush()
+tree = await mount(function CaseDsRemount2() { return reactStub.createElement(settingsComponent) }, (c) => {
+  c.tts.provider = 'deepseek'
+  c.tts.deepseek = { apiKey: 'ds-key', voiceId: 'tide', language: 'auto', streaming: true }
+})
+check('重挂后：保持收起（不回弹）', !(String(layerNode(tree, '当前引擎声音设置').props.className || '').split(/\s+/).includes('open')),
+  layerNode(tree, '当前引擎声音设置').props.className)
+tree = await expand(tree, '当前引擎声音设置')
 // 还原引擎到豆包：后续用例（case 7 的 promptCloud 断言）依赖豆包视图
 engineSelect(tree).props.onChange({ target: { value: 'volcengine' } })
 tree = await flush()
