@@ -332,6 +332,7 @@ window.__ModuleLoader__.load({
     /** Host /meta 不可用（旧 Host 裂脑）时的兜底清单，保证下拉不空。 */
     var VOICE_CUSTOM = "__voice_custom__"; // speaker 下拉的「自定义」占位值（非真实音色 id）
     var l2OpenPersist = false; // L2 层展开状态：模块级持久（宿主重连/设置节重挂不回弹，用户点收起就保持收起）
+    var l2Debug = true; // 【临时调试】收起问题定位开关，定位后关掉
     var DEEPSEEK_VOICES_FALLBACK = [ // Host /meta 不可用时的兜底音色清单（正常走 meta.deepseekVoices）
       { id: "stella", name: "海星（女声）" },
       { id: "tide", name: "暗潮（男声）" },
@@ -2057,10 +2058,32 @@ window.__ModuleLoader__.load({
       const deployState = deployPair[0];
       const setDeployState = deployPair[1];
       // 折叠状态：插件级持久（模块变量）——宿主重连导致设置节重挂时，用户点过的展开/收起不回弹。
-      // 曾在宿主连接抖动时被重挂重置回收起，表现为"收起按钮点不动"。
+      // 【临时调试】l2Debug 开启时打点：谁在改 l2Open、层 class 是否被外部改写（定位"收不起"抖动）。
       const l2Pair = React.useState(l2OpenPersist);
       const l2Open = l2Pair[0];
-      const setL2Open = (v) => { l2OpenPersist = !!v; l2Pair[1](!!v); };
+      const setL2Open = (v) => { if (l2Debug) console.log("[voice] setL2Open ->", !!v); l2OpenPersist = !!v; l2Pair[1](!!v); };
+      React.useEffect(() => {
+        if (!l2Debug) return;
+        console.log("[voice] settings section MOUNT（l2OpenPersist=", l2OpenPersist, "）");
+        return () => console.log("[voice] settings section UNMOUNT");
+      }, []);
+      React.useEffect(() => {
+        if (!l2Debug) return;
+        console.log("[voice] l2Open committed:", l2Open);
+      }, [l2Open]);
+      // 【临时调试】监视 L2 层 class 的每一次变化（含非 React 来源的外部改写/重挂）
+      React.useEffect(() => {
+        if (!l2Debug || !cfg) return;
+        const obs = new MutationObserver((muts) => {
+          for (const m of muts) {
+            const t = m.target;
+            if (!(t.textContent || "").includes("当前引擎声音设置")) continue;
+            console.log("[voice] l2 layer class ->", String(t.className || ""), "（" + (t.querySelector(".dsh-voice-layer-body") ? "body 在" : "body 无") + "）");
+          }
+        });
+        obs.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class"] });
+        return () => obs.disconnect();
+      }, [cfg]);
       // 保存状态：dirty=页面草稿与"已落盘配置"不一致；saveNote=给用户看的结果（已保存/失败/没落盘）
       const dirtyPair = React.useState(false);
       const dirty = dirtyPair[0];
