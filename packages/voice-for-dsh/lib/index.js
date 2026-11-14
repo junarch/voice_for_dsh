@@ -264,6 +264,10 @@ const dsAudioCache = new Map()
 const DS_AUDIO_CACHE_MAX = 20                   // 条数上限
 const DS_AUDIO_CACHE_BYTES = 200 * 1024 * 1024  // 总字节预算（PCM@24kHz≈2.9MB/分钟，防长稿把 Host 内存吃穿）
 let dsAudioCacheBytes = 0                       // 当前缓存总字节（写入/淘汰时维护）
+/** 正在生成中的 DeepSeek 会话（键 = 重播缓存键）：用户停止播放后仍会把音频收完（文本已下发、计费已发生），
+ *  下一次点同一消息遇到它就先等它收完再播缓存，绝不并行再开一条 WS 重合成（那才是真的重复计费）。 */
+const dsInflight = new Map()
+const DS_JOIN_WAIT_MS = 12000                   // 重播等待上一代收完的上限；超时才回落到自己重新合成
 
 /** 段落粒度情感指令的 LLM 调用上限（成本闸门）。
  * 每两句话就查一次 LLM 会给长回复叠出几十次辅助调用（每次都要带完整指令 system prompt），
@@ -1159,6 +1163,22 @@ function apply(ctx, config) {
     const hash = createHash('sha1').update(String(transcript || ''), 'utf8').digest('hex').slice(0, 16)
     return String(messageId) + ':' + fp + ':' + hash
   }
+  /** 等同一消息的上一代把音频收完（用户播两句就停 → 它还在后台收尾）。
+   *  返回 aborted（用户又停了）/ timeout（超时，调用方改走自己重合成）/ done。 */
+  async function waitDeepseekInflight(flight, run, ms) {
+    const startedAt = Date.now()
+    while (!flight.done) {
+      if (run.stopped) return 'aborted'
+      if (Date.now() - startedAt > (ms || DS_JOIN_WAIT_MS)) return 'timeout'
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    return flight.error ? 'failed' : 'done'
+  }
+  /** 把已合成的 PCM 段直接入播放队列（重播缓存命中路径）。 */
+  function queueCachedDeepseekSegments(run, segs) {
+    for (const seg of segs) run.queue.push({ id: storeAudio(seg, 'audio/pcm'), format: 'pcm' })
+    run.segments = segs.length
+  }
   /** DeepSeek 整段 POST：单段文本 → 裸 PCM（24kHz/16bit/单声道）。非 2xx/审核拒绝 → http，超时 → timeout。 */
   async function deepseekPostPcm(text, cfg, voiceId) {
     const v = cfg.tts.deepseek
@@ -1737,13 +1757,17 @@ function apply(ctx, config) {
       finished: false, stopped: false, error: '', warn: '', transcript: '',
       abort: null, effortPlan: null, effortMapped: false, effortNote: '', paragraphs: 0, at: Date.now(),
       force: false, // true = 重新生成（跳过转写缓存，重新转写+合成，覆盖旧缓存条目）
+      provider: ttsProviderOf(cfg), // 停止语义按引擎分：DeepSeek 停止要先把本次会话的音频收完
     }
     return run
   }
-  /** 立即中止一个流式 run：置 stopped、中止 LLM、直接关 WS（残留交给 streamSpeak 清理）。 */
-  function stopRun(run) {
+  /** 立即中止一个流式 run：置 stopped、中止 LLM、直接关 WS（残留交给 streamSpeak 清理）。
+   *  opts.keepSynthesis：用户停止播放时只停播放、不掐 DeepSeek 的 WS（文本已下发、钱已经花了，
+   *  让它把音频收完写进重播缓存；下一次点同一消息直接命中，不再重合成）。抢占/卸载/等待超时仍硬中止。 */
+  function stopRun(run, opts) {
     if (!run) return
     run.stopped = true
+    if (opts && opts.keepSynthesis && run.provider === 'deepseek' && run.conn) return
     try { if (run.abort) run.abort.abort() } catch {}
     try { if (run.conn) run.conn.close() } catch {}
   }
@@ -1756,8 +1780,13 @@ function apply(ctx, config) {
   }
   /** 后台启动流式管线（不 await）；流式失败且零音频时自动降级整段合成（豆包 mp3 / 本地、DeepSeek wav）。 */
   function runPipeline(run, found, cfg) {
-    // 新播报强制中止上一个流式 run（防并发 WS / 混音 / 白烧钱）
-    if (currentStreamRun && currentStreamRun !== run && !currentStreamRun.finished) stopRun(currentStreamRun)
+    // 新播报强制中止上一个流式 run（防并发 WS / 混音 / 白烧钱）；
+    // 例外：同一消息的非 regen 重播——上一代可能刚被"播两句就停"，让它把音频收完（新 run 会等它），
+    // 掐掉就等于白付一次合成且下次还得再合成一次。
+    if (currentStreamRun && currentStreamRun !== run && !currentStreamRun.finished) {
+      const sameSource = currentStreamRun.sessionId === run.sessionId && currentStreamRun.messageId === run.messageId
+      stopRun(currentStreamRun, { keepSynthesis: sameSource && !run.force })
+    }
     streamRuns.set(run.id, run)
     currentStreamRun = run
     const isLocal = isLocalProvider(cfg)
@@ -1981,14 +2010,27 @@ function apply(ctx, config) {
 
     // 1.5) 音频重播缓存命中：同消息+同音色/语种+同转写稿 → 直接复用已合成段（零 TTS 计费、瞬时出声）。
     // regen（重新生成）绝不命中；试听不走流式路径，天然不读写。
-    if (!run.force) {
-      const hit = dsAudioCache.get(dsAudioKeyOf(run.messageId, cfg, transcript))
-      if (hit && hit.segs.length) {
-        for (const seg of hit.segs) run.queue.push({ id: storeAudio(seg, 'audio/pcm'), format: 'pcm' })
-        run.segments = hit.segs.length
-        console.log('[voice] deepseek replay: audio cache hit, ' + hit.segs.length + ' segments（不重复计费）')
+    const audioKey = dsAudioKeyOf(run.messageId, cfg, transcript)
+    const hit = !run.force ? dsAudioCache.get(audioKey) : null
+    if (hit && hit.segs.length) {
+      queueCachedDeepseekSegments(run, hit.segs)
+      console.log('[voice] deepseek replay: audio cache hit, ' + hit.segs.length + ' segments（不重复计费）')
+      return
+    }
+    // 同一消息的上一代还在后台收音频（用户播两句就停）：等它收完、直接播缓存。
+    // 并行再开一条 WS 重合成才是真的重复计费；等待期间客户端只看到 pending（徽标保持"朗读中"）。
+    const waiting = !run.force ? dsInflight.get(audioKey) : null
+    if (waiting) {
+      const waited = await waitDeepseekInflight(waiting, run)
+      if (waited === 'aborted') return
+      const after = dsAudioCache.get(audioKey)
+      if (after && after.segs.length) {
+        queueCachedDeepseekSegments(run, after.segs)
+        console.log('[voice] deepseek replay: 等上一代收完后命中缓存，' + after.segs.length + ' segments（不重复计费）')
         return
       }
+      // 超时/上一代失败：别把两条 WS 一起挂着，收掉旧的再自己合成
+      if (waited === 'timeout' && waiting.run) stopRun(waiting.run)
     }
 
     // 2) 分句切段（与本地同一切分器：句末优先，退逗号，最后硬切）
@@ -2016,65 +2058,85 @@ function apply(ctx, config) {
       return c
     }
     let hadError = false
-    try {
-      conn = await startConn()
-      for (let i = 0; i < segments.length; i++) {
-        if (run.stopped) return
-        // 不变式 1：发给 TTS 的文字不得含 [# 指令标签（豆包/DeepSeek 都会照读）——逐段剥离 + 净化
-        const seg = sanitizeForSpeech(extractVoiceTags(segments[i]).clean)
-        if (!seg) continue
-        const w = billingCharsOf(seg)
-        const b = Buffer.byteLength(seg, 'utf8')
-        if (billed + w > DEEPSEEK_STREAM.maxBillingChars || billedBytes + b > DEEPSEEK_STREAM.maxBodyBytes) {
-          // 轮转会话：收尾当前会话（剩余音频继续流入队列），开新连接续喂——PCM 同格式无缝拼接
-          const old = conn
-          conn = null
-          try { await old.finishText(DEEPSEEK_STREAM.finishTimeout) } finally { old.close() }
-          conn = await startConn()
+    // 登记"这一代还在生成"：停止播放后它仍会收尾（见 stopRun 的 keepSynthesis），
+    // 下一次点同一消息会等它收完直接播缓存，不再并行开一条 WS 重合成。
+    const flight = { key: audioKey, done: false, error: '', at: Date.now(), run }
+    dsInflight.set(audioKey, flight)
+    const generate = async () => {
+      try {
+        conn = await startConn()
+        for (let i = 0; i < segments.length; i++) {
+          if (run.stopped) return
+          // 不变式 1：发给 TTS 的文字不得含 [# 指令标签（豆包/DeepSeek 都会照读）——逐段剥离 + 净化
+          const seg = sanitizeForSpeech(extractVoiceTags(segments[i]).clean)
+          if (!seg) continue
+          const w = billingCharsOf(seg)
+          const b = Buffer.byteLength(seg, 'utf8')
+          if (billed + w > DEEPSEEK_STREAM.maxBillingChars || billedBytes + b > DEEPSEEK_STREAM.maxBodyBytes) {
+            // 轮转会话：收尾当前会话（剩余音频继续流入队列），开新连接续喂——PCM 同格式无缝拼接
+            const old = conn
+            conn = null
+            try { await old.finishText(DEEPSEEK_STREAM.finishTimeout) } finally { old.close() }
+            conn = await startConn()
+          }
+          conn.sendText(seg)
+          billed += w; billedBytes += b
         }
-        conn.sendText(seg)
-        billed += w; billedBytes += b
+        await conn.finishText(DEEPSEEK_STREAM.finishTimeout)
+      } catch (error) {
+        if (run.stopped) return
+        const detail = String((error && error.message) || run.fatalDs || error)
+        const kind = /超时|timeout/i.test(detail) ? 'timeout' : 'http' // 超时走专用文案（不变式 12，不粗化成 http）
+        if (run.segments === 0) {
+          // 首段就失败（一个字节都没收到）：整段兜底交给 runPipeline（降级后可播完，用户无感）
+          throw speakError(kind, 'deepseek 流式失败: ' + detail)
+        }
+        // 已有段：保留已播内容，记降级说明 + 保留错误分类（客户端 toast 按 kind 选文案）
+        hadError = true
+        if (!run.errorKind) run.errorKind = kind
+        run.warn = (run.warn ? run.warn + '；' : '') + '流式中断，后续内容未播报（' + detail.slice(0, 120) + '）'
+      } finally {
+        try { if (conn) conn.close() } catch {}
       }
-      await conn.finishText(DEEPSEEK_STREAM.finishTimeout)
-    } catch (error) {
+      // 会话正常结束（服务端 finish code=success）→ 写音频重播缓存：从 dsFrames 快照按 ~1s 切段
+      // （不能事后反查 run.queue+audioStore——真实客户端边播边取、取走即删）。
+      // 与播放是否被停无关：文本已经整段下发、字符计费已经发生，停止播放不等于放弃这次合成；
+      // 只有生成本身失败（hadError）或没有任何音频帧才不写（零音频交给下面统一走降级）。
+      if (!hadError && dsFrames.length) {
+        const whole = Buffer.concat(dsFrames)
+        const segs = []
+        for (let off = 0; off < whole.length; off += STREAM.segmentBytes) {
+          segs.push(Buffer.from(whole.subarray(off, Math.min(off + STREAM.segmentBytes, whole.length))))
+        }
+        const stale = dsAudioCache.get(audioKey) // regen 会覆盖同键条目：先扣掉旧的字节预算
+        if (stale) dsAudioCacheBytes -= (stale.bytes || 0)
+        dsAudioCache.set(audioKey, { at: Date.now(), segs, bytes: whole.length })
+        dsAudioCacheBytes += whole.length
+        while (dsAudioCache.size > DS_AUDIO_CACHE_MAX || dsAudioCacheBytes > DS_AUDIO_CACHE_BYTES) {
+          const oldest = dsAudioCache.keys().next().value
+          const dropped = dsAudioCache.get(oldest)
+          dsAudioCache.delete(oldest)
+          dsAudioCacheBytes -= (dropped && dropped.bytes) || 0
+          if (dsAudioCache.size === 0) break
+        }
+      }
+      // 播放被停（起播前/中途）：不入队、不降级——上面的缓存已经写好，下次点同一消息直接命中
       if (run.stopped) return
-      const detail = String((error && error.message) || run.fatalDs || error)
-      const kind = /超时|timeout/i.test(detail) ? 'timeout' : 'http' // 超时走专用文案（不变式 12，不粗化成 http）
-      if (run.segments === 0) {
-        // 首段就失败（一个字节都没收到）：整段兜底交给 runPipeline（降级后可播完，用户无感）
-        throw speakError(kind, 'deepseek 流式失败: ' + detail)
+      flushSegment(run) // 剩余半段也交给客户端（能播多少播多少）
+      // 零音频但会话正常结束（服务端没回任何帧/切段全被剥空）：必须降级整段——静音收场是 bug（不变式 30）
+      if (!run.segments && !hadError) {
+        throw speakError('http', 'deepseek 流式零音频（服务端未返回音频帧），降级整段合成')
       }
-      // 已有段：保留已播内容，记降级说明 + 保留错误分类（客户端 toast 按 kind 选文案）
-      hadError = true
-      if (!run.errorKind) run.errorKind = kind
-      run.warn = (run.warn ? run.warn + '；' : '') + '流式中断，后续内容未播报（' + detail.slice(0, 120) + '）'
+      if (hadError && !run.error) run.error = run.warn
+    }
+    try {
+      await generate()
     } finally {
-      try { if (conn) conn.close() } catch {}
+      // 无论成功、失败、被停、抛错，都要让"等在后面的重播"看到这一代结束了
+      flight.error = run.error || ''
+      flight.done = true
+      if (dsInflight.get(audioKey) === flight) dsInflight.delete(audioKey)
     }
-    flushSegment(run) // 剩余半段也交给客户端（能播多少播多少）
-    // 零音频但会话正常结束（服务端没回任何帧/切段全被剥空）：必须降级整段——静音收场是 bug（不变式 30）
-    if (!run.segments && !hadError && !run.stopped) {
-      throw speakError('http', 'deepseek 流式零音频（服务端未返回音频帧），降级整段合成')
-    }
-    // 完整合成成功 → 写音频重播缓存：从 dsFrames 快照按 ~1s 切段（不能事后反查 run.queue+audioStore——
-    // 真实客户端边播边取、取走即删）。试听不走流式；regen 重合成会覆盖同键条目；停止的 run 不写（不完整）。
-    if (!run.stopped && !hadError && dsFrames.length) {
-      const whole = Buffer.concat(dsFrames)
-      const segs = []
-      for (let off = 0; off < whole.length; off += STREAM.segmentBytes) {
-        segs.push(Buffer.from(whole.subarray(off, Math.min(off + STREAM.segmentBytes, whole.length))))
-      }
-      dsAudioCache.set(dsAudioKeyOf(run.messageId, cfg, transcript), { at: Date.now(), segs, bytes: whole.length })
-      dsAudioCacheBytes += whole.length
-      while (dsAudioCache.size > DS_AUDIO_CACHE_MAX || dsAudioCacheBytes > DS_AUDIO_CACHE_BYTES) {
-        const oldest = dsAudioCache.keys().next().value
-        const stale = dsAudioCache.get(oldest)
-        dsAudioCache.delete(oldest)
-        dsAudioCacheBytes -= (stale && stale.bytes) || 0
-        if (dsAudioCache.size === 0) break
-      }
-    }
-    if (hadError && !run.error) run.error = run.warn
   }
 
   async function transcribe(sessionId, messageId, opts = {}) {
@@ -2509,12 +2571,12 @@ function apply(ctx, config) {
       const sid = args && args.sessionId ? String(args.sessionId) : ''
       if (!sid) {
         if (currentAbort) currentAbort.abort()
-        for (const run of streamRuns.values()) stopRun(run)
+        for (const run of streamRuns.values()) stopRun(run, { keepSynthesis: true })
         pendingSpeakQueue.length = 0
         return { ok: true }
       }
       for (const run of streamRuns.values()) {
-        if (run.sessionId === sid) stopRun(run)
+        if (run.sessionId === sid) stopRun(run, { keepSynthesis: true })
       }
       for (let i = pendingSpeakQueue.length - 1; i >= 0; i--) {
         if (pendingSpeakQueue[i].sessionId === sid) pendingSpeakQueue.splice(i, 1)

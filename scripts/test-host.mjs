@@ -794,13 +794,14 @@ await rpc('setConfig', { patch: { autoSpeak: true } }) // 还原到本节之前�
 
 section('T11g DeepSeek TTS：WS 流式（对齐豆包管线：分段喂字/音频帧入队/finish）')
 // ---- WebSocket 替身（模拟 DeepSeek 流式服务端：text 事件→假 PCM，finish_text→finish 帧） ----
-const dsWsState = { connections: 0, texts: [], finishTexts: 0, lastUrl: '', failOpen: false, dropAudio: false, suppressFinish: false }
+const dsWsState = { connections: 0, texts: [], finishTexts: 0, lastUrl: '', failOpen: false, dropAudio: false, suppressFinish: false, holdFinish: false, closes: 0, lastWs: null }
 class MockDeepseekWS {
   constructor(url, opts) {
     this.binaryType = 'blob'
     this.url = url
     dsWsState.lastUrl = url
     dsWsState.connections++
+    dsWsState.lastWs = this
     if (dsWsState.failOpen) setTimeout(() => this.onerror && this.onerror({ message: 'conn refused' }), 0)
     else setTimeout(() => this.onopen && this.onopen(), 0)
   }
@@ -821,10 +822,12 @@ class MockDeepseekWS {
     } else if (msg.event === 'finish_text') {
       dsWsState.finishTexts++
       if (!dsWsState.dropAudio) emitAudio(Buffer.alloc(5000, 0x55))
-      if (!dsWsState.suppressFinish) emitText({ event: 'finish', code: 'success' })
+      const finishNow = () => emitText({ event: 'finish', code: 'success' })
+      if (dsWsState.holdFinish) this.releaseFinish = finishNow // 模拟"服务端还在收尾"：由测试决定何时结束
+      else if (!dsWsState.suppressFinish) finishNow()
     }
   }
-  close() { this.closed = true; setTimeout(() => this.onclose && this.onclose({ code: 1000, reason: '' }), 0) }
+  close() { if (this.closed) return; this.closed = true; dsWsState.closes++ }
 }
 globalThis.WebSocket = MockDeepseekWS
 dsWsState.connections = 0; dsWsState.texts = []; dsWsState.finishTexts = 0
@@ -942,6 +945,46 @@ check('长稿轮转：连接 ≥2 条', dsWsState.connections >= 2, dsWsState.co
 check('长稿轮转：每条连接各 finish 一次', dsWsState.finishTexts === dsWsState.connections, { finish: dsWsState.finishTexts, conn: dsWsState.connections })
 check('长稿流式段 ≥1 且 format=pcm（轮转拼接无缝）', ddr.res && ddr.urls.length >= 1 && ddr.formats.every((f) => f === 'pcm'), { n: ddr.urls.length })
 check('轮转喂字总量不丢字', dsWsState.texts.join('') === longText, { fed: dsWsState.texts.join('').length, want: longText.length })
+section('T11k DeepSeek：播两句就停 → 后台把本次会话收完写缓存；立即重播等它、不重连 WS')
+globalThis.WebSocket = MockDeepseekWS
+sessionEvents.push(msgEvent('mdsstop', 48, '停止后也要把音频收完。'))
+dsWsState.connections = 0; dsWsState.texts = []; dsWsState.finishTexts = 0; dsWsState.closes = 0
+dsWsState.holdFinish = true // 模拟"服务端还在收尾"：finish 帧由测试决定何时到
+await rpc('setConfig', { patch: { tts: { provider: 'deepseek', deepseek: { apiKey: 'ds-key', voiceId: 'tide', streaming: true } }, autoSpeakCloudTts: true } })
+llmState.responses = [{ text: '停止后也要把音频收完。'.repeat(30), finish: 'stop' }]
+const dsCallsBeforeStop = llmState.calls.length
+const sCut = await rpc('speak', { sessionId: 's1', messageId: 'mdsstop', regen: true })
+check('停止语义：首播进入流式', sCut.ok === true && sCut.mode === 'stream', sCut)
+// 等第一段音频（= 用户已经听到声音），再模拟"播了两句就停"
+let cutFirst = null
+for (let i = 0; i < 120; i++) {
+  cutFirst = await rpc('streamNext', { runId: sCut.runId })
+  if (cutFirst.url) break
+  await new Promise((r) => setTimeout(r, 25))
+}
+check('停止前已拿到音频段（模拟"播了两句"）', !!(cutFirst && cutFirst.url), cutFirst)
+const ownerWs = dsWsState.lastWs
+await rpc('stop', { sessionId: 's1' })
+check('停止播放不掐 WS（文本已计费，继续收完本次会话）', !!ownerWs && ownerWs.closed !== true, { closed: ownerWs && ownerWs.closed })
+// 立即重播（同一消息、非 regen）：不新开 WS，先等上一代收完再播缓存
+const connsBeforeCutReplay = dsWsState.connections
+const llmCallsAfterFirst = llmState.calls.length
+const sCutReplay = await rpc('speak', { sessionId: 's1', messageId: 'mdsstop' })
+check('立即重播：不新开 WS（在等上一代收完）', dsWsState.connections === connsBeforeCutReplay, { conn: dsWsState.connections, before: connsBeforeCutReplay })
+const cutExpectedBytes = dsWsState.texts.length * 20000 + 5000 // mock 每个 text 帧 20KB + finish_text 尾巴 5KB
+if (dsWsState.lastWs && dsWsState.lastWs.releaseFinish) dsWsState.lastWs.releaseFinish()
+dsWsState.holdFinish = false
+const doneCut = await awaitStreamDone(sCut.runId)
+check('被停掉的首播：run 正常收尾（不报错）', !!(doneCut.res && doneCut.res.done) && !doneCut.res.error, doneCut.res)
+const doneCutReplay = await awaitStreamDoneFetch(sCutReplay.runId)
+const cutReplayBytes = doneCutReplay.fetched.reduce((a, b) => a + b, 0)
+check('停止后立即重播：命中缓存出完整音频（不重连 WS）',
+  doneCutReplay.res && doneCutReplay.fetched.length >= 1 && dsWsState.connections === connsBeforeCutReplay,
+  { n: doneCutReplay.fetched.length, conn: dsWsState.connections, before: connsBeforeCutReplay })
+check('停止后立即重播：字节总量 = 首播收完的那份（没有截断、没有重合成）',
+  cutReplayBytes === cutExpectedBytes, { got: cutReplayBytes, want: cutExpectedBytes })
+check('停止后重播：转写零 LLM（缓存命中）', llmState.calls.length === llmCallsAfterFirst, { calls: llmState.calls.length, before: llmCallsAfterFirst })
+
 globalThis.WebSocket = MockVolcWS
 // 还原到本节之前的豆包配置（streaming 必须回 true，否则殃及后续豆包流式测试）
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', streaming: true } } } })
@@ -2704,3 +2747,7 @@ rmSync(home, { recursive: true, force: true })
 console.log('\n结果: ' + passed + ' passed, ' + failed + ' failed')
 console.log('(B 类"外部事实快照"断言若失败：先跑 node scripts/tts-probe.mjs 拿新证据，再三处同步更新，见文件头第 5 条)')
 process.exit(failed ? 1 : 0) // 退出码：0=全过，1=有失败（脚本工具靠它判断成败）
+
+
+
+
