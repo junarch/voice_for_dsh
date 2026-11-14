@@ -41,14 +41,17 @@ export function createDeepseekStreamClient(opts) {
   let intentionalClose = false
 
   function fail(err) {
+    clearTimeout(readyTimer)
     if (fatal) return
     fatal = err
     if (!readySettled) { readySettled = true; readyReject(err) }
     try { finishReject(err) } catch { /* 已结束的会话：忽略 */ }
     try { onFatal && onFatal(err) } catch {}
   }
+  // 握手超时：服务端收 TCP 不回 101（代理黑洞/网络异常）时，ready 永不 settle 会把 run 卡死在 startConn
+  const readyTimer = setTimeout(() => fail(new Error('websocket 握手超时（15s）')), 15000)
 
-  ws.onopen = () => { readySettled = true; readyResolve() }
+  ws.onopen = () => { clearTimeout(readyTimer); readySettled = true; readyResolve() }
   ws.onerror = () => { if (!fatal) fail(new Error('websocket transport error')) }
   ws.onclose = (e) => {
     if (intentionalClose || fatal) return
@@ -76,7 +79,8 @@ export function createDeepseekStreamClient(opts) {
     // 其余事件（进度/心跳文本）忽略
   }
   if (signal) {
-    const onAbort = () => { intentionalClose = true; try { ws.close() } catch {} }
+    // abort 必须同时唤醒挂起的 await（ready/finishText），否则 run 卡死到 60s 超时才收尾
+    const onAbort = () => { intentionalClose = true; try { ws.close() } catch {}; fail(new Error('aborted')) }
     if (signal.aborted) onAbort()
     else signal.addEventListener('abort', onAbort, { once: true })
   }

@@ -753,6 +753,7 @@ sessionEvents.push(
   msgEvent('mdsfallback', 44, '深海兜底内容'),
   msgEvent('mdsrot', 45, ''),
   msgEvent('mdsgate', 46, 'DeepSeek 门控测试内容'),
+  msgEvent('mdszero', 47, '零音频降级测试内容'),
 )
 sessionEvents[sessionEvents.length - 2] = msgEvent('mdsrot', 45, '第一句。'.repeat(1600)) // 1600×7=11200 计费字符 > 9500 预算 → 必须轮转
 check('ttsProviderOf：deepseek 归一', ttsProviderOf({ tts: { provider: 'deepseek' } }) === 'deepseek' && ttsProviderOf({ tts: { provider: 'unknown-x' } }) === 'browser')
@@ -819,7 +820,7 @@ class MockDeepseekWS {
       if (!dsWsState.dropAudio) emitAudio(Buffer.alloc(20000, 0x44))
     } else if (msg.event === 'finish_text') {
       dsWsState.finishTexts++
-      emitAudio(Buffer.alloc(5000, 0x55))
+      if (!dsWsState.dropAudio) emitAudio(Buffer.alloc(5000, 0x55))
       if (!dsWsState.suppressFinish) emitText({ event: 'finish', code: 'success' })
     }
   }
@@ -850,7 +851,16 @@ check('deepseek 重播：转写缓存命中（LLM 调用数不变）', llmState.
 check('deepseek 重播：音频缓存命中（不重连 WS，零 TTS 计费）', dsWsState.connections === connsBeforeReplay, { conn: dsWsState.connections, before: connsBeforeReplay })
 check('deepseek 重播：稿子与首播一致（不是重新生成的）',
   (ddsReplay.res.transcript || '') === (sdd.res.transcript || ''), { replay: ddsReplay.res.transcript, first: sdd.res.transcript })
-check('deepseek 重播：段数与首播一致（同一份音频）', ddsReplay.res && ddsReplay.urls.length === sdd.urls.length, { replay: ddsReplay.urls.length, first: sdd.urls.length })
+const firstBytes = await sdd.urls.reduce(async (acc, u) => {
+  const a = await fetchAudio(u.replace('/voice/audio/', ''))
+  return (await acc) + a.body.length
+}, Promise.resolve(0))
+const replayBytes = await ddsReplay.urls.reduce(async (acc, u) => {
+  const a = await fetchAudio(u.replace('/voice/audio/', ''))
+  return (await acc) + a.body.length
+}, Promise.resolve(0))
+check('deepseek 重播：音频字节总量与首播一致（同一份音频；重播按 ~1s 重切，段数可不同）',
+  replayBytes === firstBytes && replayBytes > 0, { first: firstBytes, replay: replayBytes })
 // 换音色 → 音频缓存键变 → 未命中重连（防串音）；转写稿仍走缓存（零 LLM）
 await rpc('setConfig', { patch: { tts: { deepseek: { voiceId: 'stella' } } } })
 const sdsStella = await rpc('speak', { sessionId: 's1', messageId: 'mdsws' })
@@ -859,6 +869,41 @@ check('换音色：音频缓存未命中（重连 WS）', dsWsState.connections 
 check('换音色：voice_id=stella 下发', dsWsState.lastUrl.includes('voice_id=stella'), dsWsState.lastUrl)
 check('换音色：稿子仍来自转写缓存（零 LLM）', llmState.calls.length === dsCallsBeforeReplay, llmState.calls.length - dsCallsBeforeReplay)
 await rpc('setConfig', { patch: { tts: { deepseek: { voiceId: 'tide' } } } })
+// 真实客户端行为回归：边流边 fetch（audioStore 一次性取走即删）——音频重播缓存必须仍完整。
+// 曾有 bug：缓存写入反查 run.queue+audioStore，客户端把队列搬空后只存到尾巴段，重播丢开头。
+async function awaitStreamDoneFetch(runId, timeoutMs = 12000) {
+  const fetched = []
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    const r = await rpc('streamNext', { runId })
+    if (r.url) { const a = await fetchAudio(r.url.replace('/voice/audio/', '')); fetched.push(a.body.length); continue }
+    if (r.done) return { fetched, res: r }
+    await new Promise((res) => setTimeout(res, 15))
+  }
+  return { fetched, res: null, timeout: true }
+}
+llmState.responses = [{ text: '真实取段节奏测试。第一句。第二句。第三句。第四句。', finish: 'stop' }]
+const sdf3 = await rpc('speak', { sessionId: 's1', messageId: 'mdszero', regen: true })
+const ddf3 = await awaitStreamDoneFetch(sdf3.runId)
+check('真实取段：首播完整拿到音频（非空、全 pcm）', ddf3.res && ddf3.fetched.length >= 1 && ddf3.fetched.every((n) => n > 0), ddf3)
+const firstFetchBytes = ddf3.fetched.reduce((a, b) => a + b, 0)
+const connsBeforeReal = dsWsState.connections
+const sdsReal = await rpc('speak', { sessionId: 's1', messageId: 'mdszero' })
+const ddsReal = await awaitStreamDoneFetch(sdsReal.runId)
+check('真实取段重播：音频缓存命中（不重连 WS）', dsWsState.connections === connsBeforeReal, { conn: dsWsState.connections, before: connsBeforeReal })
+check('真实取段重播：字节总量与首播完全一致（没有丢开头）',
+  ddsReal.fetched.reduce((a, b) => a + b, 0) === firstFetchBytes && ddsReal.fetched.every((n) => n > 0),
+  { first: ddf3.fetched, replay: ddsReal.fetched })
+
+section('T11j DeepSeek：零音频会话正常 finish → 降级整段（不变式 30；静音收场是 bug）')
+globalThis.WebSocket = MockDeepseekWS
+dsWsState.dropAudio = true
+dsWsState.connections = 0; dsWsState.finishTexts = 0
+llmState.responses = [{ text: '零音频降级测试内容', finish: 'stop' }, { text: '零音频降级测试内容', finish: 'stop' }] // 第二条给降级整段路径
+const sdz = await rpc('speak', { sessionId: 's1', messageId: 'mdszero', regen: true })
+const ddz = await awaitStreamDone(sdz.runId)
+check('零音频：自动降级整段（1 段 wav + warn 含回退）', ddz.res && ddz.urls.length === 1 && ddz.formats[0] === 'wav' && ddz.res.warn && ddz.res.warn.includes('回退'), ddz)
+dsWsState.dropAudio = false
 // 播报语种（与本地引擎同机制）：zh → 转写 prompt 要求中文输出
 await rpc('setConfig', { patch: { tts: { deepseek: { language: 'zh' } } } })
 llmState.responses = [{ text: '语言选择测试。', finish: 'stop' }]

@@ -261,7 +261,9 @@ const DEEPSEEK_STREAM = {
  * 试听与重新生成（↻）绝不读写（防串音，同豆包 cache_config 规则）；换音色/语种/稿子 → 键变 → 自然未命中。
  * 进程内即生命周期：重启桌面端后缓存清空（首次重播重新合成一次）。 */
 const dsAudioCache = new Map()
-const DS_AUDIO_CACHE_MAX = 20 // 条数上限（每条约几分钟音频，内存可控；超出淘汰最旧）
+const DS_AUDIO_CACHE_MAX = 20                   // 条数上限
+const DS_AUDIO_CACHE_BYTES = 200 * 1024 * 1024  // 总字节预算（PCM@24kHz≈2.9MB/分钟，防长稿把 Host 内存吃穿）
+let dsAudioCacheBytes = 0                       // 当前缓存总字节（写入/淘汰时维护）
 
 /** 段落粒度情感指令的 LLM 调用上限（成本闸门）。
  * 每两句话就查一次 LLM 会给长回复叠出几十次辅助调用（每次都要带完整指令 system prompt），
@@ -1994,13 +1996,16 @@ function apply(ctx, config) {
     if (segments.length > 1) console.log('[voice] deepseek stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
 
     // 3) 连接 → 逐段喂（计费超限轮转会话）→ finish_text 收尾；音频帧异步经 onAudio 入队
+    // 帧同步快照进 dsFrames：客户端边播边取、audioStore 一次性取走即删——缓存写入必须用自己留存的帧，
+    // 不能事后反查 run.queue+audioStore（真实客户端会把队列搬空，反查只能拿到尾巴段）。
     const voiceId = deepseekVoiceIdOf(v)
     let conn = null
     let billed = 0, billedBytes = 0
+    const dsFrames = []
     const startConn = async () => {
       const c = createDeepseekStreamClient({
         apiKey: v.apiKey, voiceId,
-        onAudio: (frame) => pushAudioFrame(run, frame),
+        onAudio: (frame) => { pushAudioFrame(run, frame); dsFrames.push(frame) },
         onFatal: (err) => { if (!run.stopped) run.fatalDs = String(err && err.message || err) },
         signal: ac.signal,
         timeoutMs: DEEPSEEK_STREAM.finishTimeout,
@@ -2015,8 +2020,8 @@ function apply(ctx, config) {
       conn = await startConn()
       for (let i = 0; i < segments.length; i++) {
         if (run.stopped) return
-        // 不变式 1：发给 TTS 的文字不得含 [# 指令标签（豆包/DeepSeek 都会照读）——逐段剥离
-        const seg = extractVoiceTags(segments[i]).clean
+        // 不变式 1：发给 TTS 的文字不得含 [# 指令标签（豆包/DeepSeek 都会照读）——逐段剥离 + 净化
+        const seg = sanitizeForSpeech(extractVoiceTags(segments[i]).clean)
         if (!seg) continue
         const w = billingCharsOf(seg)
         const b = Buffer.byteLength(seg, 'utf8')
@@ -2024,8 +2029,7 @@ function apply(ctx, config) {
           // 轮转会话：收尾当前会话（剩余音频继续流入队列），开新连接续喂——PCM 同格式无缝拼接
           const old = conn
           conn = null
-          await old.finishText(DEEPSEEK_STREAM.finishTimeout)
-          old.close()
+          try { await old.finishText(DEEPSEEK_STREAM.finishTimeout) } finally { old.close() }
           conn = await startConn()
         }
         conn.sendText(seg)
@@ -2035,27 +2039,39 @@ function apply(ctx, config) {
     } catch (error) {
       if (run.stopped) return
       const detail = String((error && error.message) || run.fatalDs || error)
+      const kind = /超时|timeout/i.test(detail) ? 'timeout' : 'http' // 超时走专用文案（不变式 12，不粗化成 http）
       if (run.segments === 0) {
         // 首段就失败（一个字节都没收到）：整段兜底交给 runPipeline（降级后可播完，用户无感）
-        throw speakError('http', 'deepseek 流式失败: ' + detail)
+        throw speakError(kind, 'deepseek 流式失败: ' + detail)
       }
       // 已有段：保留已播内容，记降级说明 + 保留错误分类（客户端 toast 按 kind 选文案）
       hadError = true
-      if (!run.errorKind) run.errorKind = 'http'
+      if (!run.errorKind) run.errorKind = kind
       run.warn = (run.warn ? run.warn + '；' : '') + '流式中断，后续内容未播报（' + detail.slice(0, 120) + '）'
     } finally {
       try { if (conn) conn.close() } catch {}
     }
     flushSegment(run) // 剩余半段也交给客户端（能播多少播多少）
-    // 完整合成成功 → 写音频重播缓存（各段 PCM 原样引用；试听/regen/中途失败/停止不写）
-    if (!run.stopped && !hadError && run.segments) {
-      const segs = run.queue.map((q) => { const hit = audioStore.get(q.id); return hit ? hit.buf : null }).filter(Boolean)
-      if (segs.length) {
-        dsAudioCache.set(dsAudioKeyOf(run.messageId, cfg, transcript), { at: Date.now(), segs })
-        while (dsAudioCache.size > DS_AUDIO_CACHE_MAX) {
-          const oldest = dsAudioCache.keys().next().value
-          dsAudioCache.delete(oldest)
-        }
+    // 零音频但会话正常结束（服务端没回任何帧/切段全被剥空）：必须降级整段——静音收场是 bug（不变式 30）
+    if (!run.segments && !hadError && !run.stopped) {
+      throw speakError('http', 'deepseek 流式零音频（服务端未返回音频帧），降级整段合成')
+    }
+    // 完整合成成功 → 写音频重播缓存：从 dsFrames 快照按 ~1s 切段（不能事后反查 run.queue+audioStore——
+    // 真实客户端边播边取、取走即删）。试听不走流式；regen 重合成会覆盖同键条目；停止的 run 不写（不完整）。
+    if (!run.stopped && !hadError && dsFrames.length) {
+      const whole = Buffer.concat(dsFrames)
+      const segs = []
+      for (let off = 0; off < whole.length; off += STREAM.segmentBytes) {
+        segs.push(Buffer.from(whole.subarray(off, Math.min(off + STREAM.segmentBytes, whole.length))))
+      }
+      dsAudioCache.set(dsAudioKeyOf(run.messageId, cfg, transcript), { at: Date.now(), segs, bytes: whole.length })
+      dsAudioCacheBytes += whole.length
+      while (dsAudioCache.size > DS_AUDIO_CACHE_MAX || dsAudioCacheBytes > DS_AUDIO_CACHE_BYTES) {
+        const oldest = dsAudioCache.keys().next().value
+        const stale = dsAudioCache.get(oldest)
+        dsAudioCache.delete(oldest)
+        dsAudioCacheBytes -= (stale && stale.bytes) || 0
+        if (dsAudioCache.size === 0) break
       }
     }
     if (hadError && !run.error) run.error = run.warn
@@ -2076,16 +2092,18 @@ function apply(ctx, config) {
     if (cfg.transcribe.enabled === false) {
       const plain = toPlainSpoken(found.text)
       if (!plain) return { ok: false, error: 'message text empty' }
+      // 不变式 1：直读稿同样不得把 [#...] 指令标签内容读出来（toPlainSpoken 只剥符号、不剥标签内容）
+      const speakable = extractVoiceTags(plain).clean
       const v = cfg.tts.volcengine
       const prov = ttsProviderOf(cfg)
       let audioUrl, ttsError, ttsErrorKind
       try {
         if (prov === 'volcengine') {
-          audioUrl = await synthToRoute(plain, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
+          audioUrl = await synthToRoute(speakable, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
         } else if (prov === 'local') {
-          audioUrl = await synthToRoute(plain, cfg, '')
+          audioUrl = await synthToRoute(speakable, cfg, '')
         } else if (prov === 'deepseek') {
-          audioUrl = await synthToRoute(plain, cfg, '')
+          audioUrl = await synthToRoute(speakable, cfg, '')
         }
       } catch (error) {
         ttsError = String(error && error.message || error)

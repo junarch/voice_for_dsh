@@ -2579,7 +2579,7 @@ window.__ModuleLoader__.load({
           // 无语种/方言/语速/情感行：官方没有这些参数，不支持的选项不显示；播报语言跟随原文。
           ttsEngine === "deepseek" ? React.createElement(React.Fragment, null,
             React.createElement(Row, { label: t("row.apiKey") },
-              React.createElement(TextInput, { type: "password", value: cfg.tts.deepseek.apiKey, onChange: (v) => setField("tts.deepseek.apiKey", v), placeholder: "DeepSeek API Key" })),
+              React.createElement(TextInput, { type: "password", value: (cfg.tts.deepseek && cfg.tts.deepseek.apiKey) || "", onChange: (v) => setField("tts.deepseek.apiKey", v), placeholder: "DeepSeek API Key" })),
             React.createElement(Row, { label: t("row.dsVoice") },
               React.createElement(SelectInput, { value: (cfg.tts.deepseek && cfg.tts.deepseek.voiceId) || "stella", onChange: (v) => setField("tts.deepseek.voiceId", v) },
                 (m.deepseekVoices || DEEPSEEK_VOICES_FALLBACK).map((x) => React.createElement("option", { key: x.id, value: x.id }, x.name)))),

@@ -16,7 +16,7 @@ import path from 'node:path'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
-const KEY = process.env.DEPSEEK_API_KEY || ''
+const KEY = process.env.DEEPSEEK_API_KEY || ''
 if (!KEY) {
   console.error('未找到 DEEPSEEK_API_KEY（env）——探针需要一把 DeepSeek 开放平台 API Key，不落仓库')
   process.exit(1)
