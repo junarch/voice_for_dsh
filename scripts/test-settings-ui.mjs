@@ -363,7 +363,8 @@ tree = await mount(function CaseDeepseek() { return reactStub.createElement(sett
 })
 tree = await expand(tree, '当前引擎声音设置')
 check('DeepSeek：apiKey/音色/播报语种 三行都在',
-  allText(tree).includes('DeepSeek API Key') && allText(tree).includes('暗潮（男声）') && allText(tree).includes('播报语种'), allText(tree).slice(-300))
+  byType(tree, 'input').some((n) => n.props.placeholder === 'DeepSeek API Key')
+  && allText(tree).includes('暗潮（男声）') && allText(tree).includes('播报语种'), allText(tree).slice(-300))
 check('DeepSeek：没有豆包的语种/方言下拉与音量行', !allText(tree).includes('语种/方言') && !allText(tree).includes('音量 loudness_rate'))
 const dsLayer = layerNode(tree, '当前引擎声音设置')
 const dsToggle = flatten(dsLayer).find((n) => n.kind === 'element' && n.type === 'button' && n.props.className === 'dsh-voice-layer-toggle')
@@ -381,6 +382,9 @@ await new Promise((r) => setTimeout(r, 450))
 tree = await flush()
 check('改 DeepSeek 播报语种 → 自动保存 tts.deepseek.language=en',
   saveCalls.some((p) => p.tts && p.tts.deepseek && p.tts.deepseek.language === 'en'), saveCalls)
+// 还原引擎到豆包：后续用例（case 7 的 promptCloud 断言）依赖豆包视图
+engineSelect(tree).props.onChange({ target: { value: 'volcengine' } })
+tree = await flush()
 
 // 7) 转写层：篇幅档位 + 按引擎的提示词 + 整行宽度
 tree = await expand(tree, '转写')
