@@ -298,8 +298,8 @@ globalThis.fetch = async (url, init) => {
   }
   const parsedBody = init && init.body ? JSON.parse(init.body) : null
   fetchState.calls.push({ url: target, local: false, body: parsedBody, auth: (init && init.headers && init.headers.Authorization) || '' })
-  if (target.includes('api.deepseek.com')) return fakeDeepseekResponse()
   if (!fetchState.nextOk) return { ok: false, status: 500, body: null, text: async () => 'mock tts boom', arrayBuffer: async () => new ArrayBuffer(0) }
+  if (target.includes('api.deepseek.com')) return fakeDeepseekResponse()
   return fakeTtsResponse()
 }
 
@@ -840,6 +840,14 @@ check('喂给 WS 的文字拼回=转写稿（除段间空白外不丢字）',
   dsWsState.texts.join('').replace(/\s+/g, '') === (sdd.res.transcript || '').replace(/\s+/g, ''),
   { fed: dsWsState.texts.join('').length, transcript: (sdd.res.transcript || '').length })
 check('streamNext 结束返回 done', sdd.res.done === true)
+// 播报语种（与本地引擎同机制）：zh → 转写 prompt 要求中文输出
+await rpc('setConfig', { patch: { tts: { deepseek: { language: 'zh' } } } })
+llmState.responses = [{ text: '语言选择测试。', finish: 'stop' }]
+const sdsZh = await rpc('speak', { sessionId: 's1', messageId: 'mdsws', regen: true })
+await awaitStreamDone(sdsZh.runId)
+const dsSys = llmState.streamOpts[llmState.streamOpts.length - 1] && llmState.streamOpts[llmState.streamOpts.length - 1].system
+check('播报语种 zh：转写 prompt 要求中文输出（DeepSeek 按文稿发音）', !!dsSys && dsSys.includes('必须用中文输出') && dsSys.includes('DeepSeek 语音'), dsSys && dsSys.slice(-160))
+await rpc('setConfig', { patch: { tts: { deepseek: { language: 'auto' } } } })
 
 section('T11h DeepSeek TTS：WS 失败自动降级整段（对齐豆包兜底行为）')
 globalThis.WebSocket = MockDeepseekWS
@@ -850,6 +858,13 @@ const sdf = await rpc('speak', { sessionId: 's1', messageId: 'mdsfallback', rege
 const ddf = await awaitStreamDone(sdf.runId)
 check('WS 连接失败自动回退整段（1 段 + warn 含回退）', ddf.res && ddf.urls.length === 1 && ddf.res.warn && ddf.res.warn.includes('回退'), ddf)
 check('兜底段 format=wav（整段 POST 的 PCM 已封 WAV 头）', ddf.formats.length === 1 && ddf.formats[0] === 'wav', ddf.formats)
+// 降级整段也失败：真实原因（500）必须直达界面，不被流式报错掩盖（红按钮无提示的病根）
+fetchState.nextOk = false
+llmState.responses = [{ text: '降级也失败测试', finish: 'stop' }]
+const sdf2 = await rpc('speak', { sessionId: 's1', messageId: 'mdsfallback', regen: true })
+const ddf2 = await awaitStreamDone(sdf2.runId)
+check('降级也失败：done.error 带整段真实原因（deepseek tts 500）', ddf2.res && ddf2.res.error && ddf2.res.error.includes('deepseek tts 500'), ddf2)
+fetchState.nextOk = true
 dsWsState.failOpen = false
 
 section('T11i DeepSeek TTS：计费轮转（超单会话预算 → 第二条连接续喂）')

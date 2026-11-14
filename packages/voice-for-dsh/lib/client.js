@@ -70,7 +70,9 @@ window.__ModuleLoader__.load({
       "engine.deepseek": "DeepSeek（官方 API·云端计费）",
       "layer.l2.summary.deepseek": "DeepSeek · {voice}",
       "ds.hint": " 文稿会发往 DeepSeek 云端合成；无语速/情感参数，语种自动识别（10 种，跟随原文）。",
+      "ds.languageHint": " 跟随原文 = DeepSeek 自动识别 10 语种；选中文/英文会把口语稿改写成对应语言再念。",
       "row.dsVoice": "音色",
+      "toast.readFailed": "朗读失败：",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
@@ -215,7 +217,9 @@ window.__ModuleLoader__.load({
       "engine.deepseek": "DeepSeek (official API · paid)",
       "layer.l2.summary.deepseek": "DeepSeek · {voice}",
       "ds.hint": " Text is sent to DeepSeek cloud for synthesis; no speed/emotion parameters, language auto-detected (10 languages, follows the source).",
+      "ds.languageHint": " Follow source = DeepSeek auto-detects 10 languages; Chinese/English rewrites the script into that language first.",
       "row.dsVoice": "Voice",
+      "toast.readFailed": "Read-aloud failed: ",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
       "row.localLanguage": "Spoken language",
       "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
@@ -731,6 +735,8 @@ window.__ModuleLoader__.load({
       diag("stream-fail", { reason: String(reason || "").slice(0, 160), fetched: streamFetched });
       stopStream();
       if (h && h.onError) h.onError(reason);
+      // 流式失败此前只把按钮标红（原因藏在悬停 title 里）——弹一条 toast 让失败可见（6s 自动消失）
+      showToast(t("toast.readFailed") + String(reason || "").slice(0, 140));
     }
 
     // ---------- shell.overlay toast（回退/降级提示：不打断，6s 自动消失） ----------
@@ -2577,6 +2583,13 @@ window.__ModuleLoader__.load({
             React.createElement(Row, { label: t("row.dsVoice") },
               React.createElement(SelectInput, { value: (cfg.tts.deepseek && cfg.tts.deepseek.voiceId) || "stella", onChange: (v) => setField("tts.deepseek.voiceId", v) },
                 (m.deepseekVoices || DEEPSEEK_VOICES_FALLBACK).map((x) => React.createElement("option", { key: x.id, value: x.id }, x.name)))),
+            // 播报语种（与本地引擎同机制）：DeepSeek 按文稿发音，auto=跟随原文（10 语种自动识别）
+            React.createElement(Row, { label: t("row.localLanguage") },
+              React.createElement(SelectInput, { value: (cfg.tts.deepseek && cfg.tts.deepseek.language) || "auto", onChange: (v) => setField("tts.deepseek.language", v) },
+                React.createElement("option", { value: "auto" }, t("local.language.auto")),
+                React.createElement("option", { value: "zh" }, t("local.language.zh")),
+                React.createElement("option", { value: "en" }, t("local.language.en"))),
+              React.createElement("span", { className: "dsh-voice-dim" }, t("ds.languageHint"))),
             React.createElement("p", { className: "dsh-voice-dim" }, t("ds.hint"))) : null,
 
         // —— L3 转写：开关在层头（收起也能直接开关），体内只在开启时渲染 ——

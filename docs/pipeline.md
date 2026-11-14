@@ -310,7 +310,12 @@ run 已停止/被放弃时也不再发起。指令不是朗读的必要条件，
   WS 会话 60 秒无文本断开、单会话 ≤30 分钟音频、服务端每 25 秒 ping（Node 自动回 pong）。整段路径用
   `splitForBilling` 按句界分段顺序请求后拼接；流式路径按会话计数、接近预算即轮转会话续喂（PCM 无缝拼接）。
 - **设置页按引擎分支渲染**：deepseek 分支只有音色下拉（海星/暗潮，meta.deepseekVoices 下发）+ API Key
-  （失焦提交）+ 能力说明一行；豆包的语种/方言下拉、语速/音调/音量行都不渲染——不支持的选项不显示。
+  （失焦提交）+ 播报语种（auto=跟随原文 10 语种自动识别；zh/en=让转写稿用该语言，与 local 同机制，
+  `resolvePrompt` 对 deepseek 叠加语言附加段）+ 能力说明一行；豆包的语种/方言下拉、语速/音调/音量行都不
+  渲染——不支持的选项不显示。
+- **失败必须直达界面（首轮实测教训）**：流式失败此前只把消息按钮标红（原因藏在悬停 title），不弹提示——
+  failStream 现在同时 toast；runPipeline 降级整段也失败时，error 取整段路径的真实原因（如
+  「deepseek tts 401（API Key 无效…）」），不得被流式报错掩盖。401/400/429 在 `deepseekPostPcm` 里映射人话提示。
 - **不参与**：context_texts 情感指令（§3 跳过，同 local）、服务端缓存 cache_config（§4.5 跳过，同 local）、
   成本门控**参与**（`autoSpeakCloudTts` 与豆包同列，选引擎时联动写入）。
 - **音色**：`stella` 海星（女声，默认）/`tide` 暗潮（男声），未知 voiceId 合成期回退 stella（软着陆，同 §6.1）。

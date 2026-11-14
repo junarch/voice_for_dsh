@@ -497,18 +497,19 @@ const Config = z.object({
       segmentTimeoutMs: z.number().default(30000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
     }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
     deepseek: z.object({
-      // DeepSeek 官方 TTS（云端计费；docs/pipeline.md §4.4）：无情感/语速/语种参数——
-      // 官方没有的不造参数，播报语言跟随文稿，转写用无情绪稿（promptLocal 语义，同 local）。
+      // DeepSeek 官方 TTS（云端计费；docs/pipeline.md §4.6）：无情感/语速参数——
+      // 官方没有的不造参数；语种跟随文稿（10 语种自动识别），zh/en 可强制转写稿语言（同 local）。
       apiKey: z.string().default(''),          // DeepSeek 开放平台 API Key（明文存 profile patch；不标 role('secret') 同豆包理由见 §6.0）
       voiceId: z.string().default('stella'),   // stella=海星（女声）| tide=暗潮（男声）；未知值合成期回退 stella
+      language: z.union([z.const('auto'), z.const('zh'), z.const('en')]).default('auto'), // 播报语种：auto=跟随原文；zh/en=让转写稿用该语言（DeepSeek 按文稿发音）
       streaming: z.boolean().default(true),    // WS 流式（默认开）：转写 delta 边出边喂；失败自动降级整段 POST（无 UI，高级）
-    }).default({ apiKey: '', voiceId: 'stella', streaming: true }),
+    }).default({ apiKey: '', voiceId: 'stella', language: 'auto', streaming: true }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
     local: { sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
-    deepseek: { apiKey: '', voiceId: 'stella', streaming: true },
+    deepseek: { apiKey: '', voiceId: 'stella', language: 'auto', streaming: true },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
   // 提示音（设置页第五层）：默认全关；三种音各自可换自定义素材。
@@ -875,13 +876,14 @@ function apply(ctx, config) {
       base += '\n附加要求：无论原文是什么语言，口播稿必须用' + lang.instruct + '输出'
         + (lang.dialect ? '（用字保持中文书写习惯，语汇贴近该方言的口语）' : '') + '。'
     }
-    // 本地引擎按"文本语言"发音（模型没有语种参数）：要它说明一种语言，就得让转写稿写成那种语言。
+    // local/DeepSeek 都按"文稿语言"发音（引擎没有语种参数）：要它说一种语言，就得让转写稿写成那种语言。
     // 这是与豆包 explicit_language 等价的出口，区别只在于落在文本上。
-    if (provider === 'local') {
-      const l = cfg.tts && cfg.tts.local ? cfg.tts.local.language : 'auto'
+    if (provider === 'local' || provider === 'deepseek') {
+      const block = provider === 'local' ? (cfg.tts && cfg.tts.local) : (cfg.tts && cfg.tts.deepseek)
+      const l = (block && block.language) || 'auto'
       if (l === 'zh' || l === 'en') {
         base += '\n附加要求：无论原文是什么语言，口播稿必须用' + (l === 'en' ? '英文' : '中文') + '输出'
-          + '（本地语音按文稿语言发音，不做二次翻译）。'
+          + '（' + (provider === 'local' ? '本地语音' : 'DeepSeek 语音') + '按文稿语言发音，不做二次翻译）。'
       }
     }
     // 优先级声明放最后：软目标（篇幅）不能顶掉硬约束（输出语言），也不能被语气文采带跑
@@ -1154,7 +1156,11 @@ function apply(ctx, config) {
       })
       if (!res.ok || !res.body) {
         const detail = (await res.text().catch(() => '')).slice(0, 200)
-        throw speakError('http', 'deepseek tts ' + res.status + ' ' + detail)
+        // 401 给一句人话：绝大多数是 Key 无效/未开通，别让用户对着裸状态码猜
+        const hint = res.status === 401 ? '（API Key 无效或未授权，请到 DeepSeek 开放平台检查 Key）'
+          : res.status === 400 ? '（无可朗读文本或内容审核拒绝）'
+          : res.status === 429 ? '（并发超限，稍后重试）' : ''
+        throw speakError('http', 'deepseek tts ' + res.status + hint + ' ' + detail)
       }
       const parts = []
       for await (const chunk of res.body) parts.push(Buffer.from(chunk))
@@ -1766,7 +1772,8 @@ function apply(ctx, config) {
             run.warn = (run.warn ? run.warn + '；' : '') + (isLocal ? '分句流式不可用，已回退为整段合成' : isDs ? '流式不可用，已回退为整段合成' : '双向流不可用，已回退为整段合成')
           }
         } else {
-          run.error = (res && res.error) || run.error || 'speak failed'
+          // 降级也失败：把整段路径的真实原因（如 401 Key 无效）带给客户端，别让流式报错掩盖它
+          run.error = (res && res.ttsError) || (res && res.error) || run.error || 'speak failed'
           run.errorKind = (res && res.ttsErrorKind) || run.errorKind || ''
         }
       }
