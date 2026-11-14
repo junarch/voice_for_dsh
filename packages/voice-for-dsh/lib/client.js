@@ -47,12 +47,16 @@ window.__ModuleLoader__.load({
       "status.volcengine.noKey": "豆包：还没填 API Key，试听会失败",
       "status.volcengine.autoNoKey": "豆包：还没填 API Key——自动播报会先失败，再退回浏览器语音",
       "status.volcengine.gated": "自动播报被成本门控关掉了（autoSpeakCloudTts=false）：把播报引擎切走再切回豆包即可恢复",
+      "status.deepseek.ok": "DeepSeek：按量计费，试听会真的调用",
+      "status.deepseek.noKey": "DeepSeek：还没填 API Key，试听会失败",
+      "status.deepseek.autoNoKey": "DeepSeek：还没填 API Key——自动播报会先失败，再退回浏览器语音",
+      "status.deepseek.gated": "自动播报被成本门控关掉了（autoSpeakCloudTts=false）：把播报引擎切走再切回 DeepSeek 即可恢复",
       "gateway.wsHint": " 自定义端点暂不支持边说边播：会整段合成完再播",
       "status.local.installed": "本地模型已装好，可以直接播报",
       "status.local.missing": "本地模型还没装，先下载才能出声",
       "status.local.busy": "正在装本地模型：{percent}%",
       "cta.install": "去安装",
-      "hint.engine": "系统 TTS 开箱即用；豆包需配置第三方 API、按用量计费；本地 Kokoro 本地运行，先下载模型",
+      "hint.engine": "系统 TTS 开箱即用；豆包/DeepSeek 需第三方 API Key、按用量计费；本地 Kokoro 本地运行，先下载模型",
       "hint.autoSpeak": "每轮回答结束自动念一遍",
       "hint.transcribe": "开：模型先把回答改写成口语稿，更顺耳，但多一次模型调用。关：直接念原文，表格和代码自动跳过——此时篇幅档位不生效。",
       "row.transcribeEnabled": "开启转写",
@@ -63,6 +67,10 @@ window.__ModuleLoader__.load({
       "row.temperature": "temperature",
       "temperature.hint": "越高越自由、越容易跑偏；越低越贴原文（默认 0.3）",
       "engine.browser": "系统 TTS（浏览器语音）", "engine.volcengine": "豆包（需第三方 API）", "engine.local": "本地 Kokoro（中英·本地运行）",
+      "engine.deepseek": "DeepSeek（官方 API·云端计费）",
+      "layer.l2.summary.deepseek": "DeepSeek · {voice}",
+      "ds.hint": " 文稿会发往 DeepSeek 云端合成；无语速/情感参数，语种自动识别（10 种，跟随原文）。",
+      "row.dsVoice": "音色",
       "row.localVoice": "音色 sid", "row.localSpeed": "语速 speed",
       "row.localLanguage": "播报语种",
       "local.language.auto": "跟随原文", "local.language.zh": "中文", "local.language.en": "英文",
@@ -184,12 +192,16 @@ window.__ModuleLoader__.load({
       "status.volcengine.noKey": "Doubao: no API Key yet; preview will fail",
       "status.volcengine.autoNoKey": "Doubao: no API Key — auto-speak fails first, then falls back to the browser voice",
       "status.volcengine.gated": "Auto-speak is gated off (autoSpeakCloudTts=false): switch the engine away and back to Doubao to restore",
+      "status.deepseek.ok": "DeepSeek: pay per use; preview calls the real API",
+      "status.deepseek.noKey": "DeepSeek: no API Key yet; preview will fail",
+      "status.deepseek.autoNoKey": "DeepSeek: no API Key — auto-speak fails first, then falls back to the browser voice",
+      "status.deepseek.gated": "Auto-speak is gated off (autoSpeakCloudTts=false): switch the engine away and back to DeepSeek to restore",
       "gateway.wsHint": " Custom endpoints cannot stream: audio is synthesized as one piece, then played",
       "status.local.installed": "Local model installed - ready to speak",
       "status.local.missing": "Local model not installed - download it first",
       "status.local.busy": "Installing local model: {percent}%",
       "cta.install": "Install",
-      "hint.engine": "System TTS is free and offline; Doubao is pay-per-use and needs an API Key; local Kokoro is free but needs the model",
+      "hint.engine": "System TTS is free and offline; Doubao/DeepSeek are pay-per-use and need an API Key; local Kokoro is free but needs the model",
       "hint.autoSpeak": "Read each finished turn aloud automatically",
       "hint.transcribe": "On: the model rewrites the answer into spoken style first (nicer, one extra model call). Off: read as written; tables and code are skipped — length levels do not apply.",
       "row.transcribeEnabled": "Enable transcription",
@@ -200,6 +212,10 @@ window.__ModuleLoader__.load({
       "row.temperature": "temperature",
       "temperature.hint": "Higher = freer and more likely to drift; lower = closer to the original (default 0.3)",
       "engine.browser": "System TTS (browser voice · free)", "engine.volcengine": "Doubao (paid)", "engine.local": "Local Kokoro (CN+EN · free)",
+      "engine.deepseek": "DeepSeek (official API · paid)",
+      "layer.l2.summary.deepseek": "DeepSeek · {voice}",
+      "ds.hint": " Text is sent to DeepSeek cloud for synthesis; no speed/emotion parameters, language auto-detected (10 languages, follows the source).",
+      "row.dsVoice": "Voice",
       "row.localVoice": "Voice sid", "row.localSpeed": "Speed",
       "row.localLanguage": "Spoken language",
       "local.language.auto": "Follow source", "local.language.zh": "Chinese", "local.language.en": "English",
@@ -311,6 +327,10 @@ window.__ModuleLoader__.load({
 
     /** Host /meta 不可用（旧 Host 裂脑）时的兜底清单，保证下拉不空。 */
     var VOICE_CUSTOM = "__voice_custom__"; // speaker 下拉的「自定义」占位值（非真实音色 id）
+    var DEEPSEEK_VOICES_FALLBACK = [ // Host /meta 不可用时的兜底音色清单（正常走 meta.deepseekVoices）
+      { id: "stella", name: "海星（女声）" },
+      { id: "tide", name: "暗潮（男声）" },
+    ];
     var ROUTE_CUSTOM = "__route_custom__"; // provider/model 下拉的「自定义」占位值
     var FALLBACK_META = {
       voices: [
@@ -2330,13 +2350,14 @@ window.__ModuleLoader__.load({
         }
         setFields(entries);
       }
-      /** 播报引擎三选一（引擎总开关）：browser=系统 TTS；volcengine=豆包（需第三方 API）；
-       * local=本地 Kokoro 中英（本地运行，进程内合成）。切到豆包时 autoSpeakCloudTts 同步写入 true
-       * （Host 成本门控与 UI 一致）；切到 browser/local 写 false。 */
+      /** 播报引擎四选一（引擎总开关）：browser=系统 TTS；volcengine=豆包（需第三方 API）；
+       * deepseek=DeepSeek 官方 TTS（需 DeepSeek API Key）；local=本地 Kokoro 中英（本地运行，进程内合成）。
+       * 切到豆包或 DeepSeek 时 autoSpeakCloudTts 同步写入 true（两者都是第三方计费 API，Host 成本门控与 UI 一致）；
+       * 切到 browser/local 写 false。 */
       function onEngineChange(v) {
         const next = JSON.parse(JSON.stringify(cfg));
         next.tts.provider = v;
-        next.autoSpeakCloudTts = v === "volcengine";
+        next.autoSpeakCloudTts = v === "volcengine" || v === "deepseek";
         setCfg(next);
         setMsg("");
         // 主开关不排队：立刻落盘，避免"以为切过去了，重启又回豆包"
@@ -2346,12 +2367,14 @@ window.__ModuleLoader__.load({
         saveNow({ tts: { provider: v }, autoSpeakCloudTts: next.autoSpeakCloudTts }, true);
       }
 
-      // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、local=本地 Kokoro（进程内）；
+      // TTS 引擎归一（voice-compat 镜像）：volcengine=豆包、deepseek=DeepSeek 官方 TTS、local=本地 Kokoro（进程内）；
       // 已退役的 local-cosyvoice 归一到 local（旧配置是"想用本地引擎"）；
       // 其余（含旧值 openai-compatible）按系统 TTS 处理
       const ttsEngine = cfg.tts.provider === "volcengine"
         ? "volcengine"
-        : (cfg.tts.provider === "local" || cfg.tts.provider === "local-cosyvoice" ? "local" : "browser");
+        : (cfg.tts.provider === "deepseek"
+          ? "deepseek"
+          : (cfg.tts.provider === "local" || cfg.tts.provider === "local-cosyvoice" ? "local" : "browser"));
 
       // 层头摘要：收起时也能一眼看到当前值（不展开就不用进去找）
       const l2Summary = ttsEngine === "browser"
@@ -2360,7 +2383,11 @@ window.__ModuleLoader__.load({
           ? t("layer.l2.summary.local")
               .replace("{sid}", String(cfg.tts.local.sid))
               .replace("{rate}", Number(cfg.tts.local.speed).toFixed(2) + "x")
-          : t("layer.l2.summary.volcengine").replace("{speaker}",
+          : ttsEngine === "deepseek"
+            ? t("layer.l2.summary.deepseek").replace("{voice}",
+                ((m.deepseekVoices || DEEPSEEK_VOICES_FALLBACK).find((x) => x.id === (cfg.tts.deepseek && cfg.tts.deepseek.voiceId)) || {}).name
+                || String((cfg.tts.deepseek && cfg.tts.deepseek.voiceId) || "stella"))
+            : t("layer.l2.summary.volcengine").replace("{speaker}",
               (voices.find((v) => v.id === cfg.tts.volcengine.speaker) || {}).name || String(cfg.tts.volcengine.speaker || ""));
       const l4Summary = t("layer.l4.summary")
         .replace("{seg}", cfg.tts.local.streaming !== false ? t("layer.value.on") : t("layer.value.off"))
@@ -2387,6 +2414,13 @@ window.__ModuleLoader__.load({
           : (cfg.autoSpeak ? t("status.volcengine.autoNoKey") : t("status.volcengine.noKey"));
         // 成本门控：只有手改配置/迁移旧配置才会落到"自动播报开着但不碰豆包"这个状态
         if (cfg.autoSpeak && cfg.autoSpeakCloudTts === false) statusWarn = t("status.volcengine.gated");
+      } else if (ttsEngine === "deepseek") {
+        const hasDsKey = !!(cfg.tts.deepseek && cfg.tts.deepseek.apiKey);
+        statusLine = hasDsKey
+          ? t("status.deepseek.ok")
+          : (cfg.autoSpeak ? t("status.deepseek.autoNoKey") : t("status.deepseek.noKey"));
+        // 成本门控：只有手改配置/迁移旧配置才会落到"自动播报开着但不碰云端引擎"这个状态
+        if (cfg.autoSpeak && cfg.autoSpeakCloudTts === false) statusWarn = t("status.deepseek.gated");
       } else if (deployState) {
         const phase = deployState.phase || "idle";
         if (deployState.installed) statusLine = t("status.local.installed");
@@ -2415,6 +2449,7 @@ window.__ModuleLoader__.load({
               React.createElement(SelectInput, { value: ttsEngine, onChange: onEngineChange },
                 React.createElement("option", { value: "browser" }, t("engine.browser")),
                 React.createElement("option", { value: "volcengine" }, t("engine.volcengine")),
+                React.createElement("option", { value: "deepseek" }, t("engine.deepseek")),
                 React.createElement("option", { value: "local" }, t("engine.local"))),
               React.createElement("span", { className: "dsh-voice-dim" }, t("hint.engine"))),
             React.createElement(Row, { label: t("row.autoSpeak") },
@@ -2533,6 +2568,16 @@ window.__ModuleLoader__.load({
             React.createElement(Row, { label: t("row.loudness") },
               React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
               React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate"))) : null),
+
+          // —— DeepSeek 官方 TTS（鉴权 + 音色；仅选择 DeepSeek 时显示）——
+          // 无语种/方言/语速/情感行：官方没有这些参数，不支持的选项不显示；播报语言跟随原文。
+          ttsEngine === "deepseek" ? React.createElement(React.Fragment, null,
+            React.createElement(Row, { label: t("row.apiKey") },
+              React.createElement(TextInput, { type: "password", value: cfg.tts.deepseek.apiKey, onChange: (v) => setField("tts.deepseek.apiKey", v), placeholder: "DeepSeek API Key" })),
+            React.createElement(Row, { label: t("row.dsVoice") },
+              React.createElement(SelectInput, { value: (cfg.tts.deepseek && cfg.tts.deepseek.voiceId) || "stella", onChange: (v) => setField("tts.deepseek.voiceId", v) },
+                (m.deepseekVoices || DEEPSEEK_VOICES_FALLBACK).map((x) => React.createElement("option", { key: x.id, value: x.id }, x.name)))),
+            React.createElement("p", { className: "dsh-voice-dim" }, t("ds.hint"))) : null,
 
         // —— L3 转写：开关在层头（收起也能直接开关），体内只在开启时渲染 ——
         React.createElement(Collapse, {
