@@ -1800,18 +1800,33 @@ window.__ModuleLoader__.load({
       var controlled = typeof props.open === "boolean";
       var open = controlled ? props.open : innerOpen;
       var bodyId = "dsh-voice-layer-" + (props.id || "x");
+      var toggledByPointerAt = React.useRef(0);
       function onToggle() {
         if (controlled) { if (props.onToggle) props.onToggle(!open); }
         else setInnerOpen(!open);
       }
-      return React.createElement("div", { className: "dsh-voice-layer" + (open ? " open" : "") },
+      // 层头在 pointerdown 就翻转，不等 click：宿主连接抖动时设置节会被重挂，按下与抬起之间节点可能换代，
+      // 浏览器会把 click 派给共同祖先、按钮收不到（现象就是"点箭头没反应/抖一下"）。pointerdown 早于换代执行。
+      // 键盘（click 且 detail=0）仍走 click；鼠标紧跟着的那次 click 用时间戳去重，不会翻两次。
+      function onPointerDown(e) {
+        if (!e || e.button !== 0 || e.isPrimary === false) return;
+        toggledByPointerAt.current = Date.now();
+        onToggle();
+      }
+      function onClick() {
+        if (Date.now() - (toggledByPointerAt.current || 0) < 500) return;
+        onToggle();
+      }
+      return React.createElement("div", { className: "dsh-voice-layer" + (open ? " open" : ""), "data-voice-layer": props.id || "" },
         React.createElement("div", { className: "dsh-voice-layer-head" },
           React.createElement("button", {
             type: "button",
             className: "dsh-voice-layer-toggle",
+            "data-voice-toggle": props.id || "",
             "aria-expanded": open,
             "aria-controls": bodyId,
-            onClick: onToggle,
+            onPointerDown: onPointerDown,
+            onClick: onClick,
           },
             React.createElement("span", { className: "dsh-voice-layer-caret" }, "▸"),
             React.createElement("span", { className: "dsh-voice-layer-title" }, props.title),
@@ -2080,7 +2095,33 @@ window.__ModuleLoader__.load({
       // 【临时调试】l2Debug 开启时打点：谁在改 l2Open、层 class 是否被外部改写（定位"收不起"抖动）。
       const l2Pair = React.useState(l2OpenPersist);
       const l2Open = l2Pair[0];
-      const setL2Open = (v) => { if (l2Debug) console.log("[voice] setL2Open ->", !!v); l2OpenPersist = !!v; l2Pair[1](!!v); };
+      const setL2Open = (v) => {
+        if (l2Debug) console.log("[voice] setL2Open ->", !!v);
+        if (l2Debug) diag("l2-toggle", { open: !!v, persist: !!l2OpenPersist });
+        l2OpenPersist = !!v;
+        l2Pair[1](!!v);
+      };
+      // 【临时调试】"点了没反应"的命中诊断：点在 L2 层头范围内时，把 elementFromPoint 上的真实元素上报 Host
+      // （clientDiagDump 可读）——区分"没点到按钮"与"点到覆盖层/换代的旧节点"，不必让用户贴 Console。
+      React.useEffect(() => {
+        if (!l2Debug || !cfg) return;
+        const onDown = (e) => {
+          try {
+            const btn = document.querySelector('[data-voice-toggle="l2"]');
+            if (!btn) return;
+            const r = btn.getBoundingClientRect();
+            if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+            const at = document.elementFromPoint(e.clientX, e.clientY);
+            const inside = !!(at && (at === btn || btn.contains(at)));
+            diag("l2-hit", {
+              inside: inside,
+              at: at ? (String(at.tagName || "?") + "." + String((at.getAttribute && at.getAttribute("class")) || "")) : "none",
+            });
+          } catch (err) { /* 诊断失败不影响交互 */ }
+        };
+        document.addEventListener("pointerdown", onDown, true);
+        return () => document.removeEventListener("pointerdown", onDown, true);
+      }, [cfg]);
       React.useEffect(() => {
         if (!l2Debug) return;
         console.log("[voice] settings section MOUNT（l2OpenPersist=", l2OpenPersist, "）");

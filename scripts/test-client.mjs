@@ -178,6 +178,12 @@ try {
   if (reportCalls < 4) throw new Error('reportSpeakFail 调用点不足（三处出口 + 一处定义），实际 ' + reportCalls)
   if (!zhKeys.includes('toast.hostDown')) throw new Error('missing host-down hint key: toast.hostDown')
 
+  // 层头折叠必须在 pointerdown 就翻转（宿主抖动重挂时 click 可能派给共同祖先、按钮收不到），
+  // 且要能自证"点击落在谁身上"（elementFromPoint → clientDiag 的 l2-hit），排障时不必让用户贴 Console。
+  for (const need of ['onPointerDown', 'data-voice-toggle', 'toggledByPointerAt', 'l2-hit']) {
+    if (!source.includes(need)) throw new Error('Client 缺少折叠健壮性/命中诊断实现：' + need)
+  }
+
   console.log('client contract: uiConversation.events + voice Definition + ' + registrations.length +
     ' slots(带 id、无 select) + turnTail claim 逻辑 + i18n(' + zhKeys.length + ' keys) OK')
 } finally {
