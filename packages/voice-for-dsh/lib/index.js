@@ -28,8 +28,9 @@ import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { createBidirectionClient, WS_DEFAULTS } from './volcengine-ws.js'
+import { createDeepseekStreamClient, DEEPSEEK_TTS_WS_URL } from './deepseek-ws.js'
 import { sanitizeForSpeech } from './speech-clean.js'
-import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, userModelRoot } from './local-runtime.js'
+import { createLocalRuntime, speakError, LOCAL_SAMPLE_RATE, pcmToWav, userModelRoot } from './local-runtime.js'
 import { acquireLocalRuntime, releaseLocalRuntime, disposeSharedRuntime } from './runtime-pool.js'
 import { createModelInstaller } from './model-installer.js'
 import {
@@ -240,6 +241,20 @@ const STREAM = {
   maxSessionTimeout: 60000,   // 单个 session 等待结束上限
 }
 
+/** DeepSeek TTS 参数（官方文档 api-docs.deepseek.com/zh-cn/guides/tts，2026-11-13 发布）。
+ * pcm 24kHz/16bit/单声道；单请求/单 WS 会话限 10,000 计费字符（汉字=2）与 64KiB 请求体，
+ * 留出余量做分段与会话轮转，避免顶线被拒。 */
+const DEEPSEEK_SAMPLE_RATE = 24000
+const DEEPSEEK_VOICES = [
+  { id: 'stella', name: '海星（女声）' },
+  { id: 'tide', name: '暗潮（男声）' },
+]
+const DEEPSEEK_STREAM = {
+  maxBillingChars: 9500,      // 计费字符预算（官方上限 10,000，留余量）
+  maxBodyBytes: 60000,        // 请求体字节数预算（官方上限 64KiB，UTF-8）
+  finishTimeout: 60000,       // WS 会话 finish 等待上限
+}
+
 /** 段落粒度情感指令的 LLM 调用上限（成本闸门）。
  * 每两句话就查一次 LLM 会给长回复叠出几十次辅助调用（每次都要带完整指令 system prompt），
  * 是转写之外最容易被忽视的 token 开销；超过上限后沿用最后一次指令，听感基本一致、成本有界。 */
@@ -443,7 +458,7 @@ const Config = z.object({
     timeoutMs: z.number().default(60000), // 单次转写超时；超时/失败降级为直读
   }).default({ enabled: true, maxTokens: 8192, temperature: 0.3, prompt: '', promptCloud: '', promptLocal: '', lengthLevel: 'full', reasoningEffort: 'off', stylePreset: 'standard', contextTurns: 2, timeoutMs: 60000 }).volatile(),
   tts: z.object({
-    provider: z.string().default('browser'), // TTS 引擎：browser（系统 TTS）| volcengine（豆包，需第三方 API）| local（本地 Kokoro，中英混读，本地运行）；其余旧值归一为 browser
+    provider: z.string().default('browser'), // TTS 引擎：browser（系统 TTS）| volcengine（豆包，需第三方 API）| deepseek（DeepSeek 官方 TTS，需 DeepSeek API Key）| local（本地 Kokoro，中英混读，本地运行）；其余旧值归一为 browser
     browser: z.object({
       rate: z.number().default(1),
       pitch: z.number().default(1),
@@ -481,11 +496,19 @@ const Config = z.object({
       segmentChars: z.number().default(220),   // 分句流式的每段目标字符数（无 UI，高级）
       segmentTimeoutMs: z.number().default(30000), // 单个音频段的合成超时（流式路径；整段路径用 timeoutMs）
     }).default({ sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 }),
+    deepseek: z.object({
+      // DeepSeek 官方 TTS（云端计费；docs/pipeline.md §4.4）：无情感/语速/语种参数——
+      // 官方没有的不造参数，播报语言跟随文稿，转写用无情绪稿（promptLocal 语义，同 local）。
+      apiKey: z.string().default(''),          // DeepSeek 开放平台 API Key（明文存 profile patch；不标 role('secret') 同豆包理由见 §6.0）
+      voiceId: z.string().default('stella'),   // stella=海星（女声）| tide=暗潮（男声）；未知值合成期回退 stella
+      streaming: z.boolean().default(true),    // WS 流式（默认开）：转写 delta 边出边喂；失败自动降级整段 POST（无 UI，高级）
+    }).default({ apiKey: '', voiceId: 'stella', streaming: true }),
   }).default({
     provider: 'browser',
     browser: { rate: 1, pitch: 1, voice: '' },
     volcengine: { apiKey: '', resourceId: 'seed-tts-2.0', speaker: 'zh_female_vv_uranus_bigtts', sampleRate: 24000, rateLevel: 2, pitch: 0, pitchLevel: 2, interface: 'bidirection', streaming: true, wsUrl: '', gateway: 'plan', httpUrl: '', emotionGranularity: 'paragraph', bitRate: 64000, loudness: 0, useSectionId: true, expressive: false },
     local: { sid: LOCAL_DEFAULT_SID, speed: 1, language: 'auto', numThreads: 4, modelDir: '', timeoutMs: 30000, streaming: true, segmentChars: 220, segmentTimeoutMs: 30000 },
+    deepseek: { apiKey: '', voiceId: 'stella', streaming: true },
   }).volatile(),
   stopOnNewTurn: z.boolean().default(true).volatile(),
   // 提示音（设置页第五层）：默认全关；三种音各自可换自定义素材。
@@ -762,8 +785,9 @@ function apply(ctx, config) {
       try { cfg = readConfig() } catch { return }
       if (!cfg.autoSpeak) return
       if (kind !== 'completed' && kind !== 'max-tokens') return
-      // 成本门控：未显式允许时自动播报不碰豆包；local 在本机合成，不受限
-      if (ttsProviderOf(cfg) === 'volcengine' && !cfg.autoSpeakCloudTts) {
+      // 成本门控：未显式允许时自动播报不碰云端引擎（豆包/DeepSeek 都是第三方计费 API）；local 在本机合成，不受限
+      const provAuto = ttsProviderOf(cfg)
+      if ((provAuto === 'volcengine' || provAuto === 'deepseek') && !cfg.autoSpeakCloudTts) {
         console.log('[voice] auto-speak skipped: cloud tts gated (autoSpeakCloudTts=false)')
         return
       }
@@ -1067,12 +1091,109 @@ function apply(ctx, config) {
     return wav
   }
 
+  /** DeepSeek TTS 计费口径：汉字算 2、其余算 1（保守近似：CJK 表意文字按 2 计，
+   *  全角标点/代理对按 1 计——宁多计不少计，分段只会更早触发，不会撞官方上限）。 */
+  function billingCharWeight(ch) {
+    return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(ch) ? 2 : 1
+  }
+  function billingCharsOf(text) {
+    let n = 0
+    for (const ch of String(text || '')) n += billingCharWeight(ch)
+    return n
+  }
+  /** 官方单请求/单 WS 会话限 10,000 计费字符与 64KiB 请求体：超限按句界分段
+   *  （找不到句末退逗号/顿号/空白，最后硬切），各段拼回与原文一致（不变式 13 同款要求）。 */
+  function splitForBilling(text) {
+    const src = String(text || '')
+    if (!src) return []
+    if (billingCharsOf(src) <= DEEPSEEK_STREAM.maxBillingChars && Buffer.byteLength(src, 'utf8') <= DEEPSEEK_STREAM.maxBodyBytes) return [src]
+    const out = []
+    let rest = src
+    while (rest.length) {
+      let n = 0, bytes = 0, fit = 0
+      for (let i = 0; i < rest.length; i++) {
+        const w = billingCharWeight(rest[i])
+        const b = Buffer.byteLength(rest[i], 'utf8')
+        if (n + w > DEEPSEEK_STREAM.maxBillingChars || bytes + b > DEEPSEEK_STREAM.maxBodyBytes) break
+        n += w; bytes += b; fit = i + 1
+      }
+      if (fit >= rest.length) { out.push(rest); break }
+      const piece = rest.slice(0, fit)
+      const from = Math.floor(piece.length / 2)
+      let cut = -1
+      for (let i = piece.length - 1; i >= from; i--) {
+        if (STREAM.sentenceEnders.indexOf(piece[i]) >= 0) { cut = i + 1; break }
+      }
+      if (cut < 0) {
+        for (let i = piece.length - 1; i >= from; i--) {
+          if ('，、, 　\t\n'.indexOf(piece[i]) >= 0) { cut = i + 1; break }
+        }
+      }
+      if (cut <= 0) cut = fit
+      out.push(rest.slice(0, cut))
+      rest = rest.slice(cut)
+    }
+    return out
+  }
+  /** 归一音色 id：未知值回退 stella（官方仅两音色；手填未知 id 不让它打过去）。 */
+  function deepseekVoiceIdOf(v) {
+    const id = String((v && v.voiceId) || '')
+    return DEEPSEEK_VOICES.some((x) => x.id === id) ? id : 'stella'
+  }
+  /** DeepSeek 整段 POST：单段文本 → 裸 PCM（24kHz/16bit/单声道）。非 2xx/审核拒绝 → http，超时 → timeout。 */
+  async function deepseekPostPcm(text, cfg, voiceId) {
+    const v = cfg.tts.deepseek
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), DEEPSEEK_STREAM.finishTimeout)
+    try {
+      const res = await fetch(DEEPSEEK_TTS_WS_URL.replace('wss://', 'https://'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + v.apiKey },
+        body: JSON.stringify({ text, voice_id: voiceId, format: 'pcm' }),
+        signal: ac.signal,
+      })
+      if (!res.ok || !res.body) {
+        const detail = (await res.text().catch(() => '')).slice(0, 200)
+        throw speakError('http', 'deepseek tts ' + res.status + ' ' + detail)
+      }
+      const parts = []
+      for await (const chunk of res.body) parts.push(Buffer.from(chunk))
+      const pcm = Buffer.concat(parts)
+      if (!pcm.length) throw speakError('http', 'deepseek tts 返回空音频（可能内容审核拒绝）')
+      return pcm
+    } catch (error) {
+      if (error && error.name === 'AbortError') throw speakError('timeout', 'deepseek tts 超时（' + DEEPSEEK_STREAM.finishTimeout + 'ms）')
+      throw error
+    } finally { clearTimeout(timer) }
+  }
+  /**
+   * DeepSeek 官方 TTS 整段合成（流式的降级兜底与试听路径；WS 流式见 streamSpeakDeepseek）。
+   * text 必须已净化（provider 之前的净化天然满足，无 [# 标签/Markdown）。
+   * 超 1 万计费字符/64KiB 请求体按句界分段、顺序请求、PCM 无缝拼接后套 WAV 头
+   * （各段拼回与原稿一致——不变式 13 同款要求）。
+   */
+  async function synthesizeDeepseek(text, cfg) {
+    const v = cfg.tts.deepseek
+    if (!v.apiKey) throw speakError('http', 'deepseek apiKey 未配置（voice.tts.deepseek.apiKey）')
+    const voiceId = deepseekVoiceIdOf(v)
+    const chunks = splitForBilling(text)
+    if (!chunks.length) throw speakError('http', 'deepseek tts 无可朗读文本')
+    const parts = []
+    for (const chunk of chunks) parts.push(await deepseekPostPcm(chunk, cfg, voiceId))
+    const pcm = Buffer.concat(parts)
+    if (!pcm.length) throw speakError('http', 'deepseek tts 返回空音频')
+    return pcmToWav(pcm, DEEPSEEK_SAMPLE_RATE)
+  }
+
   /** 合成并挂一次性音频路由；返回 '/voice/audio/<id>'。cmd = 已组装的完整语音指令（豆包用）。 */
   async function synthToRoute(text, cfg, cmd, opts = {}) {
     const prov = ttsProviderOf(cfg)
     let buf, mime
     if (prov === 'local') {
       buf = await synthesizeLocal(text, cfg)
+      mime = 'audio/wav'
+    } else if (prov === 'deepseek') {
+      buf = await synthesizeDeepseek(text, cfg)
       mime = 'audio/wav'
     } else {
       buf = await synthesizeVolcengine(text, cfg, cmd, opts)
@@ -1610,18 +1731,20 @@ function apply(ctx, config) {
     if (streamRuns.get(run.id) === run) streamRuns.delete(run.id)
     if (currentStreamRun === run) currentStreamRun = null
   }
-  /** 后台启动流式管线（不 await）；流式失败且零音频时自动降级整段合成（豆包 mp3 / 本地 wav）。 */
+  /** 后台启动流式管线（不 await）；流式失败且零音频时自动降级整段合成（豆包 mp3 / 本地、DeepSeek wav）。 */
   function runPipeline(run, found, cfg) {
     // 新播报强制中止上一个流式 run（防并发 WS / 混音 / 白烧钱）
     if (currentStreamRun && currentStreamRun !== run && !currentStreamRun.finished) stopRun(currentStreamRun)
     streamRuns.set(run.id, run)
     currentStreamRun = run
     const isLocal = isLocalProvider(cfg)
+    const isDs = ttsProviderOf(cfg) === 'deepseek'
     ;(async () => {
       try {
         let route = cfg.provider && cfg.model ? { provider: cfg.provider, model: cfg.model } : null
         if (!route) route = await discoverRoute()
         if (isLocal) await streamSpeakLocal(run, found, cfg, route)
+        else if (isDs) await streamSpeakDeepseek(run, found, cfg, route)
         else await streamSpeak(run, found, cfg, route)
       } catch (err) {
         run.error = String(err && err.message || err)
@@ -1633,14 +1756,14 @@ function apply(ctx, config) {
       if (run.streamingDone && !run.segments && !run.stopped) {
         const res = await transcribe(run.sessionId, run.messageId, { force: run.force }).catch((e) => ({ ok: false, error: String(e && e.message || e) }))
         if (res && res.ok && res.audioUrl) {
-          run.queue.push({ id: res.audioUrl.replace('/voice/audio/', ''), format: isLocal ? 'wav' : 'mp3' })
+          run.queue.push({ id: res.audioUrl.replace('/voice/audio/', ''), format: isLocal || isDs ? 'wav' : 'mp3' })
           if (run.errorKind === 'timeout') {
             // 段级超时（慢机上的首段等待超限）：兜底成功，但必须说明"为什么慢、为什么回退"
-            run.warn = (run.warn ? run.warn + '；' : '') + (isLocal ? '分句流式超时，已回退为整段合成' : '双向流超时，已回退为整段合成')
+            run.warn = (run.warn ? run.warn + '；' : '') + (isLocal ? '分句流式超时，已回退为整段合成' : isDs ? '流式超时，已回退为整段合成' : '双向流超时，已回退为整段合成')
           } else {
             run.error = ''
             run.errorKind = ''
-            run.warn = (run.warn ? run.warn + '；' : '') + (isLocal ? '分句流式不可用，已回退为整段合成' : '双向流不可用，已回退为整段合成')
+            run.warn = (run.warn ? run.warn + '；' : '') + (isLocal ? '分句流式不可用，已回退为整段合成' : isDs ? '流式不可用，已回退为整段合成' : '双向流不可用，已回退为整段合成')
           }
         } else {
           run.error = (res && res.error) || run.error || 'speak failed'
@@ -1669,6 +1792,12 @@ function apply(ctx, config) {
    * 本地引擎中英都能读，转写开关不影响是否流式（直读原文也能合成）。 */
   function isStreamingLocal(cfg) {
     return ttsProviderOf(cfg) === 'local' && cfg.tts.local.streaming !== false
+  }
+  /** 是否走 DeepSeek WS 流式播报（§4.4）：转写 delta 边出边喂，音频按块入队（对齐豆包管线）。
+   * 无 Key 时整段路径给明确报错；streaming=false 关流式恒走整段。 */
+  function isStreamingDeepseek(cfg) {
+    const v = cfg.tts.deepseek
+    return ttsProviderOf(cfg) === 'deepseek' && v.streaming !== false && !!v.apiKey
   }
   /** 本地运行时就绪（懒加载模型）；失败抛带 kind 的错误（model-missing / load-failed）。 */
   async function ensureLocalReady() {
@@ -1782,6 +1911,111 @@ function apply(ctx, config) {
     if (hadError && !run.error) run.error = run.warn
   }
 
+  /** DeepSeek WS 流式播报（对齐豆包管线，§4.4）：转写稿→分句切段→逐段 text 事件喂 WS
+   *  →二进制帧经 pushAudioFrame 按块入队（sampleRate 24000，客户端 streamNext/Web Audio 照常取段）。
+   *  计费字符按会话累计，接近官方单会话上限（1 万/64KiB）时轮转会话续喂，PCM 无缝拼接；
+   *  首段失败/零音频 → 抛错交给 runPipeline 降级整段 POST；中途失败 → 保留已播段 + warn（不变式 13）。 */
+  async function streamSpeakDeepseek(run, found, cfg, route) {
+    const v = cfg.tts.deepseek
+    if (!v.apiKey) throw speakError('http', 'deepseek apiKey 未配置（voice.tts.deepseek.apiKey）')
+    const sourceChars = toPlainSpoken(found.text).length
+    const promptUsed = resolvePrompt(cfg, sourceChars)
+    const effortUsed = cfg.transcribe.reasoningEffort || ''
+    const ctxRef = buildContext(run.sessionId, found.turn || 0, cfg.transcribe.contextTurns)
+    run.sampleRate = DEEPSEEK_SAMPLE_RATE
+    const ac = new AbortController()
+    run.abort = ac
+
+    // 1) 转写稿（与豆包/本地流式同一套缓存规则：命中零 LLM；完整跑完才写缓存，防脏稿）
+    let transcript = ''
+    const cached = !run.force ? cachedTranscriptFor(run.messageId, route, promptUsed, effortUsed) : null
+    if (cached && cached.transcript) {
+      transcript = cached.transcript
+    } else if (cfg.transcribe.enabled === false) {
+      transcript = toPlainSpoken(found.text)
+    } else {
+      const parts = []
+      for await (const delta of streamTranscription(route, cfg, found, promptUsed, ctxRef, run)) {
+        if (run.stopped) break
+        if (delta) parts.push(delta)
+      }
+      transcript = parts.join('')
+      // 完整跑完（未中断、未抛错）才写缓存：与 WS 失败不污染缓存同一条不变式
+      if (transcript && !run.stopped) {
+        transcriptCache.set(String(run.messageId), {
+          transcript, provider: route.provider, model: route.model,
+          prompt: promptUsed, effort: effortUsed,
+          sourceChars: found.text.length, plainChars: sourceChars, cap: lengthBudget(cfg.transcribe.lengthLevel, sourceChars).cap, at: Date.now(),
+        })
+        saveTranscriptCache(transcriptCache)
+      }
+    }
+    run.transcript = transcript
+    logLengthBudget(cfg.transcribe.lengthLevel, sourceChars, transcript.length)
+    if (run.stopped) return
+    if (!transcript.trim()) throw speakError('synth-failed', '转写稿为空，无法合成（DeepSeek TTS）')
+
+    // 2) 分句切段（与本地同一切分器：句末优先，退逗号，最后硬切）
+    const segments = splitForStream(transcript, 220)
+    if (segments.length > 1) console.log('[voice] deepseek stream: ' + segments.length + ' segments, first ~' + segments[0].length + ' chars')
+
+    // 3) 连接 → 逐段喂（计费超限轮转会话）→ finish_text 收尾；音频帧异步经 onAudio 入队
+    const voiceId = deepseekVoiceIdOf(v)
+    let conn = null
+    let billed = 0, billedBytes = 0
+    const startConn = async () => {
+      const c = createDeepseekStreamClient({
+        apiKey: v.apiKey, voiceId,
+        onAudio: (frame) => pushAudioFrame(run, frame),
+        onFatal: (err) => { if (!run.stopped) run.fatalDs = String(err && err.message || err) },
+        signal: ac.signal,
+        timeoutMs: DEEPSEEK_STREAM.finishTimeout,
+      })
+      await c.ready
+      run.conn = c // 供 stopRun 直接关连接（新播报/停止时立即释放 WS）
+      billed = 0; billedBytes = 0
+      return c
+    }
+    let hadError = false
+    try {
+      conn = await startConn()
+      for (let i = 0; i < segments.length; i++) {
+        if (run.stopped) return
+        // 不变式 1：发给 TTS 的文字不得含 [# 指令标签（豆包/DeepSeek 都会照读）——逐段剥离
+        const seg = extractVoiceTags(segments[i]).clean
+        if (!seg) continue
+        const w = billingCharsOf(seg)
+        const b = Buffer.byteLength(seg, 'utf8')
+        if (billed + w > DEEPSEEK_STREAM.maxBillingChars || billedBytes + b > DEEPSEEK_STREAM.maxBodyBytes) {
+          // 轮转会话：收尾当前会话（剩余音频继续流入队列），开新连接续喂——PCM 同格式无缝拼接
+          const old = conn
+          conn = null
+          await old.finishText(DEEPSEEK_STREAM.finishTimeout)
+          old.close()
+          conn = await startConn()
+        }
+        conn.sendText(seg)
+        billed += w; billedBytes += b
+      }
+      await conn.finishText(DEEPSEEK_STREAM.finishTimeout)
+    } catch (error) {
+      if (run.stopped) return
+      const detail = String((error && error.message) || run.fatalDs || error)
+      if (run.segments === 0) {
+        // 首段就失败（一个字节都没收到）：整段兜底交给 runPipeline（降级后可播完，用户无感）
+        throw speakError('http', 'deepseek 流式失败: ' + detail)
+      }
+      // 已有段：保留已播内容，记降级说明 + 保留错误分类（客户端 toast 按 kind 选文案）
+      hadError = true
+      if (!run.errorKind) run.errorKind = 'http'
+      run.warn = (run.warn ? run.warn + '；' : '') + '流式中断，后续内容未播报（' + detail.slice(0, 120) + '）'
+    } finally {
+      try { if (conn) conn.close() } catch {}
+    }
+    flushSegment(run) // 剩余半段也交给客户端（能播多少播多少）
+    if (hadError && !run.error) run.error = run.warn
+  }
+
   async function transcribe(sessionId, messageId, opts = {}) {
     const found = extractText(sessionId, messageId)
     if (found.error) return { ok: false, error: found.error }
@@ -1804,6 +2038,8 @@ function apply(ctx, config) {
         if (prov === 'volcengine') {
           audioUrl = await synthToRoute(plain, cfg, buildVoiceInstruction(cfg, '', ''), { sectionId: v && v.useSectionId ? stableHashId(sessionId) : '' })
         } else if (prov === 'local') {
+          audioUrl = await synthToRoute(plain, cfg, '')
+        } else if (prov === 'deepseek') {
           audioUrl = await synthToRoute(plain, cfg, '')
         }
       } catch (error) {
@@ -1986,10 +2222,10 @@ function apply(ctx, config) {
       && ((fromCache && cached) ? cached.ttsFp === curFp && serverCacheAllowed(transcript, curFp)
         : serverCacheAllowed(transcript, curFp))
 
-    // TTS：browser 透传 Client speechSynthesis；豆包/本地在 Host 合成后挂一次性音频路由。
+    // TTS：browser 透传 Client speechSynthesis；豆包/本地/DeepSeek 在 Host 合成后挂一次性音频路由。
     // 本地引擎中英都能读（含降级直读稿），恒走 Host TTS；只有系统引擎才回落到浏览器语音。
     const provTts = ttsProviderOf(cfg)
-    const wantHostTts = provTts === 'volcengine' || provTts === 'local'
+    const wantHostTts = provTts === 'volcengine' || provTts === 'local' || provTts === 'deepseek'
     let audioUrl
     let ttsError
     let ttsErrorKind
@@ -2040,6 +2276,7 @@ function apply(ctx, config) {
       // 客户端不存第二份能力数据；老 Client 忽略该字段即退回"全展示"。
       voices: VOLC_VOICES.map((x) => ({ id: x.id, name: x.name, languages: languagesForVoice(x.id) })),
       kokoroVoices: LOCAL_VOICES,
+      deepseekVoices: DEEPSEEK_VOICES,
       languages: LANGUAGE_OPTIONS.map((l) => ({ id: l.id, label: l.label, dialect: !!l.dialect, dialectId: l.dialectId || '' })),
       stylePresets: STYLE_PRESETS.map((p) => ({ id: p.id, name: p.name, tone: p.tone || '' })),
       lengthLevels: LENGTH_LEVELS.map((l) => ({ id: l.id, name: l.name })),
@@ -2187,6 +2424,10 @@ function apply(ctx, config) {
           text = en ? PREVIEW_SAMPLE_EN : PREVIEW_SAMPLE
           label = (voice ? voice.name : 'sid ' + String((cfg.tts.local && cfg.tts.local.sid) || ''))
             + (want === 'auto' ? '' : ' · ' + (want === 'en' ? 'English' : '中文'))
+        } else if (ttsProviderOf(cfg) === 'deepseek') {
+          // DeepSeek：语种自动识别，样例用中文稿；标签给音色名（海星/暗潮）
+          const dv = DEEPSEEK_VOICES.find((x) => x.id === deepseekVoiceIdOf(cfg.tts.deepseek)) || DEEPSEEK_VOICES[0]
+          label = dv.name
         } else if (cfg.language === 'en') {
           // 豆包：固定 en → 英文样例；方言用中文稿（方言靠音色发音体现，不改文稿）
           text = PREVIEW_SAMPLE_EN
@@ -2239,15 +2480,15 @@ function apply(ctx, config) {
       if (found.error) return { ok: false, error: found.error }
       const cfg = normalizeVoiceConfig(readConfig()) // 归一化视图（UI 显示与实际发声一致）
       const regen = !!(a.regen) // 重新生成：跳过转写缓存，重新转写+合成，覆盖旧缓存条目
-      if (isStreamingVolc(cfg) || isStreamingLocal(cfg)) {
-        // 流式（豆包双向流 / 本地分句流式）：立即返回 runId，管线后台跑；客户端经 streamNext 取音频段
+      if (isStreamingVolc(cfg) || isStreamingLocal(cfg) || isStreamingDeepseek(cfg)) {
+        // 流式（豆包双向流 / 本地分句流式 / DeepSeek WS）：立即返回 runId，管线后台跑；客户端经 streamNext 取音频段
         const run = createStreamRun(sid, mid, cfg)
         run.force = regen
         runPipeline(run, found, cfg)
         const provSpeak = ttsProviderOf(cfg)
         const sampleRate = isLocalProvider(cfg)
           ? LOCAL_SAMPLE_RATE
-          : (cfg.tts.volcengine.sampleRate || 24000)
+          : (provSpeak === 'deepseek' ? DEEPSEEK_SAMPLE_RATE : (cfg.tts.volcengine.sampleRate || 24000))
         return { ok: true, mode: 'stream', runId: run.id, sessionId: sid, messageId: mid, sampleRate, engine: provSpeak, warn: run.warn || undefined }
       }
       // 非流式路径防并发：同一时刻只跑一条转写+合成管线（防多标签/本地脚本并发触发第三方调用）

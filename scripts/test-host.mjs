@@ -272,6 +272,17 @@ function fakeTtsResponse() {
     text: async () => '',
   }
 }
+// DeepSeek TTS 整段 POST 的替身响应：官方返回的是"裸 PCM 字节流"（非 JSON 行），
+// 插件按 async 迭代消费 → 这里给两块假 PCM（可被 async for 消费）。
+function fakeDeepseekResponse() {
+  const chunks = [Buffer.alloc(3000, 0x41), Buffer.alloc(2000, 0x42)]
+  let i = 0
+  return {
+    ok: true, status: 200,
+    body: { [Symbol.asyncIterator]: async function* () { while (i < chunks.length) yield chunks[i++] } },
+    text: async () => '',
+  }
+}
 globalThis.fetch = async (url, init) => {
   const target = String(url)
   if (fetchState.hang) {
@@ -286,7 +297,8 @@ globalThis.fetch = async (url, init) => {
     })
   }
   const parsedBody = init && init.body ? JSON.parse(init.body) : null
-  fetchState.calls.push({ url: target, local: false, body: parsedBody })
+  fetchState.calls.push({ url: target, local: false, body: parsedBody, auth: (init && init.headers && init.headers.Authorization) || '' })
+  if (target.includes('api.deepseek.com')) return fakeDeepseekResponse()
   if (!fetchState.nextOk) return { ok: false, status: 500, body: null, text: async () => 'mock tts boom', arrayBuffer: async () => new ArrayBuffer(0) }
   return fakeTtsResponse()
 }
@@ -730,6 +742,130 @@ check('standard：WS 端点 = /api/v3/tts/bidirection（无 /plan/）', wsState.
 const sgw = await rpc('stop')
 check('standard：stop ok', sgw.ok === true)
 await rpc('setConfig', { patch: { tts: { volcengine: { gateway: 'plan', httpUrl: '', wsUrl: '' } } } })
+
+section('T11e DeepSeek TTS：整段 POST（端点/鉴权/音色回退/WAV 头/无 Key 报错）')
+// 专用 messageId（mds*）：不与旧测试共用，避免整段路径的转写缓存（promptLocal）污染后续用例
+sessionEvents.push(
+  msgEvent('mds1', 40, '深海测试内容'),
+  msgEvent('mds2', 41, '未知音色回退测试内容'),
+  msgEvent('mds3', 42, '无 Key 报错测试内容'),
+  msgEvent('mdsws', 43, '深海流式第一句。第二句。\n第三句。第四句。第五句。第六句。第七句。第八句。第九句。第十句。第十一句。第十二句。'),
+  msgEvent('mdsfallback', 44, '深海兜底内容'),
+  msgEvent('mdsrot', 45, ''),
+  msgEvent('mdsgate', 46, 'DeepSeek 门控测试内容'),
+)
+sessionEvents[sessionEvents.length - 2] = msgEvent('mdsrot', 45, '第一句。'.repeat(1600)) // 1600×7=11200 计费字符 > 9500 预算 → 必须轮转
+check('ttsProviderOf：deepseek 归一', ttsProviderOf({ tts: { provider: 'deepseek' } }) === 'deepseek' && ttsProviderOf({ tts: { provider: 'unknown-x' } }) === 'browser')
+await rpc('setConfig', { patch: { tts: { provider: 'deepseek', deepseek: { apiKey: 'ds-key', voiceId: 'stella', streaming: false } }, autoSpeakCloudTts: true } })
+llmState.responses = [{ text: '深海测试内容', finish: 'stop' }]
+const rds = await rpc('speak', { sessionId: 's1', messageId: 'mds1' })
+check('deepseek 整段 ok + audioUrl', rds.ok === true && typeof rds.audioUrl === 'string', rds)
+const dsCall = fetchState.calls[fetchState.calls.length - 1]
+check('POST 打到官方端点：/v1/tools/tts + voice_id + format=pcm',
+  dsCall.url.includes('api.deepseek.com/v1/tools/tts') && dsCall.body.voice_id === 'stella' && dsCall.body.format === 'pcm', dsCall)
+check('POST 鉴权头 Authorization: Bearer', dsCall.auth === 'Bearer ds-key', dsCall.auth)
+const dsWav = await fetchAudio(rds.audioUrl.replace('/voice/audio/', ''))
+check('整段返回带 44 字节 WAV 头（RIFF/WAVE，客户端 <audio> 直接能播）',
+  dsWav.body && dsWav.body.length > 44 && dsWav.body.toString('ascii', 0, 4) === 'RIFF' && dsWav.body.toString('ascii', 8, 12) === 'WAVE' && dsWav.mime === 'audio/wav', { len: dsWav.body && dsWav.body.length, mime: dsWav.mime })
+// 未知音色 id：合成期回退 stella，不打到服务器再报错
+await rpc('setConfig', { patch: { tts: { deepseek: { voiceId: 'not-a-voice' } } } })
+llmState.responses = [{ text: '未知音色回退测试内容', finish: 'stop' }]
+const rds2 = await rpc('speak', { sessionId: 's1', messageId: 'mds2' })
+check('未知 voiceId 回退 stella（请求体 voice_id=stella）',
+  fetchState.calls[fetchState.calls.length - 1].body.voice_id === 'stella', fetchState.calls[fetchState.calls.length - 1].body)
+// 无 Key：整段路径给明确报错（ttsErrorKind=http，客户端按 kind 选文案）
+await rpc('setConfig', { patch: { tts: { deepseek: { apiKey: '' } } } })
+llmState.responses = [{ text: '无 Key 报错测试内容', finish: 'stop' }]
+const rds3 = await rpc('speak', { sessionId: 's1', messageId: 'mds3' })
+check('无 Key：报错可分类（ttsErrorKind=http 且文案含 apiKey）',
+  rds3.ok === true && rds3.ttsErrorKind === 'http' && /apiKey/.test(rds3.ttsError || ''), { ttsError: rds3.ttsError, kind: rds3.ttsErrorKind })
+await rpc('setConfig', { patch: { tts: { deepseek: { apiKey: 'ds-key', voiceId: 'stella' } } } })
+
+section('T11f DeepSeek 成本门控：与豆包同列（autoSpeakCloudTts=false 拦自动播报）')
+await rpc('setConfig', { patch: { autoSpeak: true, autoSpeakCloudTts: false } })
+fire(msgEvent('mdsgate2', 46, 'DeepSeek 门控测试内容'))
+fire({ type: 'turn/end', data: { turn: 46, reason: { kind: 'completed' } } })
+check('deepseek 未允许时自动播报被门控', (await rpc('pollSpeak')).pending === null)
+await rpc('setConfig', { patch: { autoSpeakCloudTts: true } })
+fire({ type: 'turn/end', data: { turn: 46, reason: { kind: 'completed' } } })
+check('门控解除：turn/end 进入播报队列', !!(await rpc('pollSpeak')).pending)
+await rpc('setConfig', { patch: { autoSpeak: true } }) // 还原到本节之前的状态（T20 的免费引擎门控测试依赖它）
+
+section('T11g DeepSeek TTS：WS 流式（对齐豆包管线：分段喂字/音频帧入队/finish）')
+// ---- WebSocket 替身（模拟 DeepSeek 流式服务端：text 事件→假 PCM，finish_text→finish 帧） ----
+const dsWsState = { connections: 0, texts: [], finishTexts: 0, lastUrl: '', failOpen: false, dropAudio: false, suppressFinish: false }
+class MockDeepseekWS {
+  constructor(url, opts) {
+    this.binaryType = 'blob'
+    this.url = url
+    dsWsState.lastUrl = url
+    dsWsState.connections++
+    if (dsWsState.failOpen) setTimeout(() => this.onerror && this.onerror({ message: 'conn refused' }), 0)
+    else setTimeout(() => this.onopen && this.onopen(), 0)
+  }
+  send(data) {
+    let msg
+    try { msg = JSON.parse(data) } catch { return }
+    const emitAudio = (bytes) => {
+      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      setTimeout(() => { if (!this.closed && this.onmessage) this.onmessage({ data: ab }) }, 0)
+    }
+    const emitText = (obj) => {
+      const s = JSON.stringify(obj)
+      setTimeout(() => { if (!this.closed && this.onmessage) this.onmessage({ data: s }) }, 0)
+    }
+    if (msg.event === 'text') {
+      dsWsState.texts.push(msg.text)
+      if (!dsWsState.dropAudio) emitAudio(Buffer.alloc(20000, 0x44))
+    } else if (msg.event === 'finish_text') {
+      dsWsState.finishTexts++
+      emitAudio(Buffer.alloc(5000, 0x55))
+      if (!dsWsState.suppressFinish) emitText({ event: 'finish', code: 'success' })
+    }
+  }
+  close() { this.closed = true; setTimeout(() => this.onclose && this.onclose({ code: 1000, reason: '' }), 0) }
+}
+globalThis.WebSocket = MockDeepseekWS
+dsWsState.connections = 0; dsWsState.texts = []; dsWsState.finishTexts = 0
+await rpc('setConfig', { patch: { tts: { provider: 'deepseek', deepseek: { apiKey: 'ds-key', voiceId: 'tide', streaming: true } }, autoSpeakCloudTts: true } })
+llmState.responses = [{ text: '深海流式第一句。'.repeat(40) + '第二句。'.repeat(40), finish: 'stop' }] // ~560 字 → 分句切段 ≥2 段
+const sds = await rpc('speak', { sessionId: 's1', messageId: 'mdsws', regen: true })
+check('deepseek 流式 speak 返回 mode=stream + sampleRate=24000', sds.ok === true && sds.mode === 'stream' && sds.sampleRate === 24000, sds)
+const sdd = await awaitStreamDone(sds.runId)
+check('WS 端点带 voice_id=tide 与 format=pcm 查询参数', dsWsState.lastUrl.includes('voice_id=tide') && dsWsState.lastUrl.includes('format=pcm'), dsWsState.lastUrl)
+check('流式段全部 pcm 且 ≥1 段', sdd.res && sdd.urls.length >= 1 && sdd.formats.every((f) => f === 'pcm'), { n: sdd.urls.length, formats: sdd.formats })
+check('逐段 text 事件（分句切段后 ≥2 段）', dsWsState.texts.length >= 2, dsWsState.texts.length)
+check('finish_text 恰好一次（单连接）', dsWsState.finishTexts === 1 && dsWsState.connections === 1, { finish: dsWsState.finishTexts, conn: dsWsState.connections })
+check('喂给 WS 的文字拼回=转写稿（除段间空白外不丢字）',
+  dsWsState.texts.join('').replace(/\s+/g, '') === (sdd.res.transcript || '').replace(/\s+/g, ''),
+  { fed: dsWsState.texts.join('').length, transcript: (sdd.res.transcript || '').length })
+check('streamNext 结束返回 done', sdd.res.done === true)
+
+section('T11h DeepSeek TTS：WS 失败自动降级整段（对齐豆包兜底行为）')
+globalThis.WebSocket = MockDeepseekWS
+dsWsState.failOpen = true // 连接阶段就失败（onerror，无 onopen）——确定性失败，不与 onopen 竞态
+dsWsState.connections = 0; dsWsState.texts = []; dsWsState.finishTexts = 0
+llmState.responses = [{ text: '深海兜底内容', finish: 'stop' }]
+const sdf = await rpc('speak', { sessionId: 's1', messageId: 'mdsfallback', regen: true })
+const ddf = await awaitStreamDone(sdf.runId)
+check('WS 连接失败自动回退整段（1 段 + warn 含回退）', ddf.res && ddf.urls.length === 1 && ddf.res.warn && ddf.res.warn.includes('回退'), ddf)
+check('兜底段 format=wav（整段 POST 的 PCM 已封 WAV 头）', ddf.formats.length === 1 && ddf.formats[0] === 'wav', ddf.formats)
+dsWsState.failOpen = false
+
+section('T11i DeepSeek TTS：计费轮转（超单会话预算 → 第二条连接续喂）')
+globalThis.WebSocket = MockDeepseekWS
+dsWsState.connections = 0; dsWsState.texts = []; dsWsState.finishTexts = 0
+const longText = '第一句。'.repeat(1600) // 1600×7=11200 计费字符 > 9500 预算 → 必须轮转
+llmState.responses = [{ text: longText, finish: 'stop' }]
+const sdr = await rpc('speak', { sessionId: 's1', messageId: 'mdsrot', regen: true })
+const ddr = await awaitStreamDone(sdr.runId, 15000)
+check('长稿轮转：连接 ≥2 条', dsWsState.connections >= 2, dsWsState.connections)
+check('长稿轮转：每条连接各 finish 一次', dsWsState.finishTexts === dsWsState.connections, { finish: dsWsState.finishTexts, conn: dsWsState.connections })
+check('长稿流式段 ≥1 且 format=pcm（轮转拼接无缝）', ddr.res && ddr.urls.length >= 1 && ddr.formats.every((f) => f === 'pcm'), { n: ddr.urls.length })
+check('轮转喂字总量不丢字', dsWsState.texts.join('') === longText, { fed: dsWsState.texts.join('').length, want: longText.length })
+globalThis.WebSocket = MockVolcWS
+// 还原到本节之前的豆包配置（streaming 必须回 true，否则殃及后续豆包流式测试）
+await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'bidirection', streaming: true } } } })
 
 section('T12a 转写关闭（transcribe.enabled=false）-> 直接读原文、不调模型')
 await rpc('setConfig', { patch: { tts: { provider: 'volcengine', volcengine: { interface: 'http' } }, transcribe: { enabled: false } } })
