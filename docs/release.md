@@ -8,11 +8,12 @@
 
 | 位置 | 当前 | 说明 |
 |---|---|---|
-| 本仓库 | `0.5.1` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
-| GitHub main | `0.5.1` | 已发 Release `v0.5.1`（安装方式改为 npm；行为与 0.5.0 相同） |
-| npm | `0.5.1` | 包名 `voice-for-dsh`，已发布；用户用 `dsh plugin --profile desktop add voice-for-dsh` 安装（npm 上的 `dsh-plugin-voice` 是另一个项目，与本仓库无关） |
+| 本仓库 | `0.6.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
+| GitHub main | `0.6.0` | 最近一次已发 Release `v0.5.2`；0.6.0 是首个带 DeepSeek 引擎的版本 |
+| npm | `0.5.2` | 包名 `voice-for-dsh`；0.6.0 暂不发 npm（原因与做法见 §7） |
 
-发版＝推 main、打 tag、写 Release、发 npm；安装走 npm 包名，源码安装只作开发用法。
+发版＝推 main、打 tag、写 Release；安装命令仍走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
+npm 上的版本落后于 GitHub 时，从 npm 装到的是 `0.5.2`——发版说明里要写清这一点，不要让人以为装完就是新版。
 
 ## 1. 自动化门槛（不产生外部调用，每次必跑）
 
@@ -113,8 +114,13 @@
 
 发布方式：**暂存发布 + 网页批准**（`npx npm@11 stage publish`，再到 npmjs.com 的 Staged Packages 点 Approve 并按指纹）。
 不用"绕过 2FA"的令牌；首次暂存会先出现一个 `0.0.0-stage` 占位版本，批准后正式版本成为 `latest`。
-配置好可信发布（见 `.github/workflows/publish.yml` 头部注释）之后，可以改成打 tag 由 CI 发布，
-并在包设置里打开「必须 2FA、禁止令牌」。
+
+两条现状（发版前先核对，别假设能用）：
+
+- 「打 tag 由 CI 发」**没配好**：本仓库的 `publish.yml` 在 `v0.5.2` 上跑过，`npm publish` 回 404
+  （npm 那边没登记这个可信发布者）。所以打 tag 会顺带拉起一条红色的 publish 运行，不影响 GitHub Release 本身。
+- 因此 npm 上的版本应视作「前一次手工暂存发布的结果」：0.6.0 只发 GitHub Release，npm 停在 0.5.2；
+  要让 npm 跟上，得本机能登 npmjs.com 走一遍暂存发布与网页批准，或先在 npm 包设置里把可信发布者填好。
 
 **GitHub 源码（开发用法）**：`dsh plugin --profile desktop add link:<仓库路径>/packages/voice-for-dsh`，
 改代码即生效，依赖要自己 `npm install`。
@@ -131,10 +137,10 @@ npm 上的 `dsh-plugin-voice` 属于另一个项目，与本仓库无关——�
 3. 更新 `CHANGELOG.md`：把 `[Unreleased]` 收成 `[0.4.0] - 日期`（同一版本只留一个标题）。
 4. `git add` 相关文件并 commit。
 5. `git push`，等 CI 在 HEAD 上跑绿（README 徽章转绿）。
-6. `git tag v0.5.1 && git push origin v0.5.1`（tag 指向发版提交）。
-7. 发布：`cd packages/voice-for-dsh`，先 `npm pack --dry-run` 核对清单，再 `npx npm@11 stage publish`；
+6. `git tag v<版本号> && git push origin v<版本号>`（annotated tag，指向发版提交）。
+7. **npm 仍要发时才做**：`cd packages/voice-for-dsh`，先 `npm pack --dry-run` 核对清单，再 `npx npm@11 stage publish`；
    到 npmjs.com 的 Staged Packages 批准（按指纹）。发布的是 tag 指向的同一棵树，发出去后内容不能再改。
-   已配置可信发布后，打 tag 即由 `.github/workflows/publish.yml` 发布，不需要本机操作。
+   本次不发 npm 时跳过这一步，并在发版说明里写明 npm 上停在哪一版。
 8. GitHub Release 写说明（顺序：变什么 → 要不要动手 → 步骤 → 读数）。
 9. 向目录提收录（§9.1），商店随后自动能搜到。
 
