@@ -30,6 +30,12 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
+      # 可信发布要求 npm ≥ 11.5.1；runner 自带的版本不保证够新。
+      - name: npm 版本
+        run: |
+          npm install -g npm@latest
+          npm --version
+
       - name: 该版本是否已在 npm 上
         id: check
         working-directory: packages/voice-for-dsh
