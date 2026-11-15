@@ -10,10 +10,10 @@
 |---|---|---|
 | 本仓库 | `0.6.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
 | GitHub main | `0.6.0` | 已发 Release `v0.6.0`（首个带 DeepSeek 引擎的版本） |
-| npm | `0.5.2` | 包名 `voice-for-dsh`；0.6.0 暂不发 npm（原因与做法见 §7） |
+| npm | `0.6.0` | 包名 `voice-for-dsh`；由 `.github/workflows/publish.yml` 走可信发布（OIDC）从 GitHub Actions 发，带 provenance |
 
-发版＝推 main、打 tag、写 Release；安装命令仍走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
-npm 上的版本落后于 GitHub 时，从 npm 装到的是 `0.5.2`——发版说明里要写清这一点，不要让人以为装完就是新版。
+发版＝推 main、打 tag、写 Release；npm 那一步由打 tag 触发的 `publish.yml` 自动完成，安装走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
+`npm publish` 之后到版本对外可见有一两分钟延迟：先 404、后 200，核对时要重试，别看到 404 就以为发失败了。
 
 ## 1. 自动化门槛（不产生外部调用，每次必跑）
 
@@ -109,18 +109,18 @@ npm 上的版本落后于 GitHub 时，从 npm 装到的是 `0.5.2`——发版�
 ## 7. 分发方式
 
 **npm（主渠道）**：包名 `voice-for-dsh`，用户执行 `dsh plugin --profile desktop add voice-for-dsh`。
-包体 131KB（压缩后），只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json`；
+包体 142KB（压缩后）、解包 435KB，只含 `lib/`、`cordis.patch.yml`、`README.md`、`LICENSE`、`package.json`；
 本地引擎的原生模块按平台随安装下载（win-x64 约 22MB），模型仍从 GitHub Releases 下载，都不进 npm 包。
 
-发布方式：**暂存发布 + 网页批准**（`npx npm@11 stage publish`，再到 npmjs.com 的 Staged Packages 点 Approve 并按指纹）。
-不用"绕过 2FA"的令牌；首次暂存会先出现一个 `0.0.0-stage` 占位版本，批准后正式版本成为 `latest`。
+发布方式：**可信发布（OIDC）**——打 tag 触发 `publish.yml`，CI 从 GitHub Actions 向 npm 换一张短期凭证再 `npm publish`，
+本机不留任何长期令牌，包上带 provenance 来源证明。它要求 npm ≥ 11.5.1（工作流里会先升一次 npm）与 `id-token: write` 权限。
 
-两条现状（发版前先核对，别假设能用）：
+配置在哪：npmjs.com → 包页面（`/package/voice-for-dsh/access`）→ Trusted Publisher → GitHub Actions，
+填 `junarch` / `voice_for_dsh` / `publish.yml`，并在 Allowed actions 里勾上 **Allow npm publish**
+（不勾只有暂存权限，`npm publish` 会失败）。该配置建好后必须 **2 天内成功发一次**才算验证通过，否则失效。
 
-- 「打 tag 由 CI 发」**没配好**：本仓库的 `publish.yml` 在 `v0.5.2` 上跑过，`npm publish` 回 404
-  （npm 那边没登记这个可信发布者）。所以打 tag 会顺带拉起一条红色的 publish 运行，不影响 GitHub Release 本身。
-- 因此 npm 上的版本应视作「前一次手工暂存发布的结果」：0.6.0 只发 GitHub Release，npm 停在 0.5.2；
-  要让 npm 跟上，得本机能登 npmjs.com 走一遍暂存发布与网页批准，或先在 npm 包设置里把可信发布者填好。
+本机登不了 npmjs.com（Cloudflare 对这套网络的网页请求回 403），所以令牌或网页批准那条路不可用；
+发布一律从 CI 走。要手工补发某版本：`gh workflow run publish.yml --ref main`（版本号已存在时工作流会跳过 `npm publish`）。
 
 **GitHub 源码（开发用法）**：`dsh plugin --profile desktop add link:<仓库路径>/packages/voice-for-dsh`，
 改代码即生效，依赖要自己 `npm install`。
@@ -138,9 +138,10 @@ npm 上的 `dsh-plugin-voice` 属于另一个项目，与本仓库无关——�
 4. `git add` 相关文件并 commit。
 5. `git push`，等 CI 在 HEAD 上跑绿（README 徽章转绿）。
 6. `git tag v<版本号> && git push origin v<版本号>`（annotated tag，指向发版提交）。
-7. **npm 仍要发时才做**：`cd packages/voice-for-dsh`，先 `npm pack --dry-run` 核对清单，再 `npx npm@11 stage publish`；
-   到 npmjs.com 的 Staged Packages 批准（按指纹）。发布的是 tag 指向的同一棵树，发出去后内容不能再改。
-   本次不发 npm 时跳过这一步，并在发版说明里写明 npm 上停在哪一版。
+7. 打 tag 会触发 `publish.yml`，由 CI 发 npm（见 §7）。等它跑完再核对：`npm view voice-for-dsh version`
+   要等一两分钟（传播延迟），并比对发布日志里的 `shasum` 与 registry 上的 `dist.shasum` 一致。
+   已发布的版本号不能重发，也不能改内容——发现内容错了就发补丁版本。
+   工作流没触发或失败时手工补：`gh workflow run publish.yml --ref main`。
 8. GitHub Release 写说明（顺序：变什么 → 要不要动手 → 步骤 → 读数）。
 9. 向目录提收录（§9.1），商店随后自动能搜到。
 
@@ -180,8 +181,8 @@ url: https://github.com/junarch/voice_for_dsh/tree/main/packages/voice-for-dsh
 name: junarch/voice_for_dsh#voice-for-dsh
 category: voice
 description:
-  en: Reads each reply aloud after spoken-style transcription, with system TTS, Doubao, or an optional local Kokoro model.
-  zh: 把每轮回答改写成口语稿再朗读；支持系统朗读、豆包和可选的本地 Kokoro 模型。
+  en: Reads each reply aloud after spoken-style transcription, with system TTS, Doubao, the DeepSeek TTS API, or an optional local Kokoro model.
+  zh: 把每轮回答改写成口语稿再朗读；支持系统朗读、豆包、DeepSeek 官方 TTS 和可选的本地 Kokoro 模型。
 ```
 
 2. 提 PR。CI 先校验 YAML、仓库年龄、`dsh-plugin` topic、子包里的 `dsh.bundle`、README 能否重新生成；
