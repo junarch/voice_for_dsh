@@ -412,7 +412,12 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 - `tts.volcengine.apiKey` **不标 `role('secret')`**（有意）：dsh-settings 的写入路径会把非 volatile 的秘密字段
   从落盘补丁里剥掉（`strip(raw, form)`），而设置页每次保存都会整块重写该条目的 config——一旦标 secret，
   用户第一次在设置页点保存就会**把 patch 里的 apiKey 删掉**，豆包从此失效。所以 key 保持在 profile patch 里
-  明文（与旧 settings.yaml 同一安全等级），设置页可读可改。
+  明文（与旧 settings.yaml 同一安全等级）。
+- **但接口不回传密钥原文**（0.6.1 起，同一理由的另一半）：`getConfig` / `getState` / `setConfig` 只回
+  `secrets.volcengine|deepseek` 的 `set` 与 `tail`（末四位），`config.tts.*.apiKey` 恒为空串。
+  设置页的输入框因此从空开始、占位提示带尾号；输入框留空 = 不改，要清掉已保存的 key 走
+  `clearApiKey({engine})`（写 `''` 等于回到 schema 默认）。试听用「抹掉密钥的草稿 + 已保存的 key」拼一份
+  临时配置（`withStoredKeys`），否则"只改个音色再试听"会变成缺 key 报错。
 
 ```yaml
 voice:
@@ -540,8 +545,11 @@ voice:
 6. **转写完整才写缓存**——WS 中途失败不污染缓存（否则降级命中坏稿、播不完整内容）。
 7. **重播零 LLM**——转写 + 情感指令全用缓存（不重新生成）；重新生成（↻）= 全部重新生成。
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
-9. **`/voice/api` 只接受同源请求**——`Origin` 的 host 与 `Host` 头一致才放行（CSRF 防护：
-   第三方调用/改配置不得被任意网页跨站触发）；无 `Origin` 的本地非浏览器调用放行。
+9. **三条插件路由都只接受本机请求**——`/voice/api`、`/voice/audio`、`/voice/sounds` 统一走
+   `localRequestVerdict`：连接对端必须是回环地址、`Host` 必须是本机名（127.0.0.1 / localhost / ::1）、
+   带 `Origin` 时它还必须与 `Host` 相同（CSRF 防护）。**不得**退回到"只看 `Origin` 与 `Host` 相等"——
+   两者都是调用方自己填的，恶意网页把同一个域名填进去就能冒充同源（域名重绑定）。
+   非回环对端只放行"Host 就是本机地址"的局域网直连；任意域名一律拒。无 `Origin` 的本地工具（curl）仍可用。
 10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
     不受 `autoSpeakCloudTts` 门控（browser/local）；转写关闭时**直接本地合成**（中英都能读），
     不得回退系统朗读、不得再带"需开启转写"的 notice。
@@ -599,6 +607,9 @@ voice:
     会让分支变成「层根的直接子节点」：层收起只收起空层体，行永远露着——"点箭头收不起来"就是这么来的
     （状态、class、诊断日志当时全正常，只有 DOM 结构错）。`test-settings-ui` 锁定：收起态下 L2 层根的直接
     子节点里不得出现 `dsh-voice-row`，展开→再收起后 apiKey 行必须随之消失。
+32. **配置接口不得回传密钥原文**——`getConfig` / `getState` / `setConfig` 一律走 `redactSecrets`（`apiKey` 置空）
+    + `secretsOf`（只给 `set`/`tail`）；新增任何返回配置的接口必须同样处理。密钥清除是显式动作
+    （`clearApiKey`），不靠"输入框空着"推断。
 
 ## 8. 设计决策（为什么）
 

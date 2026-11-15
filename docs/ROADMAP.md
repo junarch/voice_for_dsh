@@ -57,7 +57,7 @@
 - **提示音**：工作／完成／提问三种，默认关闭、可上传自定义音；信号只从客户端会话状态对账。
 - 重启后一键自检 `scripts/verify-installed.mjs`：Host 路由、Client 半是否进 boot 图、配置、本地运行时。
 - 开源发布前审计与脱敏（安全/隐私/SSOT/文档/测试，见 CHANGELOG）。
-- 安全收尾：`/voice/audio` 与 `/voice/api` 同源校验统一、custom 端点 https/wss 强制、音频路由 TTL/容量上限、非流式 speak 互斥。
+- 安全收尾（0.6.1 已做）：`/voice/api`、`/voice/audio`、`/voice/sounds` 统一为「只认本机请求」（对端回环 + Host 白名单 + 跨站 Origin 拒绝），配置接口不再回传密钥原文；custom 端点 https/wss 强制、音频路由 TTL/容量上限、非流式 speak 互斥。
 - 重播 1h 免重合成（服务端缓存 `cache_config` + 参数指纹防串音）。
 - 音调细粒度 `pitch`（连续半音）替代五档 `pitchLevel`，兼容层集中到 `voice-compat.js`。
 

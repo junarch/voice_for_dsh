@@ -3,18 +3,19 @@
 > 回答两个问题：**现在有哪些供应商、怎么接入新的（含本地 TTS 模型）**。
 > 架构背景见 `docs/architecture.md` §7；管线与不变式见 `docs/pipeline.md`。
 
-## 1. 现状（三个 TTS provider）
+## 1. 现状（四个 TTS provider）
 
 | provider | 引擎 | 离线 | 鉴权 | 音频回传 |
 |---|---|---|---|---|
 | `browser`（默认） | 客户端 `speechSynthesis` | 开箱即用、离线 | 无 | 浏览器直接读文本 |
 | `volcengine` | 豆包语音合成 2.0（双向流 WS 默认 + HTTP 单向兜底） | 按字符计费 | `X-Api-Key` | Host 合成 → `/voice/audio/<id>` |
+| `deepseek` | DeepSeek 官方 TTS（WS 流式默认 + HTTP 整段兜底） | 按计费字符（一个汉字折 2） | `Authorization: Bearer` | Host 合成 → `/voice/audio/<id>`（另有 Host 内音频重播缓存） |
 | `local` | 本地 Kokoro v1.1（中英，进程内 sherpa-onnx，无服务/无端口） | 本地运行、离线 | 无 | Host 进程内合成 → `/voice/audio/<id>` |
 
 **归一铁律**：provider 语义统一由 `ttsProviderOf(cfg)`（`lib/voice-compat.js`）归一——
-`volcengine`=豆包（需第三方 API，受成本门控）、`local`=本地 TTS、其余任何值（含旧值
-`openai-compatible`）一律归 `browser`。新供应商**必须**先在 `ttsProviderOf` 登记，
-否则永远不会被调用（这是防"未知 provider 悄悄烧钱"的设计）。
+`volcengine`=豆包（需第三方 API，受成本门控）、`deepseek`=DeepSeek 官方 TTS（同样是第三方 API、同样受门控）、
+`local`=本地 TTS、其余任何值（含旧值 `openai-compatible`）一律归 `browser`。新供应商**必须**先在
+`ttsProviderOf` 登记，否则永远不会被调用（这是防"未知 provider 悄悄烧钱"的设计）。
 
 ### 1.1 网关（volcengine 内部，`voice.tts.volcengine.gateway`）
 

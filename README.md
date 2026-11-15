@@ -136,7 +136,8 @@ node scripts/migrate-voice-config.mjs
 ### 配置
 
 所有配置在目标 profile 的 `cordis.patch.yml` 里 `voice` 条目的 `config:`（设置页可可视化编辑，保存即写回该文件）。
-字段说明见 [`docs/pipeline.md` §6](docs/pipeline.md)。豆包 API Key 也存于该文件（明文，仅限本机，请勿提交）。
+字段说明见 [`docs/pipeline.md` §6](docs/pipeline.md)。豆包与 DeepSeek 的 API Key 也存于该文件
+（明文，仅限本机，请勿提交）；设置页不回读原文，输入框留空即不改，要清除点输入框旁的「清除」。
 
 ---
 
@@ -154,7 +155,12 @@ node scripts/migrate-voice-config.mjs
 - **磁盘与内存**：本地模型解包后 407MB（下载包 348MB，装完归档自动删掉）；加载后常驻内存约 0.5–0.6GB，
   不用本地引擎就不占。
 - **隐私**：你的对话内容会发送给你配置的第三方服务（转写 LLM、豆包、DeepSeek）；
-  选本地 Kokoro 时合成完全在本机进行。**在涉及敏感内容的会话里请谨慎。**
+  选本地 Kokoro 时合成完全在本机进行。转写时会连带最近 `transcribe.contextTurns` 轮对话上下文
+  （默认 2 轮，可在设置页「转写」层调）。**在涉及敏感内容的会话里请谨慎。**
+- **本机留下什么**：转写稿缓存 `<DSH_HOME>/voice-transcript-cache.json`（明文 JSON，最多 200 条，
+  删掉即失效、不影响配置）；API Key 在 profile 的 `cordis.patch.yml`（明文）。
+- **网络出口只有四个**：转写 LLM、豆包 TTS、DeepSeek TTS、本地模型下载（GitHub Releases，点下载才会发生）。
+  没有埋点、没有遥测、没有第三方字体或 CDN。
 - **提示音只存本机**：工作/完成/提问三种提示音（含你上传的自定义音）落在 `<DSH_HOME>/voice/sounds`，
   不上传、不走网络；单个文件上限 10MB。
 - **崩溃范围是整个 Host**：本地合成是跑在 dsh Host 进程里的原生模块，它崩掉会带走整个 Host 进程，
