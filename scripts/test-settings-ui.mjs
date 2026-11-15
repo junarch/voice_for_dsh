@@ -143,7 +143,17 @@ function baseConfig() {
     chime: { enabled: false, volume: 0.3, work: { enabled: false, source: 'default', file: '' }, done: { enabled: false, source: 'default', file: '' }, ask: { enabled: false, source: 'default', file: '' } },
   }
 }
+/** Host 回给客户端的 tts 视图：密钥原文一律抹掉（只靠 secrets 报"配没配"）。 */
+function maskTts(tts) {
+  return {
+    ...tts,
+    volcengine: { ...tts.volcengine, apiKey: '' },
+    deepseek: tts.deepseek ? { ...tts.deepseek, apiKey: '' } : tts.deepseek,
+  }
+}
 let config = baseConfig()
+// Host 现在不回密钥原文，只给"配没配 + 末四位"：替身也按同一形状回（null = 老 Host，走配置字段回退）
+let secrets = null
 // 保存调用记录：断言"改动真的发了一次 setConfig"，以及发的是增量而不是整份配置
 let saveCalls = []
 function deepMerge(base, extra) {
@@ -162,7 +172,7 @@ function jsonResponse(obj) {
 }
 globalThis.fetch = async (url, init) => {
   const target = String(url)
-  if (target.indexOf('/voice/api/getConfig') >= 0) return jsonResponse({ ok: true, config })
+  if (target.indexOf('/voice/api/getConfig') >= 0) return jsonResponse({ ok: true, config, secrets })
   if (target.indexOf('/voice/api/preview') >= 0) {
     // 标签由 Host 给（本地=音色名）；客户端只负责显示，不在前端拼
     return jsonResponse({ ok: true, mode: 'audio', audioUrl: '/voice/audio/preview-1', voiceLabel: '中文男声 · 中（sid 75）' })
@@ -191,7 +201,15 @@ globalThis.fetch = async (url, init) => {
     const patch = JSON.parse((init && init.body) || '{}').patch || {}
     saveCalls.push(patch)
     config = deepMerge(config, patch) // 真 Host 是深合并，替身也必须一样，否则红绿都不可信
-    return jsonResponse({ ok: true, config })
+    return jsonResponse({ ok: true, config: { ...config, tts: maskTts(config.tts) }, secrets })
+  }
+  if (target.indexOf('/voice/api/clearApiKey') >= 0) {
+    const engine = String(JSON.parse((init && init.body) || '{}').engine || '')
+    saveCalls.push({ clearApiKey: engine })
+    if (engine === 'volcengine') config.tts.volcengine.apiKey = ''
+    if (engine === 'deepseek') config.tts.deepseek.apiKey = ''
+    if (secrets && secrets[engine]) secrets = { ...secrets, [engine]: { set: false, tail: '' } }
+    return jsonResponse({ ok: true, config: { ...config, tts: maskTts(config.tts) }, secrets })
   }
   return jsonResponse({ ok: false, error: 'unknown ' + target })
 }
@@ -224,8 +242,9 @@ function CaseVolcGated() { return reactStub.createElement(settingsComponent) }
 function CaseVolcCustom() { return reactStub.createElement(settingsComponent) }
 function CaseLocal() { return reactStub.createElement(settingsComponent) }
 
-async function mount(Case, mutate) {
+async function mount(Case, mutate, seedSecrets) {
   config = baseConfig()
+  secrets = seedSecrets || null
   if (mutate) mutate(config)
   rootEl = reactStub.createElement(Case)
   return await flush()
@@ -299,6 +318,32 @@ rootEl = reactStub.createElement(function CaseVolcCustomWithWs() { return reactS
 tree = await flush()
 tree = await expand(tree, '当前引擎声音设置')
 check('自定义网关配了 wsUrl：说明消失（不再误报）', !allText(tree).includes('整段合成完再播'), allText(tree).slice(0, 240))
+
+// 4c) 密钥不再下发：配置里的 apiKey 是空的，只有 secrets 说明"配没配"
+function CaseSecretSaved() { return reactStub.createElement(settingsComponent) }
+function CaseSecretNone() { return reactStub.createElement(settingsComponent) }
+tree = await mount(CaseSecretSaved, (c) => {
+  c.tts.provider = 'volcengine'
+  c.tts.volcengine.apiKey = ''            // Host 抹掉原文后的样子
+}, { volcengine: { set: true, tail: '5678' }, deepseek: { set: false, tail: '' } })
+check('密钥只回末四位：apiKey 空着也判为"已配置"（状态行给按量计费）',
+  allText(tree).includes('按量计费'), allText(tree).slice(0, 260))
+tree = await expand(tree, '当前引擎声音设置')
+check('已保存的密钥：输入框占位提示带尾号', byType(tree, 'input').some((n) => String(n.props.placeholder || '').includes('5678')),
+  byType(tree, 'input').map((n) => n.props.placeholder))
+const clearBtn = byType(tree, 'button').find((n) => texts(n).join('').trim() === '清除')
+check('已保存的密钥：出现「清除」按钮', !!clearBtn, byType(tree, 'button').length)
+clearBtn.props.onClick()
+tree = await flush()
+check('清除后：状态行回到"还没填 API Key"', allText(tree).includes('还没填 API Key'), allText(tree).slice(0, 260))
+check('清除后：不再出现「清除」按钮', !byType(tree, 'button').some((n) => texts(n).join('').trim() === '清除'))
+
+tree = await mount(CaseSecretNone, (c) => {
+  c.tts.provider = 'volcengine'
+  c.tts.volcengine.apiKey = ''
+}, { volcengine: { set: false, tail: '' }, deepseek: { set: false, tail: '' } })
+check('没有密钥：状态行说缺 Key', allText(tree).includes('还没填 API Key'), allText(tree).slice(0, 260))
+check('没有密钥：没有「清除」按钮', !byType(tree, 'button').some((n) => texts(n).join('').trim() === '清除'))
 
 // 5) 本地引擎：「高级」层回来，三项与层头摘要都在
 tree = await mount(CaseLocal, (c) => { c.tts.provider = 'local' })

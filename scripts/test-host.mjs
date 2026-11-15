@@ -310,30 +310,39 @@ let audioHandler
 let soundsHandler
 
 // rpc = 模拟"浏览器向插件发 HTTP 请求"。和 curl 的区别：不用起服务器，直接调处理函数。
-async function rpc(method, args, headers) {
-  const body = JSON.stringify(args || {})
-  const req = {
-    method: 'POST', url: '/voice/api/' + method, headers: headers || {},
-    async *[Symbol.asyncIterator]() { yield Buffer.from(body, 'utf8') },
+// 连接四元组默认是"本机回环直连"（peer/local=127.0.0.1、Host=127.0.0.1:3080）——新版本只认这种请求；
+// 需要测伪造/跨站时用 localOpts 覆盖 socket 与 headers。
+const LOOPBACK = { remoteAddress: '127.0.0.1', localAddress: '127.0.0.1' }
+function mockReq(opts) {
+  const o = opts || {}
+  const headers = Object.assign({ host: '127.0.0.1:3080' }, o.headers || {})
+  return {
+    method: o.method || 'POST',
+    url: o.url || '/',
+    headers,
+    socket: Object.assign({}, LOOPBACK, o.socket || {}),
   }
+}
+async function rpc(method, args, headers, socket) {
+  const body = JSON.stringify(args || {})
+  const req = Object.assign(mockReq({ url: '/voice/api/' + method, headers }), { socket: Object.assign({}, LOOPBACK, socket || {}) })
+  Object.defineProperty(req, Symbol.asyncIterator, { value: async function* () { yield Buffer.from(body, 'utf8') } })
   const res = { code: 0, body: '', writeHead(c) { this.code = c }, end(b) { this.body = String(b || '') } }
   await apiHandler(req, res)
   try { return JSON.parse(res.body) } catch { return { ok: false, parseError: res.body, code: res.code } }
 }
-async function fetchAudio(id) {
-  const req = { method: 'GET', url: '/voice/audio/' + id }
+async function fetchAudio(id, socket) {
+  const req = Object.assign(mockReq({ method: 'GET', url: '/voice/audio/' + id }), { socket: Object.assign({}, LOOPBACK, socket || {}) })
   const res = { code: 0, body: null, mime: '', writeHead(c, h) { this.code = c; if (h && h['Content-Type']) this.mime = h['Content-Type'] }, end(b) { this.body = b } }
   await audioHandler(req, res)
   return res
 }
 /** 模拟一次 /voice/sounds 请求：POST 的 body 按块喂（测累加上限），GET 无 body。 */
-async function soundsRequest(method, url, body, headers) {
+async function soundsRequest(method, url, body, headers, socket) {
   const chunks = []
   if (body) chunks.push(Buffer.isBuffer(body) ? body : Buffer.from(body))
-  const req = {
-    method, url, headers: headers || {},
-    async *[Symbol.asyncIterator]() { for (const c of chunks) yield c },
-  }
+  const req = Object.assign(mockReq({ method, url, headers }), { socket: Object.assign({}, LOOPBACK, socket || {}) })
+  Object.defineProperty(req, Symbol.asyncIterator, { value: async function* () { for (const c of chunks) yield c } })
   const res = {
     code: 0, headers: {}, body: null, text: '', mime: '',
     writeHead(c, h) { this.code = c; this.headers = h || {}; this.mime = (h && h['Content-Type']) || '' },
@@ -491,6 +500,45 @@ const cr4 = await rpc('ping')
 check('无 Origin 头（本地 curl/非浏览器）放行', cr4.ok === true, cr4)
 const cr5 = await rpc('ping', { big: 'x'.repeat(1_000_001) })
 check('请求体超 1MB 拒绝 413', cr5.ok === false && cr5.error === 'payload too large', cr5)
+
+section('T1c 只认本机请求（Host 白名单 + 对端地址；防域名重绑定与端口转发）')
+// 重绑定的核心手法：把 Host 与 Origin 都填成攻击者自己的域名——旧实现"两者相等"就放行。
+const fk1 = await rpc('getConfig', {}, { host: 'evil.example', origin: 'https://evil.example' })
+check('伪造 Host+Origin（域名重绑定）拒绝，且拿不到配置', fk1.ok === false && !fk1.config, { code: fk1.code, ok: fk1.ok })
+const fk2 = await rpc('getConfig', {}, { host: '127.0.0.1:3080', origin: 'https://evil.example' })
+check('回环 Host + 跨站 Origin 拒绝', fk2.ok === false, fk2)
+const fk2b = await rpc('ping', {}, { origin: 'https://evil.example' })
+check('Host 缺失（只有 Origin）拒绝', fk2b.ok === false, fk2b)
+const fk3 = await rpc('ping', {}, { host: '127.0.0.1:3080' }, { remoteAddress: '192.168.1.9', localAddress: '192.168.1.9' })
+check('非回环对端 + 回环 Host 拒绝（端口转发/局域网暴露不能冒充本机）', fk3.ok === false, fk3)
+const fk4 = await rpc('ping', {}, { host: '192.168.1.9:3080' }, { remoteAddress: '192.168.1.9', localAddress: '192.168.1.9' })
+check('非回环对端 + Host 就是本机地址：放行（局域网直连 dsh web 仍可用）', fk4.ok === true, fk4)
+const fk5 = await rpc('ping', {}, { host: 'evil.example' }, { remoteAddress: '192.168.1.9', localAddress: '192.168.1.9' })
+check('非回环对端 + 任意域名 Host 拒绝（重绑定在局域网路径也过不去）', fk5.ok === false, fk5)
+const fk6 = await fetchAudio('nope', { remoteAddress: '192.168.1.9', localAddress: '192.168.1.9' })
+check('/voice/audio 同样只认本机（非回环 403）', fk6.code === 403, fk6.code)
+const fk7 = await soundsRequest('GET', '/voice/sounds/x.wav', null, { host: 'evil.example', origin: 'https://evil.example' })
+check('/voice/sounds 同样拒绝伪造 Host', fk7.code === 403, fk7.code)
+
+section('T1d 配置接口不回传密钥原文（只回"已配置 + 末四位"）')
+await rpc('setConfig', { patch: { tts: { volcengine: { apiKey: 'volc-1234-5678' }, deepseek: { apiKey: 'ds-abcd-efgh' } } } })
+const gc1 = await rpc('getConfig')
+check('getConfig 里两个 apiKey 都是空串', gc1.config.tts.volcengine.apiKey === '' && gc1.config.tts.deepseek.apiKey === '',
+  { volc: gc1.config.tts.volcengine.apiKey, ds: gc1.config.tts.deepseek.apiKey })
+check('getConfig 用 secrets 报"已配置 + 末四位"',
+  gc1.secrets.volcengine.set === true && gc1.secrets.volcengine.tail === '5678'
+  && gc1.secrets.deepseek.set === true && gc1.secrets.deepseek.tail === 'efgh', gc1.secrets)
+const gs1 = await rpc('getState')
+check('getState 的 tts 也抹掉密钥（只留 secrets）',
+  gs1.tts.volcengine.apiKey === '' && gs1.tts.deepseek.apiKey === '' && gs1.secrets.deepseek.set === true, gs1.tts)
+const sc1 = await rpc('setConfig', { patch: { language: 'auto' } })
+check('setConfig 响应同样抹掉密钥', sc1.config.tts.volcengine.apiKey === '' && sc1.secrets.volcengine.set === true, sc1.config.tts)
+const clr1 = await rpc('clearApiKey', { engine: 'deepseek' })
+check('clearApiKey 清掉 deepseek key（secrets 转 false）',
+  clr1.ok === true && clr1.secrets.deepseek.set === false && clr1.secrets.deepseek.tail === '', clr1)
+check('clearApiKey 不动另一个引擎的 key', clr1.secrets.volcengine.set === true, clr1.secrets)
+const clr2 = await rpc('clearApiKey', { engine: 'browser' })
+check('clearApiKey 只接受 engine=volcengine|deepseek', clr2.ok === false && /volcengine/.test(clr2.error || ''), clr2)
 
 section('T3 重复朗读 = 缓存命中，LLM 调用数不变【防"转写 N 次"烧 token】')
 // 剧本：让假 LLM 返回一段带 [#...] 标签的转写稿（模拟自定义 prompt/旧缓存残留）

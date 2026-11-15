@@ -2477,9 +2477,25 @@ function apply(ctx, config) {
     },
     getState: async () => {
       const cfg = readConfig()
-      return { ok: true, autoSpeak: cfg.autoSpeak, pending: pendingSpeakQueue.length > 0, tts: cfg.tts }
+      // tts 里带两个 SSL/API Key：一律抹掉原文，只留"配没配 + 末四位"
+      const redacted = redactSecrets({ tts: cfg.tts })
+      return { ok: true, autoSpeak: cfg.autoSpeak, pending: pendingSpeakQueue.length > 0, tts: redacted.tts, secrets: secretsOf(cfg) }
     },
-    getConfig: async () => ({ ok: true, config: normalizeVoiceConfig(readConfig()) }),
+    getConfig: async () => {
+      const cfg = readConfig()
+      return { ok: true, config: redactSecrets(normalizeVoiceConfig(cfg)), secrets: secretsOf(cfg) }
+    },
+    /** 清除已保存的某个引擎的 API Key（设置页「清除」用；空串写盘等于回到 schema 默认即未配置）。 */
+    clearApiKey: async (args) => {
+      const engine = String((args && args.engine) || '')
+      if (engine !== 'volcengine' && engine !== 'deepseek') return { ok: false, error: 'engine must be volcengine|deepseek' }
+      await ctx.settings.update('voice', { tts: { [engine]: { apiKey: '' } } })
+      const cfg = readConfig()
+      const still = !!(cfg.tts && cfg.tts[engine] && cfg.tts[engine].apiKey)
+      const out = { ok: true, config: redactSecrets(normalizeVoiceConfig(cfg)), secrets: secretsOf(cfg) }
+      if (still) out.persisted = false
+      return out
+    },
     setConfig: async (args) => {
       const patch = args && args.patch
       if (!patch || typeof patch !== 'object') return { ok: false, error: 'missing patch' }
@@ -2489,7 +2505,8 @@ function apply(ctx, config) {
       // 写成功 ≠ 落盘成功：再读一次 profile patch 核对几个关键字段。
       // 不一致时把话说明（客户端会显示"没写进磁盘"），不假装保存成功。
       const persisted = verifyPersisted(patch)
-      const out = { ok: true, config: normalizeVoiceConfig(readConfig()) }
+      const cfg = readConfig()
+      const out = { ok: true, config: redactSecrets(normalizeVoiceConfig(cfg)), secrets: secretsOf(cfg) }
       if (persisted === false) out.persisted = false
       return out
     },
@@ -2533,7 +2550,8 @@ function apply(ctx, config) {
      * 系统 TTS 不给（它的 utterance.lang 恒 zh-CN，语种对它从来不生效）。 */
     preview: async (args) => {
       const draft = args && args.cfg && typeof args.cfg === 'object' ? args.cfg : null
-      const cfg = normalizeVoiceConfig(draft || readConfig())
+      const stored = normalizeVoiceConfig(readConfig())
+      const cfg = withStoredKeys(normalizeVoiceConfig(draft || readConfig()), stored)
       const languageLabel = (LANGUAGE_OPTIONS.find((l) => l.id === cfg.language) || {}).label || ''
       if (ttsProviderOf(cfg) === 'browser') {
         return { ok: true, mode: 'browser', text: PREVIEW_SAMPLE, speech: { rate: cfg.tts.browser.rate, pitch: cfg.tts.browser.pitch, voice: cfg.tts.browser.voice } }
@@ -2642,14 +2660,97 @@ function apply(ctx, config) {
     },
   }
 
-  /** 跨站请求伪造（CSRF）防护：/voice/api 会触发第三方 LLM/TTS 调用与改配置，
-   * 恶意网页可用 text/plain POST 免预检跨站触发（烧 token/钱）。浏览器发起的
-   * 合法请求（dsh 前端同源）Origin 的 host 与 Host 头一致；跨站页面 Origin 不同。
-   * 无 Origin 头（curl / 同源 GET 等非浏览器调用）放行，保持本地工具可用。 */
-  function isSameOrigin(req) {
-    const origin = req.headers && req.headers.origin
-    if (!origin) return true
-    try { return !!req.headers.host && new URL(origin).host === req.headers.host } catch { return false }
+  /** 把 Host/Origin 里的主机名取出来：去掉端口与 IPv6 方括号，小写化。 */
+  function hostNameOf(hostHeader) {
+    const raw = String(hostHeader || '').trim().toLowerCase()
+    if (!raw) return ''
+    if (raw.charAt(0) === '[') {                     // [::1]:3000 这类 IPv6 字面量
+      const end = raw.indexOf(']')
+      return end < 0 ? raw : raw.slice(1, end)
+    }
+    const colon = raw.lastIndexOf(':')
+    return colon < 0 ? raw : raw.slice(0, colon)
+  }
+  /** 地址是否属于本机回环（127.0.0.0/8、::1，以及 IPv4-mapped 形式）。 */
+  function isLoopbackAddr(addr) {
+    const a = String(addr || '').toLowerCase()
+    if (!a) return false
+    if (a === '::1' || a === '127.0.0.1' || a === 'localhost') return true
+    if (a.startsWith('127.')) return true
+    return a.startsWith('::ffff:127.')
+  }
+  /** 只认本机请求：/voice/api 会触发第三方 LLM/TTS 调用、改配置、读密钥，
+   *  而浏览器把 Origin/Host 都填成访问者用的那个域名——只看"两者相等"等于让恶意网页自称自己人
+   *  （DNS 重绑定即可把我们当同源）。这里改成看**连接本身**：对端必须是回环地址，
+   *  Host 必须是本机名；跨站 Origin 仍按"与 Host 相等"拒绝。
+   *  非回环对端（dsh web 绑到局域网后从别的机器访问）只放行"Host 就是本机这个地址"的直连：
+   *  Host 写成任意域名一律拒，所以重绑定仍过不去。 */
+  function localRequestVerdict(req) {
+    const socket = (req && req.socket) || {}
+    const peer = socket.remoteAddress
+    const host = hostNameOf(req && req.headers && req.headers.host)
+    if (!host) return 'missing host'
+    const origin = req && req.headers && req.headers.origin
+    let originHost = ''
+    if (origin) {
+      try { originHost = hostNameOf(new URL(String(origin)).host) } catch { return 'bad origin' }
+      if (originHost !== host) return 'cross-origin'
+    }
+    if (isLoopbackAddr(peer)) {
+      if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') return 'non-local host'
+      return ''
+    }
+    // 非回环对端：请求必须真的是发到本机这个地址（Host 不能是任意域名）
+    const local = hostNameOf(String(socket.localAddress || '').replace(/^::ffff:/i, ''))
+    if (!local || host !== local) return 'non-local host'
+    return ''
+  }
+  /** 被拒时留一行日志（限流：同一原因 5 秒一次，避免恶意页面刷屏）。 */
+  const rejectLogAt = new Map()
+  function logReject(where, reason, req) {
+    const now = Date.now()
+    if (now - (rejectLogAt.get(reason) || 0) < 5000) return
+    rejectLogAt.set(reason, now)
+    const socket = (req && req.socket) || {}
+    console.warn('[voice] rejected ' + where + ': ' + reason
+      + ' (peer=' + String(socket.remoteAddress || '?')
+      + ' host=' + String((req && req.headers && req.headers.host) || '?')
+      + ' origin=' + String((req && req.headers && req.headers.origin) || '-') + ')')
+  }
+  /** 给客户端的密钥视图：只回"有没有配"和末四位，不回原文。 */
+  function secretsOf(cfg) {
+    const tail = (value) => {
+      const v = String(value || '')
+      return v.length >= 8 ? v.slice(-4) : ''
+    }
+    const volc = (cfg && cfg.tts && cfg.tts.volcengine) || {}
+    const ds = (cfg && cfg.tts && cfg.tts.deepseek) || {}
+    return {
+      volcengine: { set: !!volc.apiKey, tail: tail(volc.apiKey) },
+      deepseek: { set: !!ds.apiKey, tail: tail(ds.apiKey) },
+    }
+  }
+  /** 回给客户端的配置一律抹掉密钥原文（写入仍是客户端自己发来的那一份）。 */
+  function redactSecrets(cfg) {
+    const out = JSON.parse(JSON.stringify(cfg || {}))
+    if (out.tts && out.tts.volcengine && out.tts.volcengine.apiKey) out.tts.volcengine.apiKey = ''
+    if (out.tts && out.tts.deepseek && out.tts.deepseek.apiKey) out.tts.deepseek.apiKey = ''
+    return out
+  }
+  /** 试听用的草稿是"抹掉密钥后的视图"：留空即视为用已保存的那把 key，
+   *  否则"只在设置页改个音色再试听"会变成缺 key 报错。返回新对象，不改入参。 */
+  function withStoredKeys(draft, stored) {
+    if (!draft || !draft.tts) return draft
+    const dVolc = draft.tts.volcengine || {}
+    const dDs = draft.tts.deepseek || {}
+    const sVolc = (stored && stored.tts && stored.tts.volcengine) || {}
+    const sDs = (stored && stored.tts && stored.tts.deepseek) || {}
+    return Object.assign({}, draft, {
+      tts: Object.assign({}, draft.tts, {
+        volcengine: Object.assign({}, dVolc, { apiKey: dVolc.apiKey || sVolc.apiKey || '' }),
+        deepseek: Object.assign({}, dDs, { apiKey: dDs.apiKey || sDs.apiKey || '' }),
+      }),
+    })
   }
 
   /** 路由随插件卸载一起摘掉：宿主重挂插件时旧登记不退，会撞 "duplicate prefix route"。 */
@@ -2665,7 +2766,8 @@ function apply(ctx, config) {
         res.end(body)
       }
       try {
-        if (!isSameOrigin(req)) { send(403, { ok: false, error: 'cross-origin request rejected' }); return }
+        const why = localRequestVerdict(req)
+        if (why) { logReject('/voice/api', why, req); send(403, { ok: false, error: 'cross-origin request rejected' }); return }
         if (req.method !== 'POST') { send(405, { ok: false, error: 'POST only' }); return }
         const pathname = new URL(req.url, 'http://127.0.0.1').pathname
         const name = pathname.slice('/voice/api/'.length)
@@ -2690,8 +2792,9 @@ function apply(ctx, config) {
     path: '/voice/audio',
     handler: (req, res) => {
       try {
-        // 同源规则与 /voice/api 一致：带 Origin 且与 Host 不符即拒（跨站页面不可嵌入本地音频）
-        if (!isSameOrigin(req)) { res.writeHead(403); res.end('cross-origin rejected'); return }
+        // 与 /voice/api 同一条本机校验：跨站页面既取不到音频，也伪造不了 Host
+        const why = localRequestVerdict(req)
+        if (why) { logReject('/voice/audio', why, req); res.writeHead(403); res.end('cross-origin rejected'); return }
         const pathname = new URL(req.url, 'http://127.0.0.1').pathname
         const id = decodeURIComponent(pathname.slice('/voice/audio/'.length))
         const hit = audioStore.get(id)
@@ -2718,8 +2821,9 @@ function apply(ctx, config) {
         res.end(body)
       }
       try {
-        // 同源规则与 /voice/api、/voice/audio 一致
-        if (!isSameOrigin(req)) { sendJson(403, { ok: false, error: 'cross-origin request rejected' }); return }
+        // 与 /voice/api、/voice/audio 同一条本机校验
+        const why = localRequestVerdict(req)
+        if (why) { logReject('/voice/sounds', why, req); sendJson(403, { ok: false, error: 'cross-origin request rejected' }); return }
         const url = new URL(req.url, 'http://127.0.0.1')
 
         if (req.method === 'POST') {

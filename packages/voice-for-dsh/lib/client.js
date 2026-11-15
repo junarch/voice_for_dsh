@@ -139,6 +139,7 @@ window.__ModuleLoader__.load({
       "row.apiKey": "apiKey", "row.speaker": "音色 speaker",
       "dialect.onlyVoices": "方言只对上面这几个音色开放（换回普通话即可看到全部音色）/ dialects are limited to the voices listed above",
       "apiKey.hint": "豆包 TTS 需在火山引擎控制台开通“语音合成”服务后，在「API 管理」页获取 API Key（X-Api-Key）；plan=智能体套餐 Key、standard=标准计费 Key：", "apiKey.hintLink": "新版控制台快速入门",
+      "apiKey.placeholderSet": "已保存（尾号 {tail}），留空即不改", "apiKey.clear": "清除", "apiKey.cleared": "已清除密钥",
       "row.gateway": "网关", "row.httpUrl": "HTTP 端点（自定义）",
       "gateway.hint": " plan=智能体套餐（默认）；standard=标准计费（新版控制台 API Key，格式同 plan）；custom=自定义/转接端点（填 URL）/ plan=agent-plan(default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "语速", "row.pitchSemitone": "音调（半音）",
@@ -287,6 +288,7 @@ window.__ModuleLoader__.load({
       "row.apiKey": "apiKey", "row.speaker": "Speaker",
       "dialect.onlyVoices": "Dialects are limited to the voices listed above; switch back to Mandarin to see all voices",
       "apiKey.hint": "Doubao TTS: enable the speech service in the Volcengine console, then get an API Key (X-Api-Key) in \"API management\"; plan = agent-plan key, standard = pay-as-you-go key: ", "apiKey.hintLink": "Quick start (new console)",
+      "apiKey.placeholderSet": "Saved (tail {tail}) — leave empty to keep it", "apiKey.clear": "Clear", "apiKey.cleared": "API key cleared",
       "row.gateway": "Gateway", "row.httpUrl": "HTTP endpoint (custom)",
       "gateway.hint": " plan=agent-plan (default); standard=pay-as-you-go (new-console key, same format); custom=relay (set URL)",
       "row.rateLevel": "Speech rate", "row.pitchSemitone": "Pitch (semitones)",
@@ -2062,6 +2064,10 @@ window.__ModuleLoader__.load({
       const cfgPair = React.useState(null);
       const cfg = cfgPair[0];
       const setCfg = cfgPair[1];
+      // 密钥不随配置下发（Host 只回"配没配 + 末四位"）：单独一份状态，供状态行与输入框提示用
+      const secretsPair = React.useState(null);
+      const secrets = secretsPair[0];
+      const setSecrets = secretsPair[1];
       const metaPair = React.useState(null);
       const meta = metaPair[0];
       const setMeta = metaPair[1];
@@ -2124,6 +2130,7 @@ window.__ModuleLoader__.load({
         rpc("getConfig").then((res) => {
           if (res && res.ok) {
             setCfg(res.config);
+            if (res.secrets) setSecrets(res.secrets);
             savedRef.current = JSON.stringify(res.config);
             applyChimeConfig(res.config.chime);
             rpc("routeInfo", { provider: res.config.provider, model: res.config.model }).then((ri) => { if (ri && ri.ok) setInfo(ri); }).catch(() => {});
@@ -2199,6 +2206,7 @@ window.__ModuleLoader__.load({
         try {
           const res = await rpc("setConfig", { patch: incoming });
           if (res && res.ok) {
+            if (res.secrets) setSecrets(res.secrets);
             savedRef.current = JSON.stringify(mergePatch(JSON.parse(savedRef.current || "{}"), incoming));
             if (res.config && res.config.chime) applyChimeConfig(res.config.chime);
             // Host 会读回 profile patch 核对；对不上就明说，不假装保存成功
@@ -2446,20 +2454,44 @@ window.__ModuleLoader__.load({
       // 首屏一行状态：只报当前引擎最关键的一件事；本地没装时给下载入口（点开 L2，安装行在层头）
       // statusWarn：状态行下面再加一句"为什么这个开关现在不起作用"——豆包的两条前置条件
       // （缺 API Key、成本门控）从界面上看不出来，只报状态不报原因，用户只会以为坏了。
+      // 密钥原文不在配置里（Host 只给"配没配 + 末四位"）：secrets 优先，老 Host 回退到配置字段。
+      function secretSet(engine) {
+        const s = secrets && secrets[engine];
+        if (s && typeof s === "object") return !!s.set;
+        const key = engine === "volcengine"
+          ? (cfg.tts.volcengine && cfg.tts.volcengine.apiKey)
+          : (cfg.tts.deepseek && cfg.tts.deepseek.apiKey);
+        return !!key;
+      }
+      function secretTail(engine) {
+        const s = secrets && secrets[engine];
+        return (s && s.tail) ? String(s.tail) : "";
+      }
+      /** 清除已保存的 key：输入框清空≠清除（空串写盘在老语义里是清除，但页面加载时框本来就是空的），
+       *  所以给一个显式按钮，走 Host 的 clearApiKey。 */
+      async function onClearKey(engine) {
+        const res = await rpc("clearApiKey", { engine: engine });
+        if (!res || !res.ok) { setMsg(t("settings.saveFail") + ((res && res.error) ? String(res.error) : "unknown")); return; }
+        if (res.secrets) setSecrets(res.secrets);
+        if (res.config) { setCfg(res.config); savedRef.current = JSON.stringify(res.config); }
+        setSaveNote(t("apiKey.cleared"));
+        setSaveFailed(false);
+        setMsg("");
+      }
       let statusLine = "";
       let statusCta = false;
       let statusWarn = "";
       if (ttsEngine === "browser") {
         statusLine = t("status.browser");
       } else if (ttsEngine === "volcengine") {
-        const hasKey = !!cfg.tts.volcengine.apiKey;
+        const hasKey = secretSet("volcengine");
         statusLine = hasKey
           ? t("status.volcengine.ok")
           : (cfg.autoSpeak ? t("status.volcengine.autoNoKey") : t("status.volcengine.noKey"));
         // 成本门控：只有手改配置/迁移旧配置才会落到"自动播报开着但不碰豆包"这个状态
         if (cfg.autoSpeak && cfg.autoSpeakCloudTts === false) statusWarn = t("status.volcengine.gated");
       } else if (ttsEngine === "deepseek") {
-        const hasDsKey = !!(cfg.tts.deepseek && cfg.tts.deepseek.apiKey);
+        const hasDsKey = secretSet("deepseek");
         statusLine = hasDsKey
           ? t("status.deepseek.ok")
           : (cfg.autoSpeak ? t("status.deepseek.autoNoKey") : t("status.deepseek.noKey"));
@@ -2579,7 +2611,17 @@ window.__ModuleLoader__.load({
               ? React.createElement("p", { className: "dsh-voice-dim" }, t("gateway.wsHint"))
               : null),
             React.createElement(Row, { label: t("row.apiKey") },
-              React.createElement(TextInput, { type: "password", value: cfg.tts.volcengine.apiKey, onChange: (v) => setField("tts.volcengine.apiKey", v), placeholder: "火山引擎 API Key" })),
+              React.createElement(TextInput, {
+                type: "password",
+                value: cfg.tts.volcengine.apiKey,
+                onChange: (v) => setField("tts.volcengine.apiKey", v),
+                placeholder: secretSet("volcengine") && secretTail("volcengine")
+                  ? t("apiKey.placeholderSet").replace("{tail}", secretTail("volcengine"))
+                  : "火山引擎 API Key",
+              }),
+              (secretSet("volcengine") && !cfg.tts.volcengine.apiKey
+                ? React.createElement("button", { type: "button", className: "dsh-voice-linkbtn", onClick: () => onClearKey("volcengine") }, t("apiKey.clear"))
+                : null)),
             React.createElement("p", { className: "dsh-voice-dim" }, t("apiKey.hint"), " ",
               React.createElement("a", { href: VOLC_APIKEY_DOC, target: "_blank", rel: "noreferrer" }, t("apiKey.hintLink"))),
             React.createElement("h4", null, t("group.pronounce")),
@@ -2617,7 +2659,17 @@ window.__ModuleLoader__.load({
           // 无语种/方言/语速/情感行：官方没有这些参数，不支持的选项不显示；播报语言跟随原文。
           ttsEngine === "deepseek" ? React.createElement(React.Fragment, null,
             React.createElement(Row, { label: t("row.apiKey") },
-              React.createElement(TextInput, { type: "password", value: (cfg.tts.deepseek && cfg.tts.deepseek.apiKey) || "", onChange: (v) => setField("tts.deepseek.apiKey", v), placeholder: "DeepSeek API Key" })),
+              React.createElement(TextInput, {
+                type: "password",
+                value: (cfg.tts.deepseek && cfg.tts.deepseek.apiKey) || "",
+                onChange: (v) => setField("tts.deepseek.apiKey", v),
+                placeholder: secretSet("deepseek") && secretTail("deepseek")
+                  ? t("apiKey.placeholderSet").replace("{tail}", secretTail("deepseek"))
+                  : "DeepSeek API Key",
+              }),
+              (secretSet("deepseek") && !(cfg.tts.deepseek && cfg.tts.deepseek.apiKey)
+                ? React.createElement("button", { type: "button", className: "dsh-voice-linkbtn", onClick: () => onClearKey("deepseek") }, t("apiKey.clear"))
+                : null)),
             React.createElement(Row, { label: t("row.dsVoice") },
               React.createElement(SelectInput, { value: (cfg.tts.deepseek && cfg.tts.deepseek.voiceId) || "stella", onChange: (v) => setField("tts.deepseek.voiceId", v) },
                 (m.deepseekVoices || DEEPSEEK_VOICES_FALLBACK).map((x) => React.createElement("option", { key: x.id, value: x.id }, x.name)))),

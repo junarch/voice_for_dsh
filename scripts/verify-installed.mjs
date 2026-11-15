@@ -120,21 +120,27 @@ if (!query) {
 // 3) 配置：能读回，且迁移过来的关键项还在（不判断具体值——那是用户自己的选择）
 const cfg = await post('getConfig', {})
 const c = cfg.json && cfg.json.ok ? cfg.json.config : null
+const secrets = cfg.json && cfg.json.ok ? (cfg.json.secrets || {}) : {}
 check('配置可读（/voice/api/getConfig）', c !== null, 'HTTP ' + cfg.status)
 if (c) {
   check('引擎字段在', typeof c.tts?.provider === 'string', 'provider=' + c.tts?.provider)
   check('音色字段在', typeof c.tts?.volcengine?.speaker === 'string', 'speaker=' + c.tts?.volcengine?.speaker)
   check('转写字段在', typeof c.transcribe?.stylePreset === 'string', 'stylePreset=' + c.transcribe.stylePreset)
-  const key = c.tts?.volcengine?.apiKey
-  // 不是硬断言：全新 profile 本来就没有 key（引擎默认 browser 不需要）。有值=迁移没丢；
-  // 没值但引擎是 volcengine 才是真问题。
-  if (typeof key === 'string' && key.length > 0) {
-    check('豆包 API Key 在配置里', true, '长度 ' + key.length)
+  // 密钥不回原文了：Host 只报"配没配 + 末四位"。这里同时验证两件事——
+  // 事后端不再吐 key（安全口径），以及用户那把 key 确实还在（迁移没丢）。
+  if (secrets.volcengine && secrets.volcengine.set) {
+    check('豆包 API Key 已配置（配置接口不回原文）', true,
+      '尾号 ' + (secrets.volcengine.tail || '?') + ' / 接口回传原文=' + JSON.stringify(c.tts?.volcengine?.apiKey || ''))
   } else if (c.tts?.provider === 'volcengine') {
-    check('豆包 API Key 在配置里', false, '引擎选了豆包但 key 为空 —— 去看 profile 的 cordis.patch.yml')
+    check('豆包 API Key 已配置（配置接口不回原文）', false, '引擎选了豆包但 Host 报未配置 —— 去看 profile 的 cordis.patch.yml')
   } else {
-    console.log('  --   豆包 API Key 为空（引擎当前是 ' + c.tts?.provider + '，不需要 key）')
+    console.log('  --   豆包 API Key 未配置（引擎当前是 ' + c.tts?.provider + '，不需要 key）')
   }
+  if (secrets.deepseek && secrets.deepseek.set) {
+    console.log('  --   DeepSeek API Key 已配置（尾号 ' + (secrets.deepseek.tail || '?') + '）')
+  }
+  check('配置接口不回传密钥原文', c.tts?.volcengine?.apiKey === '' && (!c.tts?.deepseek || c.tts.deepseek.apiKey === ''),
+    JSON.stringify({ volc: c.tts?.volcengine?.apiKey, ds: c.tts?.deepseek?.apiKey }))
 }
 
 // 4) 本地引擎：进程内运行时自检（模型在哪、装没装、加载没加载）
