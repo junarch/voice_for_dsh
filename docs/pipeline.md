@@ -398,10 +398,13 @@ idle → transcribing(转写中) → speaking(播报中) → idle
 - **保存后核对**：`setConfig` 写完会用 `ctx.configEditor.configuration()` 从 profile patch 读回 voice 条目，
   比对本次 patch 涉及的关键字段；对不上就返回 `persisted:false`，设置页显示"没写进磁盘"。
   文件里缺该键＝等于继承层默认值（`configEditor` 会把与继承层相同的键整段删掉），不算失败。
-- **层头折叠在 pointerdown 就翻转**：五层的层头按钮不等 `click`——宿主连接抖动时设置节会被重挂，按下与抬起
-  之间节点可能换代，浏览器会把 `click` 派给共同祖先、按钮收不到（现象正是"点箭头没反应/抖一下"）；
-  `pointerdown` 在换代之前就执行，不受影响（键盘触发（detail=0）仍走 `click`，两条路各只翻一次）。
-  开 `l2Debug` 时另把"点击落点上的元素"上报 Host（`clientDiag` 的 `l2-hit`），用于区分"没点到"与"点到别的元素"。
+- **层头在 pointerdown 就翻转**（不等 `click`）：按下即生效；键盘（detail=0 的 click）走同一条翻转逻辑，
+  鼠标紧跟的 `click` 用 500ms 时间戳去重、不会翻两次。这样即使按下与抬起之间节点被宿主重挂换代
+  （`click` 会派给共同祖先、按钮收不到），这一下翻转也已经落到状态里。
+  开 `l2Debug` 时另把"点击落点上的元素"上报 Host（`clientDiag` 的 `l2-hit`），排障时不必贴 Console。
+- **收起能不能藏住内容，先看结构再看状态**：L2 的"引擎专属行"（apiKey/音色/语种/提示）必须是 Collapse
+  的子节点——它们是层体的一部分。曾有括号提前闭合把这几行甩成层外的兄弟节点：层收起时只收起一个**空层体**，
+  行永远露着，看起来就是"点箭头收不起来"（状态与 DOM class 全都正常，诊断日志也全绿）。见 §7 不变式 31。
 
 - 老配置里只有 `pitchLevel`、没有 `pitch` 时（0.1.x 时代 settings.yaml 的写法）：`pitchOf` 里 `pitch` 的 schema
   默认值 0 恒存在且优先，所以**搬过来的 `pitchLevel` 不影响发声**（存储上不丢，听感按 0 处理）。
@@ -592,6 +595,11 @@ voice:
     参与成本门控（`autoSpeakCloudTts` 与豆包同列）；转写稿跟随原文语言（promptLocal，不套英文不变式）。
 30. **DeepSeek 流式失败不得丢字、不得报成整条失败**——喂给 WS 的各段拼回与转写稿一致（除段间空白）；
     首段失败/零音频 → 降级整段 POST；中途失败 → 保留已播段 + warn；计费超限轮转会话续喂，PCM 无缝拼接。
+31. **引擎专属设置行必须长在 L2 层体内**——DeepSeek/豆包/本地/系统 TTS 的分支都是 `Collapse` 的子节点
+    （`React.createElement(Collapse, {…}, 分支1, 分支2, …)`，括号只能在整个子节点列表末尾闭合）。括号写错
+    会让分支变成「层根的直接子节点」：层收起只收起空层体，行永远露着——"点箭头收不起来"就是这么来的
+    （状态、class、诊断日志当时全正常，只有 DOM 结构错）。`test-settings-ui` 锁定：收起态下 L2 层根的直接
+    子节点里不得出现 `dsh-voice-row`，展开→再收起后 apiKey 行必须随之消失。
 
 ## 8. 设计决策（为什么）
 

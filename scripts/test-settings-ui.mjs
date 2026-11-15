@@ -479,6 +479,47 @@ tree = await (async () => { rootEl = reactStub.createElement(CaseBrowser); retur
 check('重开后音色仍是 Dacey（没有回退）',
   config.tts.volcengine.speaker === 'en_female_dacey_uranus_bigtts', config.tts.volcengine.speaker)
 
+// 7) DeepSeek：引擎专属行必须长在「当前引擎声音设置」的层体里。
+// 回归点：createElement 的括号写错（Collapse 提前关一个 `)`）会把 apiKey/音色/语种三行甩成层外的兄弟节点——
+// 层收起时只收起一个空层体，这三行永远露着，用户看到的就是"点箭头收不起来"。
+function CaseDeepseek() { return reactStub.createElement(settingsComponent) }
+tree = await mount(CaseDeepseek, (c) => {
+  c.tts.provider = 'deepseek'
+  c.tts.deepseek = { apiKey: 'ds-key', voiceId: 'stella', language: 'auto', streaming: true }
+  c.autoSpeakCloudTts = true
+})
+tree = await flush()
+const rootNode = flatten(tree).find((n) => n.kind === 'element' && String(n.props.className || '') === 'dsh-voice-settings')
+function directChildren(node) {
+  if (!node) return []
+  const raw = node.children
+  const list = Array.isArray(raw) ? raw : [raw]
+  const out = []
+  for (const item of list) {
+    if (Array.isArray(item)) out.push(...item)
+    else if (item) out.push(item)
+  }
+  return out
+}
+// 层展开状态是模块级持久：先确保从收起态开始（前几个用例可能把它留在展开）
+{
+  const node = layerNode(tree, '当前引擎声音设置')
+  const btn = node && flatten(node).find((n) => n.kind === 'element' && n.type === 'button' && n.props.className === 'dsh-voice-layer-toggle')
+  if (btn && btn.props['aria-expanded'] === true) { btn.props.onClick(); tree = await flush() }
+}
+check('DeepSeek：收起状态下层外没有 apiKey 行', !allText(tree).includes('apiKey'), allText(tree).slice(0, 200))
+check('DeepSeek：层根的直接子节点里没有引擎专属行（行必须归层体管）',
+  directChildren(rootNode).filter((n) => n && n.kind === 'element' && String(n.props.className || '').includes('dsh-voice-row')).length === 0,
+  directChildren(rootNode).map((n) => n && n.kind === 'element' && String(n.props.className || '')))
+tree = await expand(tree, '当前引擎声音设置')
+check('DeepSeek：展开后出现 apiKey 行', allText(tree).includes('apiKey'), allText(tree).slice(0, 200))
+{
+  const node = layerNode(tree, '当前引擎声音设置')
+  const btn = node && flatten(node).find((n) => n.kind === 'element' && n.type === 'button' && n.props.className === 'dsh-voice-layer-toggle')
+  if (btn) { btn.props.onClick(); tree = await flush() }
+}
+check('DeepSeek：再次收起后 apiKey 行随之消失（不是挂在层外）', !allText(tree).includes('apiKey'), allText(tree).slice(0, 240))
+
 const failed = checks.filter((c) => !c.ok)
 console.log('\n结果: ' + (checks.length - failed.length) + ' passed, ' + failed.length + ' failed')
 process.exit(failed.length ? 1 : 0)

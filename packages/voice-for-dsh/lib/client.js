@@ -2658,7 +2658,7 @@ window.__ModuleLoader__.load({
               React.createElement("span", { className: "dsh-voice-dim" }, " 半音（0=正常，可调 0.1 细粒度）/ semitones (0=normal)")),
             React.createElement(Row, { label: t("row.loudness") },
               React.createElement(SliderInput, { value: cfg.tts.volcengine.loudness, onChange: (v) => setField("tts.volcengine.loudness", v), min: -50, max: 100, step: 5, format: (v) => String(v) }),
-              React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate"))) : null),
+              React.createElement("span", { className: "dsh-voice-dim" }, " 音量 loudness_rate"))) : null,
 
           // —— DeepSeek 官方 TTS（鉴权 + 音色；仅选择 DeepSeek 时显示）——
           // 无语种/方言/语速/情感行：官方没有这些参数，不支持的选项不显示；播报语言跟随原文。
@@ -2675,7 +2675,7 @@ window.__ModuleLoader__.load({
                 React.createElement("option", { value: "zh" }, t("local.language.zh")),
                 React.createElement("option", { value: "en" }, t("local.language.en"))),
               React.createElement("span", { className: "dsh-voice-dim" }, t("ds.languageHint"))),
-            React.createElement("p", { className: "dsh-voice-dim" }, t("ds.hint"))) : null,
+            React.createElement("p", { className: "dsh-voice-dim" }, t("ds.hint"))) : null),
 
         // —— L3 转写：开关在层头（收起也能直接开关），体内只在开启时渲染 ——
         React.createElement(Collapse, {
