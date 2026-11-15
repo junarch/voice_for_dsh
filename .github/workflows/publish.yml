@@ -3,10 +3,13 @@ name: publish
 # 由 npm 的可信发布（OIDC）发版：不需要任何常驻令牌。
 #
 # 前置（在 npmjs.com 上做一次）：
-#   1. 包页面 → Settings → Trusted Publisher → 选 GitHub Actions，
-#      填 junarch / voice_for_dsh / publish.yml，允许 npm publish。
+#   1. 包页面 → Trusted Publisher → 选 GitHub Actions，
+#      填 junarch / voice_for_dsh / publish.yml，并在 Allowed actions 勾上 Allow npm publish。
 #   2. 同一页的 Publishing access 选「Require two-factor authentication and disallow tokens」。
-# 未配置之前，本工作流在打 tag 时会在 publish 一步失败；已发布的版本会被下面的检查直接跳过。
+# 该配置建好后必须 2 天内成功发一次才算验证通过。
+#
+# 发布物必须与 tag 一致：工作流先断言"HEAD == v<package version>"，不一致直接失败，
+# 免得把没打 tag 的代码发出去（provenance 会如实指出提交，但 Release 的 tag 会对不上）。
 
 on:
   push:
@@ -22,19 +25,37 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # action 钉到 commit：这个 job 持有 OIDC 发布权，不跟随浮动大版本
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
-      # 可信发布要求 npm ≥ 11.5.1；runner 自带的版本不保证够新。
+      # 可信发布要求 npm ≥ 11.5.1；钉死到发版时验证过的版本，不吃 runner 自带或 latest 的变动
       - name: npm 版本
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.2
           npm --version
+
+      - name: 发布物必须就是 tag 指向的那棵树
+        run: |
+          VERSION=$(node -p "require('./packages/voice-for-dsh/package.json').version")
+          TAG="v$VERSION"
+          echo "version=$VERSION tag=$TAG ref=$GITHUB_REF_NAME ref_type=$GITHUB_REF_TYPE"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then
+            echo "::error::tag 与包版本不一致：$GITHUB_REF_NAME vs $TAG"; exit 1
+          fi
+          git fetch --force --tags origin "+refs/tags/$TAG:refs/tags/$TAG" || true
+          if ! git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+            echo "::error::找不到 tag $TAG（版本号必须先打 tag 再发布）"; exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "$TAG^{commit}")" ]; then
+            echo "::error::HEAD 不是 $TAG 指向的提交：拒绝发布未打 tag 的代码"; exit 1
+          fi
+          echo "ok: HEAD 就是 $TAG"
 
       - name: 该版本是否已在 npm 上
         id: check
@@ -52,3 +73,16 @@ jobs:
         if: steps.check.outputs.published == 'false'
         working-directory: packages/voice-for-dsh
         run: npm publish
+
+      - name: 发布后核对（版本可见性有 1–2 分钟延迟）
+        if: steps.check.outputs.published == 'false'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          for i in 1 2 3 4 5 6 7 8; do
+            if npm view "voice-for-dsh@$VERSION" version >/dev/null 2>&1; then
+              echo "ok: voice-for-dsh@$VERSION 已可查"; exit 0
+            fi
+            sleep 20
+          done
+          echo "::warning::发布已提交，但 2 分钟内还没在 registry 上查到（可能是传播延迟）"

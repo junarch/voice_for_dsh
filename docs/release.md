@@ -8,19 +8,21 @@
 
 | 位置 | 当前 | 说明 |
 |---|---|---|
-| 本仓库 | `0.6.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
-| GitHub main | `0.6.0` | 已发 Release `v0.6.0`（首个带 DeepSeek 引擎的版本） |
-| npm | `0.6.0` | 包名 `voice-for-dsh`；由 `.github/workflows/publish.yml` 走可信发布（OIDC）从 GitHub Actions 发，带 provenance |
+| 本仓库 | `0.6.1` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
+| GitHub main | `0.6.1` | 最近已发 Release `v0.6.0`；0.6.1 是安全修复版 |
+| npm | `0.6.1` | 包名 `voice-for-dsh`；由 `.github/workflows/publish.yml` 走可信发布（OIDC）从 GitHub Actions 发，带 provenance |
 
 发版＝推 main、打 tag、写 Release；npm 那一步由打 tag 触发的 `publish.yml` 自动完成，安装走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
 `npm publish` 之后到版本对外可见有一两分钟延迟：先 404、后 200，核对时要重试，别看到 404 就以为发失败了。
+**发布物必须就是 tag 指向的提交**：工作流会断言这件事，所以顺序永远是"先打 tag，再发布"
+（工作流在 tag 上被触发；手工补发用 `gh workflow run publish.yml --ref v<版本号>`，用分支名会被拒绝）。
 
 ## 1. 自动化门槛（不产生外部调用，每次必跑）
 
 - [ ] `node scripts/test-host.mjs` 全绿。
 - [ ] `node scripts/test-client.mjs` 通过（i18n zh/en 键数一致）。
 - [ ] `node scripts/test-chime-ui.mjs` 与 `node scripts/test-chime-playback.mjs` 全绿。
-- [ ] `node scripts/test-settings-ui.mjs` 全绿（三档引擎下该出现的出现、该藏的不出现）。
+- [ ] `node scripts/test-settings-ui.mjs` 全绿（四档引擎下该出现的出现、该藏的不出现）。
 - [ ] `node scripts/audit-release.mjs` 全绿（密钥、本机路径、发版物夹带，见 §6）。
 - [ ] Client 半 XSS 静态守卫通过（CI 里的"forbid unsafe HTML APIs"步骤：`innerHTML`/`document.write` 等不得出现在 `lib/client.js`）。
 - [ ] `node --check` 覆盖 `lib/` 下全部 8 个手写模块（CI 已含）。
@@ -103,7 +105,7 @@
       没有出现在 README、截图、issue、日志或提交里。
 - [ ] **资源占用**：本地模型加载后常驻内存约 0.5–0.6GB；不选本地引擎时不加载。
       长时间挂着看任务管理器，Host 进程内存应稳定（模型加载后不再爬升）。
-- [ ] **网络出口**：只有三个地方发请求——配置的转写 LLM、豆包 TTS、模型下载（GitHub Releases）。
+- [ ] **网络出口**：只有四个地方发请求——配置的转写 LLM、豆包 TTS、DeepSeek TTS、模型下载（GitHub Releases）。
       没有埋点、没有遥测、没有第三方字体或 CDN。
 
 ## 7. 分发方式
@@ -141,7 +143,7 @@ npm 上的 `dsh-plugin-voice` 属于另一个项目，与本仓库无关——�
 7. 打 tag 会触发 `publish.yml`，由 CI 发 npm（见 §7）。等它跑完再核对：`npm view voice-for-dsh version`
    要等一两分钟（传播延迟），并比对发布日志里的 `shasum` 与 registry 上的 `dist.shasum` 一致。
    已发布的版本号不能重发，也不能改内容——发现内容错了就发补丁版本。
-   工作流没触发或失败时手工补：`gh workflow run publish.yml --ref main`。
+   工作流没触发或失败时手工补：`gh workflow run publish.yml --ref v<版本号>`（用 tag 名，用分支名会被一致性检查拒绝）。
 8. GitHub Release 写说明（顺序：变什么 → 要不要动手 → 步骤 → 读数）。
 9. 向目录提收录（§9.1），商店随后自动能搜到。
 
