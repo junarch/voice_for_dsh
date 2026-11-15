@@ -9,7 +9,7 @@
 | 位置 | 当前 | 说明 |
 |---|---|---|
 | 本仓库 | `0.6.0` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
-| GitHub main | `0.6.0` | 最近一次已发 Release `v0.5.2`；0.6.0 是首个带 DeepSeek 引擎的版本 |
+| GitHub main | `0.6.0` | 已发 Release `v0.6.0`（首个带 DeepSeek 引擎的版本） |
 | npm | `0.5.2` | 包名 `voice-for-dsh`；0.6.0 暂不发 npm（原因与做法见 §7） |
 
 发版＝推 main、打 tag、写 Release；安装命令仍走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
