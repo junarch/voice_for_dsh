@@ -9,7 +9,7 @@
 | 位置 | 当前 | 说明 |
 |---|---|---|
 | 本仓库 | `0.6.1` | 根 `package.json` 与 `packages/voice-for-dsh/package.json` 必须同号 |
-| GitHub main | `0.6.1` | 最近已发 Release `v0.6.0`；0.6.1 是安全修复版 |
+| GitHub main | `0.6.1` | 已发 Release `v0.6.1`（安全修复版） |
 | npm | `0.6.1` | 包名 `voice-for-dsh`；由 `.github/workflows/publish.yml` 走可信发布（OIDC）从 GitHub Actions 发，带 provenance |
 
 发版＝推 main、打 tag、写 Release；npm 那一步由打 tag 触发的 `publish.yml` 自动完成，安装走 npm 包名 `voice-for-dsh`，源码安装只作开发用法。
