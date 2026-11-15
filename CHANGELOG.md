@@ -6,6 +6,32 @@
 
 ---
 
+## [0.6.1] - 2026-11-16
+
+### Security
+
+- **插件接口改为只认本机请求**（`/voice/api`、`/voice/audio`、`/voice/sounds` 三条统一）：连接对端必须是回环地址、
+  `Host` 必须是本机名，带 `Origin` 时还必须与 `Host` 相同。原先只比"`Origin` 与 `Host` 相等"，而这两个头都是
+  调用方自己填的——恶意网页把同一个域名填进两处即可冒充同源（域名重绑定），从而读取配置、触发付费合成、改设置。
+  现在任意域名的 `Host` 一律 403；局域网直连 dsh web 仍可用（只放行 `Host` 就是本机地址的请求）。
+- **配置接口不再回传密钥原文**：`getConfig` / `getState` / `setConfig` 的 `tts.*.apiKey` 恒为空串，
+  改为 `secrets.volcengine|deepseek` 的 `set`（配没配）与 `tail`（末四位）。设置页输入框从空开始、占位提示带尾号，
+  留空即不改，新增「清除」按钮用来真正删掉已保存的 key。试听仍能正常用已保存的 key。
+
+### Fixed
+
+- **npm 页面上的 README 与实现不符**：包内 README 仍写"三个播报引擎"、没有 DeepSeek 与成本/隐私说明。
+  现在与仓库 README 同一口径（四引擎、篇幅档位、成本与隐私、网络出口）。
+- **发布链路可发未打 tag 的代码**：`publish.yml` 现在先断言 `HEAD` 就是 `v<包版本>` 指向的提交，否则拒绝发布；
+  npm CLI 钉到验证过的 `12.2.2`，两个 action 钉到 commit SHA，发布后自动核对 registry。
+- **文档口径统一**：`architecture` / `providers` / `release` / `ROADMAP` 与截图说明都按四引擎写；
+  隐私披露补齐 DeepSeek key 明文、转写稿缓存文件、上下文轮数、四个网络出口与 `/voice/sounds` 路由。
+
+### Note
+
+需要重启一次桌面端（客户端半只有重启才进新版本）。升级后设置页里的 API Key 输入框是空的、显示"已保存（尾号 …）"，
+这是正常现象——key 仍在 profile 的 `cordis.patch.yml` 里；留空保存不会丢 key。
+
 ## [0.6.0] - 2026-11-15
 
 ### Added
