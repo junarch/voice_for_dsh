@@ -39,10 +39,24 @@ function check(label, ok, detail) {
   else { fail += 1; console.log('  FAIL ' + label + (detail ? '  ' + detail : '')) }
 }
 
+// 登录 cookie：带 token 访问会 303 并下发 dsh-auth-* cookie；三条 /voice/api 路由在入口先过
+// DSH 的准入检查（Host/Origin 围栏 + 浏览器登录 cookie），所以自检也必须带这个 cookie。
+let authCookie = null
+async function ensureAuthCookie() {
+  if (!query || authCookie) return
+  try {
+    const first = await fetch(origin + '/' + query, { redirect: 'manual' })
+    const setCookie = first.headers.get('set-cookie')
+    if (setCookie) authCookie = setCookie.split(';')[0]
+  } catch { /* 拿不到就退回裸请求：下面会给出 401 的明确提示 */ }
+}
+
 async function post(path, body) {
+  const headers = { 'content-type': 'application/json' }
+  if (authCookie) headers.cookie = authCookie
   const res = await fetch(base + path, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(body || {}),
   })
   const text = await res.text()
@@ -56,6 +70,11 @@ console.log('自检目标：' + origin + '\n')
 // 首页鉴权：带 token 访问会 303 并下发 dsh-auth-* cookie，之后再请求 "./" 才给 HTML。
 // 所以必须手动跟一次跳转并把 cookie 带上（fetch 默认自动跟随会丢掉 cookie，落到 401/400）。
 async function fetchIndexAuthenticated() {
+  await ensureAuthCookie()
+  if (authCookie) {
+    const second = await fetch(new URL('./', origin + '/').href, { headers: { cookie: authCookie } })
+    return { status: second.status, html: await second.text() }
+  }
   const first = await fetch(origin + '/' + query, { redirect: 'manual' })
   if (first.status !== 303 && first.status !== 302) {
     const html = await first.text()
@@ -69,6 +88,8 @@ async function fetchIndexAuthenticated() {
   return { status: second.status, html: await second.text() }
 }
 
+await ensureAuthCookie()
+
 // 1) Host 半：路由活着
 let ping
 try {
@@ -79,6 +100,13 @@ try {
   process.exit(1)
 }
 check('Host 半已加载（/voice/api/ping）', ping.status === 200 && ping.json && ping.json.ok === true, 'HTTP ' + ping.status)
+if (ping.status === 401 || ping.status === 403) {
+  console.log('\n接口在入口先过 DSH 的准入检查（Host/Origin 围栏 + 浏览器登录 cookie），命令行裸请求会被拒。')
+  console.log('这个自检脚本请带上 --url "$base/?token=…"，它会用令牌换 cookie 再请求；')
+  console.log('或在浏览器 console 里用同源 fetch 手工调试（见 docs/testing.md）。')
+  console.log('\n结果：Host 半在，但本次请求未通过准入（HTTP ' + ping.status + '）')
+  process.exit(1)
+}
 
 // 2) Client 半：必须在注入的 boot 图里（"界面看不看得见"的唯一硬证据）
 if (!query) {

@@ -41,18 +41,24 @@ function walk(node, prefix, cb) {
 
 let count = 0;
 let bytes = 0;
+let skipped = 0;
 walk(header, '', (p, entry) => {
   if (!p.startsWith('dsh/node_modules/@deepseek-ai/')) return;
   const rel = p.slice('dsh/node_modules/'.length);
   const pkg = rel.split('/')[1];
   if (wanted.length && !wanted.includes(pkg)) return;
+  // 解包到 app.asar.unpacked 的文件、以及个别没有 offset/size 的条目（链接等）读不到，跳过并计数
+  const size = Number(entry.size);
+  const offset = Number(entry.offset);
+  if (!Number.isFinite(size) || !Number.isFinite(offset)) { skipped += 1; return }
   const dest = path.join(outRoot, rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const buf = Buffer.alloc(entry.size);
-  if (entry.size > 0) fs.readSync(fd, buf, 0, entry.size, dataOffset + Number(entry.offset));
+  const buf = Buffer.alloc(size);
+  if (size > 0) fs.readSync(fd, buf, 0, size, dataOffset + offset);
   fs.writeFileSync(dest, buf);
   count += 1;
-  bytes += entry.size;
+  bytes += size;
 });
 fs.closeSync(fd);
-console.log(`extracted ${count} files, ${(bytes / 1048576).toFixed(1)} MiB -> ${outRoot}`);
+console.log(`extracted ${count} files, ${(bytes / 1048576).toFixed(1)} MiB -> ${outRoot}`
+  + (skipped ? `（跳过 ${skipped} 个解包/无偏移条目）` : ''));

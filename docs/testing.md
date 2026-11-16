@@ -80,6 +80,10 @@ curl.exe -s -X POST "$base/voice/api/meta"
 curl.exe -s -X POST "$base/voice/api/preview"            # 试听（豆包产生少量实际调用费用）
 curl.exe -s -X POST "$base/voice/api/clientDiagDump"    # 读回浏览器播放链路事件
 ```
+**注意（0.6.2 起）**：三条路由在入口先过 DSH 的 `requestRejection`（Host/Origin 围栏 + 浏览器登录 cookie），
+所以上面这些裸 `curl` 会拿到 **401**。要手工调试，就在浏览器 console 里用同源 `fetch`（页面 cookie 自动带上），
+或给 `curl` 加上从 `~/.dsh/.credentials.yaml` 自签的 `dsh-auth-*` cookie（Cookie 名按 authority 绑定）。
+`verify-installed.mjs` 遇到 401 会直接给出这条提示，不再逐项报错。
 看返回关键字段：`cached`（true=缓存命中没花钱）、`degraded`（true=转写失败走兜底）、`ttsError`、`audioUrl`。
 播报"没声音"时先看 `clientDiagDump`：`stream-start` 的 `ctx` 是不是 `suspended`、`stream-end` 的 `played`
 是不是 0——把"Host 还没算完"与"浏览器根本没排上播放"分开（冷启动 3 秒、首声 0.6 秒，差这么点时间，

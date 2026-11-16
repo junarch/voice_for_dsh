@@ -238,8 +238,16 @@ const configEditor = {
   }]),
 }
 
+// 替身 4b：connection 服务（DSH 自己的准入检查）。真宿主里 requestRejection 会做
+// Host/Origin 围栏 + 浏览器登录 cookie 校验；替身默认放行（undefined），
+// 测试要验"上游标准路径"时把它改成 401/403。
+const connectionState = { rejection: undefined, calls: 0 }
+const connection = {
+  requestRejection: () => { connectionState.calls += 1; return connectionState.rejection },
+}
+
 const ctx = {
-  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : name === 'configEditor' ? configEditor : undefined),
+  get: (name) => (name === 'llm' ? llm : name === 'sessions' ? sessions : name === 'configEditor' ? configEditor : name === 'connection' ? connection : undefined),
   settings,
   webServer,
   on: (name, fn) => { if (!eventListeners.has(name)) eventListeners.set(name, []); eventListeners.get(name).push(fn) },
@@ -329,7 +337,10 @@ async function rpc(method, args, headers, socket) {
   Object.defineProperty(req, Symbol.asyncIterator, { value: async function* () { yield Buffer.from(body, 'utf8') } })
   const res = { code: 0, body: '', writeHead(c) { this.code = c }, end(b) { this.body = String(b || '') } }
   await apiHandler(req, res)
-  try { return JSON.parse(res.body) } catch { return { ok: false, parseError: res.body, code: res.code } }
+  let out
+  try { out = JSON.parse(res.body) } catch { out = { ok: false, parseError: res.body } }
+  out.code = res.code                     // HTTP 状态码要能断言（401/403 与业务错误码是两回事）
+  return out
 }
 async function fetchAudio(id, socket) {
   const req = Object.assign(mockReq({ method: 'GET', url: '/voice/audio/' + id }), { socket: Object.assign({}, LOOPBACK, socket || {}) })
@@ -519,6 +530,21 @@ const fk6 = await fetchAudio('nope', { remoteAddress: '192.168.1.9', localAddres
 check('/voice/audio 同样只认本机（非回环 403）', fk6.code === 403, fk6.code)
 const fk7 = await soundsRequest('GET', '/voice/sounds/x.wav', null, { host: 'evil.example', origin: 'https://evil.example' })
 check('/voice/sounds 同样拒绝伪造 Host', fk7.code === 403, fk7.code)
+
+section('T1e 准入先问 DSH 的 connection 服务（requestRejection）')
+connectionState.calls = 0
+connectionState.rejection = 403
+const dsh1 = await rpc('ping', {}, { origin: 'http://127.0.0.1:3080', host: '127.0.0.1:3080' })
+check('DSH 判 403：即使本机校验会放行也照抄拒绝', dsh1.ok === false && dsh1.code === 403, dsh1)
+connectionState.rejection = 401
+const dsh2 = await rpc('getConfig', {})
+check('DSH 判 401（没登录 cookie）：照抄 401，不把配置发出去', dsh2.ok === false && dsh2.code === 401 && !dsh2.config, { code: dsh2.code })
+const dsh3 = await fetchAudio('nope')
+check('/voice/audio 同样先问 DSH（401 直接回）', dsh3.code === 401, dsh3.code)
+const dsh4 = await soundsRequest('GET', '/voice/sounds/x.wav')
+check('/voice/sounds 同样先问 DSH', dsh4.code === 401, dsh4.code)
+check('三个路由都真的问过准入', connectionState.calls >= 3, connectionState.calls)
+connectionState.rejection = undefined
 
 section('T1d 配置接口不回传密钥原文（只回"已配置 + 末四位"）')
 await rpc('setConfig', { patch: { tts: { volcengine: { apiKey: 'volc-1234-5678' }, deepseek: { apiKey: 'ds-abcd-efgh' } } } })

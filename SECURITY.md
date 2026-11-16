@@ -8,10 +8,15 @@ Report a vulnerability），或直接私信维护者。
 
 ## 已知安全模型（现状，请知悉）
 
-- **插件接口只认本机请求**（0.6.1 起）：`/voice/api/*`、`/voice/audio/*`、`/voice/sounds/*` 三条路由
-  都要求「连接的对端是回环地址 + `Host` 是本机名（127.0.0.1 / localhost / ::1）」；带 `Origin` 时它还必须与
-  `Host` 相同。这样恶意网页即使把自己的域名同时填进 `Host` 与 `Origin`（域名重绑定），也进不来。
-  无 Origin 的本机工具（curl）仍可用。
+- **插件接口只认本机请求，并且先过 DSH 自己的准入**（0.6.2 起）：`/voice/api/*`、`/voice/audio/*`、
+  `/voice/sounds/*` 三条路由在 handler 入口先调 `ctx.connection.requestRejection(req)`——这是 DSH 官方的
+  Host/Origin 围栏 + 浏览器登录 cookie 校验，和 open-in-app 等上游插件同一做法；它对 401/403 的结果照抄返回。
+  之后再叠加本插件的本机校验：连接对端必须是回环地址、`Host` 必须是本机名（127.0.0.1 / localhost / ::1）、
+  带 `Origin` 时它必须与 `Host` 相同。这样恶意网页即使把自己的域名同时填进 `Host` 与 `Origin`（域名重绑定），
+  也进不来。
+- 换了这层准入之后，**命令行直连（curl / 探针脚本）会收到 401**：接口现在要求浏览器登录 cookie。
+  要手工调试，用浏览器 console 里的 `fetch`（带着页面 cookie），或从 `~/.dsh/.credentials.yaml` 的自签 cookie
+  单独构造请求头。
 - 插件接口**不回传密钥原文**：`getConfig` / `getState` / `setConfig` 只给 `secrets.volcengine|deepseek`
   的 `set`（配没配）与 `tail`（末四位）。设置页输入框从空开始，占位提示带尾号；要清掉已保存的 key 点「清除」。
 - `custom` 网关的自配端点仅接受 `https://`/`wss://`（`lib/index.js` 的 `volcEndpoints` 校验）：

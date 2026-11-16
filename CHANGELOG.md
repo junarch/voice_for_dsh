@@ -6,6 +6,24 @@
 
 ---
 
+## [0.6.2] - 2026-11-16
+
+### Security
+
+- **三条路由在入口先过 DSH 自己的准入**：`/voice/api`、`/voice/audio`、`/voice/sounds` 现在都先调
+  `ctx.connection.requestRejection(req)`（DSH 的 Host/Origin 围栏 + 浏览器登录 cookie 校验，与 open-in-app
+  等官方插件同一做法），401/403 原样返回；之后仍叠加上一版的本机校验。
+  这样"路由没有 DSH 访问检查"这句不再成立，网页即便伪造 `Host`/`Origin` 也进不来。
+
+### Changed
+
+- **命令行直连会拿到 401**：接口现在要求浏览器登录 cookie。手工调试改用浏览器 console 的同源 `fetch`；
+  `scripts/verify-installed.mjs` 已改成先用 `?token=` 换 cookie 再请求，拿不到 cookie 时给出明确提示。
+
+### Note
+
+需要重启一次桌面端（Host 半这版也要重新加载）。设置页与朗读行为不变。
+
 ## [0.6.1] - 2026-11-16
 
 ### Security

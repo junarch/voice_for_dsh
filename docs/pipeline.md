@@ -545,11 +545,14 @@ voice:
 6. **转写完整才写缓存**——WS 中途失败不污染缓存（否则降级命中坏稿、播不完整内容）。
 7. **重播零 LLM**——转写 + 情感指令全用缓存（不重新生成）；重新生成（↻）= 全部重新生成。
 8. **推理模型撞顶空稿自动按 4 倍额度重试**（先烧 reasoning token）。
-9. **三条插件路由都只接受本机请求**——`/voice/api`、`/voice/audio`、`/voice/sounds` 统一走
-   `localRequestVerdict`：连接对端必须是回环地址、`Host` 必须是本机名（127.0.0.1 / localhost / ::1）、
-   带 `Origin` 时它还必须与 `Host` 相同（CSRF 防护）。**不得**退回到"只看 `Origin` 与 `Host` 相等"——
-   两者都是调用方自己填的，恶意网页把同一个域名填进去就能冒充同源（域名重绑定）。
-   非回环对端只放行"Host 就是本机地址"的局域网直连；任意域名一律拒。无 `Origin` 的本地工具（curl）仍可用。
+9. **三条插件路由先过 DSH 准入，再叠本机校验**——`/voice/api`、`/voice/audio`、`/voice/sounds` 在
+   handler 入口先调 `ctx.connection.requestRejection(req)`（DSH 的 Host/Origin 围栏 + 登录 cookie，
+   与 open-in-app 同一做法），401/403 原样返回；再走 `localRequestVerdict`：连接对端必须是回环地址、
+   `Host` 必须是本机名（127.0.0.1 / localhost / ::1）、带 `Origin` 时它还必须与 `Host` 相同（CSRF 防护）。
+   `connection` 服务不存在时（旧宿主/测试替身）跳过第一层，由本机校验兜底。
+   **不得**退回到"只看 `Origin` 与 `Host` 相等"——两者都是调用方自己填的，恶意网页把同一个域名填进去
+   就能冒充同源（域名重绑定）。无该服务且无 `Origin` 的本地工具（curl）仍可用；有该服务时命令行会 401。
+   非回环对端（dsh web 绑到局域网、从别的机器直连）只放行 `Host` 等于本机地址的请求，任意域名一律拒。
 10. **本地引擎跟随原文语言且零额外 LLM**——`local`（Kokoro v1.1）转写稿跟随原文语言（§2.2）、    不生成情感指令（`context_texts` 是豆包专属）、不下发服务端缓存（§4.5 跳过）、
     不受 `autoSpeakCloudTts` 门控（browser/local）；转写关闭时**直接本地合成**（中英都能读），
     不得回退系统朗读、不得再带"需开启转写"的 notice。
