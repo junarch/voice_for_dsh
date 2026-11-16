@@ -2660,7 +2660,18 @@ function apply(ctx, config) {
     },
   }
 
-  /** 把 Host/Origin 里的主机名取出来：去掉端口与 IPv6 方括号，小写化。 */
+  /** DSH 自己的准入检查（Host/Origin 白名单 + 浏览器登录 cookie）：有 `connection` 服务就先问它，
+   *  任何非空结果（401 / 403）都照抄返回。这是上游推荐的做法——open-in-app 等官方插件都是在
+   *  路由入口先调 requestRejection，安全只有这一处出处；Host 伪造、DNS 重绑定、跨站调用都由它挡。
+   *  没有该服务（旧宿主、测试替身）时返回 undefined，由下面的本机校验兜底。 */
+  function dshRejection(req) {
+    try {
+      const conn = ctx.get('connection')
+      if (!conn || typeof conn.requestRejection !== 'function') return undefined
+      return conn.requestRejection(req)
+    } catch { return undefined }
+  }
+
   function hostNameOf(hostHeader) {
     const raw = String(hostHeader || '').trim().toLowerCase()
     if (!raw) return ''
@@ -2766,6 +2777,9 @@ function apply(ctx, config) {
         res.end(body)
       }
       try {
+        // 先过 DSH 自己的准入（Host/Origin 白名单 + 登录 cookie），再走本机校验兜底
+        const dsh = dshRejection(req)
+        if (dsh) { logReject('/voice/api', 'dsh-' + dsh, req); send(dsh, { ok: false, error: 'dsh access check rejected' }); return }
         const why = localRequestVerdict(req)
         if (why) { logReject('/voice/api', why, req); send(403, { ok: false, error: 'cross-origin request rejected' }); return }
         if (req.method !== 'POST') { send(405, { ok: false, error: 'POST only' }); return }
@@ -2792,7 +2806,9 @@ function apply(ctx, config) {
     path: '/voice/audio',
     handler: (req, res) => {
       try {
-        // 与 /voice/api 同一条本机校验：跨站页面既取不到音频，也伪造不了 Host
+        // 与 /voice/api 同一条准入：DSH 的 Host/Origin 围栏 + 本机校验，跨站页面既取不到音频也伪造不了 Host
+        const dsh = dshRejection(req)
+        if (dsh) { logReject('/voice/audio', 'dsh-' + dsh, req); res.writeHead(dsh); res.end('dsh access check rejected'); return }
         const why = localRequestVerdict(req)
         if (why) { logReject('/voice/audio', why, req); res.writeHead(403); res.end('cross-origin rejected'); return }
         const pathname = new URL(req.url, 'http://127.0.0.1').pathname
@@ -2821,7 +2837,9 @@ function apply(ctx, config) {
         res.end(body)
       }
       try {
-        // 与 /voice/api、/voice/audio 同一条本机校验
+        // 与 /voice/api、/voice/audio 同一条准入
+        const dsh = dshRejection(req)
+        if (dsh) { logReject('/voice/sounds', 'dsh-' + dsh, req); sendJson(dsh, { ok: false, error: 'dsh access check rejected' }); return }
         const why = localRequestVerdict(req)
         if (why) { logReject('/voice/sounds', why, req); sendJson(403, { ok: false, error: 'cross-origin request rejected' }); return }
         const url = new URL(req.url, 'http://127.0.0.1')
